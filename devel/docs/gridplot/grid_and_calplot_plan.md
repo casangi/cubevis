@@ -1125,7 +1125,7 @@ Record: `devel/notes/drs/calplot/calplot_notes.md` section 6.
 - **`devel/docs/calplot/casa_caltab_xarray.md`**: the backend explained
   for the people working on CASA calibration and on xradio's schema, with
   what CASA's tables turned out to hold, the choices made where the draft
-  is silent, ten questions and some suggestions.  It goes out with a short
+  is silent, questions and some suggestions.  It goes out with a short
   message of invitation.
 - **`devel/tools/calplot/caltab_example.py`**: a tour that needs no CASA
   and no data; a test runs it.
@@ -1136,6 +1136,37 @@ Record: `devel/notes/drs/calplot/calplot_notes.md` section 6.
 
 C0 is done.  Next: C1, the calplot application (section 4; stage table in
 section 6).
+
+## 24. xradio's PR 578 discussion and PR 690; the reader brought into line (2026-11-16, base `460f502e`)
+
+Record: `devel/notes/drs/calplot/calplot_notes.md` section 7.
+
+Sections 4.3, 10 and 19 describe xradio's draft from the branch's code,
+which was all the sandbox could read.  The PR's discussion, read from a
+saved page, has gone further (to 2026-11-09):
+
+- **Each physical parameter is its own array with units** (delay, rate,
+  Tsys): as built.
+- **`receptor_label` is positional**, and `polarization_type(antenna_name,
+  receptor_label)` says what a receptor is: **now built**.  The axis is no
+  longer relabelled R, L.
+- **Gains get a `parameter` axis** after the receptor (1 for a diagonal
+  gain, 2 for a full Jones; polynomial coefficients along it): not in the
+  branch's code yet, and not built here.
+- **Not settled there**: how a set is arranged as a tree, flags and
+  missing solutions.  The document asks.
+
+Also followed now, from the branch's code and from PR 690's Conventions
+page: **delays in seconds as float64** (this reverses section 19's
+"CASA's units"); **`frequency` increasing**, with a window stored the
+other way reversed and marked; `frequency`'s MSv4 attributes, with
+`channel_width` there instead of section 22's coordinate; the draft's
+`schema_version`, `type_version`, `creator` and `creation_date`.
+
+**Still to do when the schema or the answers allow**: the `parameter`
+axis on gains; the gain curve as receptor by polynomial coefficient;
+units for the dispersive delay.  The application is behind
+`CalTableReader`, so C1 does not wait for them.
 
 ## Sources
 

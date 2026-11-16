@@ -14,6 +14,7 @@ No Bokeh, no CASA, no arcae.
 """
 from __future__ import annotations
 
+import time as _time
 from typing import Iterable, Optional, Sequence, Union
 
 import numpy as np
@@ -57,10 +58,10 @@ def synthetic_value(caltype: str, name: str, antenna, receptor, tau, x, referenc
     G, T      GAIN         (1 + 0.02 a + 0.01 r) exp(i 0.3 d (tau - 0.5))
     Accor     GAIN         1 + 0.02 a + 0.01 r   (real)
     B         GAIN         (1 + 0.05 cos(pi x (1 + a / 8))) exp(i 0.2 x d)
-    K         DELAY        a + 0.1 r             ns
+    K         DELAY        a + 0.1 r             ns  (the tree has it in s)
     Tsys      TSYS         40 + 2 a + 5 r + 3 sin(2 pi tau) + 2 x^2    K
     Fringe    PHASE        0.2 d (tau - 0.5)     rad
-    Fringe    DELAY        d (1 + 0.1 r)         ns
+    Fringe    DELAY        d (1 + 0.1 r)         ns  (the tree has it in s)
     Fringe    RATE         1e-13 d
     Fringe    DISP_DELAY   0
     other     number p     100 p + a + 0.1 r
@@ -94,7 +95,8 @@ def synthetic_value(caltype: str, name: str, antenna, receptor, tau, x, referenc
 def synthetic_raw(caltype: str = "G", *, nant: int = 10, nspw: int = 2, ntime: int = 12,
                   nchan: Union[int, Sequence[int], None] = None, nreceptor: Optional[int] = None, npar: int = 4,
                   antenna_names: Optional[Sequence[str]] = None,
-                  receptor_labels: Optional[Sequence[str]] = None,
+                  polarization_type: Optional[Sequence[str]] = None,
+                  decreasing_frequency: bool = False,
                   field_names: Sequence[str] = ("3C286", "J1331+3030"), nscan: int = 2,
                   reference_antenna: Union[int, str, None] = 0,
                   flag_fraction: float = 0.0, missing_fraction: float = 0.0, noise: float = 0.0,
@@ -175,6 +177,9 @@ def synthetic_raw(caltype: str = "G", *, nant: int = 10, nspw: int = 2, ntime: i
         flag = np.repeat((rng.random((n, nchan, nreceptor)) < flag_fraction)[..., None],
                          len(names), axis=-1)
         freq = FIRST_FREQUENCY_HZ + 128e6 * s + (np.arange(nchan) + 0.5) * BANDWIDTH_HZ / nchan
+        if decreasing_frequency:                                     # as CASA stores a lower sideband:
+            freq = freq[::-1]                                        # the last channel first,
+            par, snr, flag = par[:, ::-1], snr[:, ::-1], flag[:, ::-1]   # and its values with it
         cells[s] = SpwCells(rows=nrow + np.arange(n), par=par,
                             err=(1.0 / np.maximum(snr, 1.0)).reshape(n, nchan, npar),
                             snr=snr.reshape(n, nchan, npar), flag=flag.reshape(n, nchan, npar),
@@ -194,17 +199,19 @@ def synthetic_raw(caltype: str = "G", *, nant: int = 10, nspw: int = 2, ntime: i
         raise ValueError("the synthetic table has no rows (missing_fraction is 1?)")
     columns = {c: np.concatenate(v).astype(np.float64 if c in ("TIME", "INTERVAL") else np.int32)
                for c, v in main.items()}
-    labels = S.receptor_labels(None, nreceptor, list(receptor_labels) if receptor_labels else None,
-                               one_for_all=bool(ct and ct.one_for_all)) if ct else []
+    types = S.polarization_types(None, nreceptor, polarization_type,
+                                 one_for_all=bool(ct.one_for_all)) if ct else None
     keywords = {"ParType": "Complex" if complex_ else "Float", "MSName": "synthetic",
-                "VisCal": subtype, "PolBasis": S.pol_basis_of(labels)}
+                "VisCal": subtype, "PolBasis": S.pol_basis_of(types)}
+    created = _time.strftime("%Y-%m-%dT%H:%M:%S", _time.gmtime(start)) + ".000"
     return RawCalTable(source=f"synthetic:{short}", subtype=subtype, keywords=keywords,
                        antenna_names=antenna_names, field_names=[str(f) for f in field_names],
-                       spw_names=[f"spw{s}" for s in range(nspw)], main=columns, cells=cells)
+                       spw_names=[f"spw{s}" for s in range(nspw)], main=columns, cells=cells,
+                       created=created)
 
 
 def synthetic_caltab(caltype: str = "G", *, spw: Optional[Iterable[int]] = None,
-                     receptor_labels: Optional[Sequence[str]] = None, **kwargs):
+                     polarization_type: Optional[Sequence[str]] = None, **kwargs):
     """A synthetic calibration table as an ``xarray.DataTree``, in the shape
     ``open_caltab`` gives a CASA table.
 
@@ -225,8 +232,15 @@ def synthetic_caltab(caltype: str = "G", *, spw: Optional[Iterable[int]] = None,
         Receptors: 2 (1 for ``"T"``).
     npar
         Parameters per solution of an unknown type (4).
-    antenna_names, receptor_labels, field_names
-        Names; default ``A00``..., ``pol_0``/``pol_1``, two fields.
+    antenna_names, field_names
+        Names; default ``A00``..., and two fields.
+    polarization_type
+        What the receptors are: ``["R", "L"]`` or ``["X", "Y"]``.  Default:
+        not said, as in CASA's tables.
+    decreasing_frequency
+        Store each window's channels in decreasing frequency, as CASA
+        does a lower sideband.  The tree is the same either way (its
+        ``frequency`` increases); only the rows differ.
     nscan
         Scans the times are divided into (2), each on the next field.
     reference_antenna
@@ -249,8 +263,9 @@ def synthetic_caltab(caltype: str = "G", *, spw: Optional[Iterable[int]] = None,
     spw
         Spectral window id(s) to keep, as ``open_caltab``'s.
 
-    Without noise, a value is ``synthetic_value(...)`` exactly (in the
-    table's single precision).
+    Without noise, a value is ``synthetic_value(...)`` exactly, in the
+    table's single precision and CASA's units: the tree has a delay in
+    seconds, 1e-9 times the rule's ns.
     """
-    raw = synthetic_raw(caltype, receptor_labels=receptor_labels, **kwargs)
-    return build_tree(raw, spw=spw, receptor_labels=list(receptor_labels) if receptor_labels else None)
+    raw = synthetic_raw(caltype, polarization_type=polarization_type, **kwargs)
+    return build_tree(raw, spw=spw, polarization_type=polarization_type)

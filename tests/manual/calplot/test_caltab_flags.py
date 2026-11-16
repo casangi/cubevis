@@ -225,6 +225,27 @@ def test_no_solution_is_not_written(tmp_path):
     assert not back[S.FLAG].values[0][~absent].any()
 
 
+def test_a_window_stored_in_decreasing_frequency(tmp_path):
+    """The tree's channels run the other way from such a table's: a flag
+    set at a frequency lands on that frequency's channel in the table."""
+    raw = synthetic_raw("B", nant=2, ntime=1, nspw=1, nchan=8, decreasing_frequency=True)
+    path = write_caltab(raw, str(tmp_path / "t.cal"))
+    dt = open_caltab(path)
+    ds = dt["spw_0"].ds
+    assert ds.attrs[S.CHANNEL_ORDER] == S.REVERSED and np.all(np.diff(ds.frequency.values) > 0)
+    lowest, highest = float(ds.frequency[0]), float(ds.frequency[-1])
+    dt["spw_0"]["FLAG"].loc[{S.ANTENNA: "A01", S.FREQUENCY: lowest}] = True
+    report = commit_flags(dt)
+    assert report["verified"] and report["flagged"] == 2 and report["rows"] == 1
+    row = int(ds[S.SOURCE_ROW].values[0, 1])
+    stored = _flags(path)[row]                                   # (chan, par), in the table's order
+    assert raw.cells[0].chan_freq[-1] == lowest and raw.cells[0].chan_freq[0] == highest
+    assert stored[-1].all() and not stored[:-1].any()            # the table's last channel is the lowest
+    np.testing.assert_array_equal(open_caltab(path)["spw_0"].ds[S.FLAG].values, dt["spw_0"].ds[S.FLAG].values)
+    restore_flags(report["backup"])
+    assert not any(v.any() for v in _flags(path).values())
+
+
 # --- when it must not write -------------------------------------------------------------------
 
 def test_refuses_a_table_that_changed(tmp_path):

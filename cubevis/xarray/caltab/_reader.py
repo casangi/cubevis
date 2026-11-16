@@ -15,7 +15,8 @@ Everything is read at once (cal tables are small).  No Bokeh, no CASA.
 from __future__ import annotations
 
 import os
-from typing import Any, Iterable, Optional
+import time as _time
+from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 
@@ -57,6 +58,16 @@ def _names(path: str, subtable: str) -> list[str]:
         t.close()
 
 
+def _created(path: str) -> Optional[str]:
+    """When the table was last written, as ISO 8601 (UTC): the tree's
+    ``creation_date``."""
+    try:
+        mtime = os.path.getmtime(os.path.join(path, "table.dat"))
+    except OSError:
+        return None
+    return _time.strftime("%Y-%m-%dT%H:%M:%S", _time.gmtime(mtime)) + f".{int(mtime % 1 * 1000):03d}"
+
+
 def read_raw(path: str, *, spw: Optional[Iterable[int]] = None) -> RawCalTable:
     """The rows of the cal table at *path* (every window, or those of *spw*)."""
     info = caltab_info(path)
@@ -73,7 +84,7 @@ def read_raw(path: str, *, spw: Optional[Iterable[int]] = None) -> RawCalTable:
         raw = RawCalTable(source=path, subtype=info["subType"] or "", keywords=info["keywords"],
                           antenna_names=_names(path, "ANTENNA"), field_names=_names(path, "FIELD"),
                           spw_names=_names(path, "SPECTRAL_WINDOW"), main=main,
-                          time_scale=au.epoch_scale(t) or "utc")
+                          time_scale=au.epoch_scale(t) or "utc", created=_created(path))
         present = [int(s) for s in np.unique(main["SPECTRAL_WINDOW_ID"])]
         if spw is None:
             ids = present
@@ -105,7 +116,7 @@ def read_raw(path: str, *, spw: Optional[Iterable[int]] = None) -> RawCalTable:
 
 
 def open_caltab(path: str, *, spw: Optional[Iterable[int]] = None,
-                receptor_labels: Optional[list[str]] = None):
+                polarization_type: Optional[Sequence[str]] = None):
     """A CASA calibration table as an ``xarray.DataTree``.
 
     Parameters
@@ -114,9 +125,11 @@ def open_caltab(path: str, *, spw: Optional[Iterable[int]] = None,
         The table.
     spw
         Spectral window id(s) to read; default: every window with rows.
-    receptor_labels
-        Labels for the receptor axis, when the caller knows them (the
-        table's ``PolBasis`` keyword is ``unknown`` in CASA 6.7's tables;
-        without it the labels are ``pol_0``, ``pol_1``).
+    polarization_type
+        What the receptors are, when the caller knows: ``["R", "L"]`` or
+        ``["X", "Y"]``.  The receptor axis is labelled by position
+        (``pol_0``, ``pol_1``); this fills the ``polarization_type``
+        coordinate, which a table cannot (its ``PolBasis`` keyword is
+        ``unknown`` in CASA 6.7's tables) and which is otherwise left out.
     """
-    return build_tree(read_raw(path, spw=spw), receptor_labels=receptor_labels)
+    return build_tree(read_raw(path, spw=spw), polarization_type=polarization_type)

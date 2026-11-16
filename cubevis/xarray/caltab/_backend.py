@@ -24,7 +24,7 @@ class CaltabBackendEntrypoint(BackendEntrypoint):
     description = "CASA calibration tables, read with arcae (cubevis)"
     url = "https://github.com/casangi/cubevis"
     supports_groups = True       # without it xr.open_datatree does not guess this engine
-    open_dataset_parameters = ("filename_or_obj", "drop_variables", "group", "spw", "receptor_labels")
+    open_dataset_parameters = ("filename_or_obj", "drop_variables", "group", "spw", "polarization_type")
 
     def guess_can_open(self, filename_or_obj) -> bool:
         try:
@@ -35,8 +35,8 @@ class CaltabBackendEntrypoint(BackendEntrypoint):
 
     def open_datatree(self, filename_or_obj, *, drop_variables: Optional[Iterable[str]] = None,
                       spw: Optional[Iterable[int]] = None,
-                      receptor_labels: Optional[list[str]] = None, **kwargs: Any):
-        tree = open_caltab(str(filename_or_obj), spw=spw, receptor_labels=receptor_labels)
+                      polarization_type: Optional[list[str]] = None, **kwargs: Any):
+        tree = open_caltab(str(filename_or_obj), spw=spw, polarization_type=polarization_type)
         if drop_variables:
             drop = [drop_variables] if isinstance(drop_variables, str) else list(drop_variables)
             tree = tree.map_over_datasets(lambda ds: ds.drop_vars(drop, errors="ignore"))
@@ -48,14 +48,14 @@ class CaltabBackendEntrypoint(BackendEntrypoint):
 
     def open_dataset(self, filename_or_obj, *, drop_variables: Optional[Iterable[str]] = None,
                      group: Optional[str] = None, spw: Optional[Iterable[int]] = None,
-                     receptor_labels: Optional[list[str]] = None, **kwargs: Any):
+                     polarization_type: Optional[list[str]] = None, **kwargs: Any):
         if group is not None and spw is None:
             name = str(group).strip("/")
             if not name.startswith("spw_") or not name[4:].isdigit():
                 raise ValueError(f"group {group!r}: a calibration table's groups are spw_<id>")
             spw = [int(name[4:])]
         tree = self.open_datatree(filename_or_obj, drop_variables=drop_variables,
-                                  spw=spw, receptor_labels=receptor_labels)
+                                  spw=spw, polarization_type=polarization_type)
         names = list(tree.children)
         if len(names) != 1:
             raise ValueError(f"{filename_or_obj}: {len(names)} spectral windows ({', '.join(names)}); "

@@ -85,6 +85,9 @@ def test_shape_and_values(caltype):
         assert ds[S.FLAG].dtype == bool and not ds[S.FLAG].any()
         assert (ds[S.SOURCE_ROW] >= 0).all()
         assert ds.time.attrs == {"type": "time", "units": "s", "scale": "utc", "format": "unix"}
+        assert ds.frequency.attrs == {"type": "spectral_coord", "long_name": "Frequency", "units": "Hz",
+                                      "channel_width": S.quantity(64e6 / nchan, "Hz")}
+        assert S.POLARIZATION_TYPE not in ds.coords              # not said, as in CASA's tables
         a = np.arange(7)[None, :, None, None]
         r = np.arange(nrec)[None, None, None, :]
         tau = np.linspace(0, 1, 9)[:, None, None, None]
@@ -94,9 +97,12 @@ def test_shape_and_values(caltype):
             assert var.dims == LEAD + (S.RECEPTOR,)
             assert ("units" in var.attrs) == (p.units is not None)
             want = synthetic_value(caltype, p.name, a, r, tau, x)
-            if ct.partype == "Float":
-                want = want.real
-            np.testing.assert_array_equal(var.values[0], want.astype(var.dtype))
+            if ct.partype == "Float":                            # CASA's single precision and units,
+                assert var.dtype == np.float64                   # then float64 in the schema's units
+                want = want.real.astype(np.float32).astype(np.float64) * p.scale
+            else:
+                want = want.astype(np.complex64)
+            np.testing.assert_array_equal(var.values[0], want)
         np.testing.assert_array_equal(ds[S.SNR].values[0, 0, :, 0, 0], 20.0 + np.arange(7))
 
 
@@ -145,9 +151,13 @@ def test_cases_no_table_here_covers():
     t = synthetic_caltab("T")["spw_0"].ds
     assert list(t[S.RECEPTOR].values) == ["all"]
     # one receptor of a two-receptor type; named receptors
-    k = synthetic_caltab("K", nreceptor=1, receptor_labels=["R"])["spw_0"].ds
-    assert list(k[S.RECEPTOR].values) == ["R"]
-    assert list(synthetic_caltab("B", receptor_labels=["X", "Y"])["spw_0"].ds[S.RECEPTOR].values) == ["X", "Y"]
+    assert S.POLARIZATION_TYPE not in t.coords                   # ... and so has no type
+    # one receptor of a two-receptor type; receptors whose types are known
+    k = synthetic_caltab("K", nreceptor=1, polarization_type=["R"])["spw_0"].ds
+    assert list(k[S.RECEPTOR].values) == ["pol_0"] and (k[S.POLARIZATION_TYPE].values == "R").all()
+    b = synthetic_caltab("B", nant=3, polarization_type=["X", "Y"])["spw_0"].ds
+    assert list(b[S.RECEPTOR].values) == ["pol_0", "pol_1"]
+    assert b[S.POLARIZATION_TYPE].values.tolist() == [["X", "Y"]] * 3
     # an array the size of ALMA
     assert synthetic_caltab("B", nant=66)["spw_1"].ds.sizes[S.ANTENNA] == 66
     assert list(synthetic_caltab("G", antenna_names=["BR", "FD", "HN"])["spw_0"].ds[S.ANTENNA].values) \
@@ -179,7 +189,7 @@ def test_seed_and_noise():
     a, b = synthetic_caltab("G", seed=3, **kw), synthetic_caltab("G", seed=4, **kw)
     assert not np.array_equal(a["spw_0"].ds[S.FLAG].values, b["spw_0"].ds[S.FLAG].values)
     clean, noisy = synthetic_caltab("K")["spw_0"].ds, synthetic_caltab("K", noise=0.05)["spw_0"].ds
-    diff = (noisy.CALPARAM_DELAY - clean.CALPARAM_DELAY).values
+    diff = (noisy.CALPARAM_DELAY - clean.CALPARAM_DELAY).values * 1e9       # ns
     assert 0.03 < diff.std() < 0.07
 
 
@@ -199,8 +209,10 @@ CASES = [("G", {}), ("T", {}), ("B", {"nchan": [32, 16]}), ("K", {}), ("Accor", 
          ("Tsys", {"nchan": 8, "missing_fraction": 0.4, "flag_fraction": 0.1}),
          ("Fringe", {"reference_antenna": "changing", "noise": 0.01}),
          ("Fringe", {"flag_fraction": 0.2}),
-         ("G", {"receptor_labels": ["R", "L"], "nant": 27, "noise": 0.01, "outliers": 2}),
-         ("B", {"receptor_labels": ["X", "Y"], "reference_antenna": None}),
+         ("G", {"polarization_type": ["R", "L"], "nant": 27, "noise": 0.01, "outliers": 2}),
+         ("B", {"polarization_type": ["X", "Y"], "reference_antenna": None}),
+         ("B", {"nchan": [16, 8], "decreasing_frequency": True, "flag_fraction": 0.2}),
+         ("K", {"noise": 0.3, "missing_fraction": 0.2}),
          ("Zeta Jones", {"npar": 5, "flag_fraction": 0.1})]
 
 
@@ -217,6 +229,45 @@ def test_write_and_read_back(tmp_path, caltype, kw):
     for key in ("type", "caltype", "casa_subtype", "par_type", "schema_draft"):
         assert back.attrs[key] == dt.attrs[key]
     _same_tree(back, dt)
+    if S.POLARIZATION_TYPE in dt["spw_0"].ds.coords:             # the types go through PolBasis
+        assert back.attrs["pol_basis"] in ("linear", "circular")
+
+
+def test_decreasing_frequency():
+    """CASA stores a lower sideband's channels in decreasing frequency;
+    xradio's convention is that ``frequency`` increases.  The tree is the
+    same whichever way the table runs, and says when it reversed one."""
+    up = synthetic_caltab("B", nant=3, ntime=2, nchan=8, flag_fraction=0.3, seed=7)
+    down = synthetic_caltab("B", nant=3, ntime=2, nchan=8, flag_fraction=0.3, seed=7,
+                            decreasing_frequency=True)
+    for name in up.children:
+        u, d = up[name].to_dataset(), down[name].to_dataset()
+        assert np.all(np.diff(d.frequency.values) > 0)
+        assert S.CHANNEL_ORDER not in u.attrs and d.attrs[S.CHANNEL_ORDER] == S.REVERSED
+        del d.attrs[S.CHANNEL_ORDER]
+        xr.testing.assert_identical(u, d)
+    # the rows themselves run the other way, and go back that way
+    raw_up = synthetic_raw("B", nant=3, ntime=2, nchan=8, flag_fraction=0.3, seed=7)
+    raw_down = synthetic_raw("B", nant=3, ntime=2, nchan=8, flag_fraction=0.3, seed=7,
+                             decreasing_frequency=True)
+    np.testing.assert_array_equal(raw_down.cells[0].chan_freq, raw_up.cells[0].chan_freq[::-1])
+    np.testing.assert_array_equal(raw_down.cells[0].par, raw_up.cells[0].par[:, ::-1])
+    back = tree_to_raw(down)
+    for s in raw_down.cells:
+        for field in ("chan_freq", "par", "err", "snr", "flag"):
+            np.testing.assert_array_equal(getattr(back.cells[s], field), getattr(raw_down.cells[s], field),
+                                          err_msg=field)
+        assert (back.cells[s].chan_width == -8e6).all()          # CASA's widths are negative there
+
+
+def test_single_precision_survives_the_units(tmp_path):
+    """A delay goes ns (float32) -> s (float64) -> ns (float32): the same bits."""
+    raw = synthetic_raw("Fringe", nant=6, ntime=9, noise=0.37, seed=11)
+    back = tree_to_raw(synthetic_caltab("Fringe", nant=6, ntime=9, noise=0.37, seed=11))
+    for s in raw.cells:
+        assert back.cells[s].par.dtype == np.float32
+        np.testing.assert_array_equal(back.cells[s].par, raw.cells[s].par)
+        np.testing.assert_array_equal(back.cells[s].err, raw.cells[s].err)
 
 
 def test_write_from_rows_and_reference_ids(tmp_path):
@@ -264,7 +315,10 @@ def _casatools():
         pytest.skip(f"casatools is not usable here ({type(exc).__name__})")
 
 
-@pytest.mark.parametrize("caltype,kw", CASES[:8], ids=[f"{c}-{i}" for i, (c, _) in enumerate(CASES[:8])])
+CASA_CASES = CASES[:8] + [c for c in CASES if c[1].get("decreasing_frequency")]
+
+
+@pytest.mark.parametrize("caltype,kw", CASA_CASES, ids=[f"{c}-{i}" for i, (c, _) in enumerate(CASA_CASES)])
 def test_casatools_reads_written_table(tmp_path, caltype, kw):
     tb = _casatools()
     raw = synthetic_raw(caltype, **kw)
@@ -289,6 +343,7 @@ def test_casatools_reads_written_table(tmp_path, caltype, kw):
     tb.open(os.path.join(path, "SPECTRAL_WINDOW"))
     for s, c in raw.cells.items():
         np.testing.assert_array_equal(tb.getcell("CHAN_FREQ", s), c.chan_freq)
+        np.testing.assert_array_equal(tb.getcell("CHAN_WIDTH", s), c.chan_width)
     tb.close()
 
 

@@ -87,21 +87,35 @@ def test_schema_lookup():
     assert S.lookup(None, None, 2) is None
 
 
-def test_receptor_labels():
-    assert S.receptor_labels("unknown", 2) == ["pol_0", "pol_1"]
-    assert S.receptor_labels(None, 2) == ["pol_0", "pol_1"]
-    assert S.receptor_labels("linear", 2) == ["X", "Y"]
-    assert S.receptor_labels("Circular", 2) == ["R", "L"]
-    assert S.receptor_labels("circular", 1) == ["R"]
-    assert S.receptor_labels("linear", 3) == ["pol_0", "pol_1", "pol_2"]
-    assert S.receptor_labels("unknown", 2, ["R", "L"]) == ["R", "L"]
+def test_receptor_labels_and_polarization_types():
+    """The receptor axis is labelled by position, as MSv4's antenna dataset;
+    what a receptor is goes in ``polarization_type``, when something says."""
+    assert S.receptor_labels(2) == ["pol_0", "pol_1"]
+    assert S.receptor_labels(1) == ["pol_0"] and S.receptor_labels(3) == ["pol_0", "pol_1", "pol_2"]
+    assert S.receptor_labels(1, one_for_all=True) == ["all"]     # T Jones: for every polarization
+    assert S.polarization_types("unknown", 2) is None            # what CASA 6.7 writes
+    assert S.polarization_types(None, 2) is None
+    assert S.polarization_types("linear", 2) == ["X", "Y"]
+    assert S.polarization_types("Circular", 2) == ["R", "L"]
+    assert S.polarization_types("circular", 1) == ["R"]
+    assert S.polarization_types("linear", 3) is None
+    assert S.polarization_types("unknown", 2, ["R", "L"]) == ["R", "L"]      # a caller who knows
     with pytest.raises(ValueError):
-        S.receptor_labels("unknown", 2, ["R"])
-    assert S.receptor_labels("circular", 1, one_for_all=True) == ["all"]
-    assert S.receptor_labels("unknown", 1, ["I"], one_for_all=True) == ["I"]
-    # the keyword that reads back as the same labels
-    assert [S.pol_basis_of(v) for v in (["X", "Y"], ["R", "L"], ["R"], ["pol_0", "pol_1"], ["all"], [])] \
+        S.polarization_types("unknown", 2, ["R"])
+    assert S.polarization_types("circular", 1, one_for_all=True) is None
+    # the keyword that reads back as the same types
+    assert [S.pol_basis_of(v) for v in (["X", "Y"], ["R", "L"], ["R"], ["pol_0", "pol_1"], None, [])] \
         == ["linear", "circular", "circular", "unknown", "unknown", "unknown"]
+
+
+def test_units_are_the_drafts():
+    """A delay is in seconds, as the draft's code has it; CASA stores ns."""
+    for subtype in ("K Jones", "Fringe Jones"):
+        delay = [p for p in S.CAL_TYPES[subtype].params if p.name == "DELAY"][0]
+        assert (delay.units, delay.scale, delay.casa_units) == ("s", 1e-9, "ns")
+    assert all(p.scale == 1.0 for t in S.CAL_TYPES.values() for p in t.params if p.name != "DELAY")
+    assert S.quantity(2e6, "Hz") == {"data": 2e6, "dims": [], "attrs": {"units": "Hz", "type": "quantity"}}
+    assert S.quantity_value(S.quantity(2e6, "Hz")) == 2e6 and S.quantity_value(None) is None
 
 
 def test_flag_cast():
@@ -202,6 +216,7 @@ def test_shape(path):
     dt = xr.open_datatree(path, engine="casa-caltab")
     assert dt.attrs["type"] == S.TREE_TYPE and dt.attrs["source"] == info["path"]
     assert dt.attrs["schema_draft"] == S.SCHEMA_DRAFT
+    assert dt.attrs["creation_date"][:2] == "20" and dt.attrs["creation_date"][10] == "T"
     assert len(dt.children) >= 1
     rows = 0
     for name, node in dt.children.items():
@@ -219,6 +234,16 @@ def test_shape(path):
         assert ds.field_name.dims == (S.TIME,) and ds.scan_name.dims == (S.TIME,)
         assert np.all(np.diff(ds.time.values) > 0)
         assert ds.time.attrs == {"type": "time", "units": "s", "scale": "utc", "format": "unix"}
+        assert np.all(np.diff(ds.frequency.values) > 0) or ds.sizes[S.FREQUENCY] == 1
+        fa = ds.frequency.attrs                                  # as MSv4's frequency coordinate
+        assert (fa["type"], fa["long_name"], fa["units"]) == ("spectral_coord", "Frequency", "Hz")
+        assert fa["channel_width"]["attrs"] == {"units": "Hz", "type": "quantity"} and fa["channel_width"]["data"] > 0
+        assert ds.attrs["schema_version"] == S.SCHEMA_VERSION and ds.attrs["type_version"] == S.TYPE_VERSION
+        assert ds.attrs["creator"]["software_name"] == "cubevis.xarray.caltab"
+        assert S.POLARIZATION_TYPE not in ds.coords              # PolBasis is "unknown": not said
+        for v in params:                                         # a known type's floats are float64;
+            ok = (np.float64, np.complex64) if last == S.RECEPTOR else (np.float32,)    # an unknown one's
+            assert ds[v].dtype in ok, v                          # are as stored
         # a cell with no row: NaN, flagged, and told apart by SOURCE_ROW
         absent = (ds[S.SOURCE_ROW] < 0).values
         for v in params:
@@ -251,6 +276,7 @@ def test_parity_with_casatools(path):
     tb.open(os.path.join(path, "FIELD")); fld = list(tb.getcol("NAME")); tb.close()
     tb.open(os.path.join(path, "SPECTRAL_WINDOW"))
     chan_freq = [tb.getcell("CHAN_FREQ", s) for s in range(tb.nrows())]
+    chan_width = [tb.getcell("CHAN_WIDTH", s) for s in range(tb.nrows())]
     tb.close()
 
     dt = xr.open_datatree(path, engine="casa-caltab")
@@ -261,10 +287,17 @@ def test_parity_with_casatools(path):
         ds = node.ds
         s = ds.attrs["spectral_window_id"]
         np.testing.assert_array_equal(ds.frequency.values, chan_freq[s])
+        assert ds.frequency.attrs["channel_width"]["data"] == abs(chan_width[s][0])
+        assert S.CHANNEL_ORDER not in ds.attrs                   # none of these is stored reversed
         ct = S.lookup(subtype, partype, cell[pcol][0].shape[0])
         if ct is not None:                                       # back to CASA's packing: (npar, nchan)
             def packed(prefix, ti, ai):
-                per = [ds[f"{prefix}_{p.name}"].values[0, ti, ai] for p in ct.params]   # each (chan, rec)
+                per = []
+                for p in ct.params:                              # each (chan, rec)
+                    v = ds[f"{prefix}_{p.name}"].values[0, ti, ai]
+                    if not np.iscomplexobj(v):                   # the tree: float64, in the schema's units;
+                        v = (v / p.scale).astype(np.float32)     # CASA: single precision, its own units
+                    per.append(v)
                 return np.stack(per, axis=-1).reshape(per[0].shape[0], -1).T
         else:
             def packed(prefix, ti, ai):
@@ -282,6 +315,11 @@ def test_parity_with_casatools(path):
             assert ds[S.INTERVAL].values[ti, ai] == col["INTERVAL"][r]
             np.testing.assert_array_equal(packed(S.PARAM_PREFIX, ti, ai), cell[pcol][r])
             np.testing.assert_array_equal(packed(S.ERROR_PREFIX, ti, ai), cell["PARAMERR"][r])
+            if ct is not None and not np.iscomplexobj(cell[pcol][r]):    # and forward: CASA's value, scaled
+                n = len(ct.params)
+                for i, p in enumerate(ct.params):
+                    np.testing.assert_array_equal(ds[f"{S.PARAM_PREFIX}_{p.name}"].values[0, ti, ai].T,
+                                                  cell[pcol][r][i::n].astype(np.float64) * p.scale)
             flag, snr = cell["FLAG"][r], cell["SNR"][r]
             if ct is not None:
                 n = len(ct.params)                               # per receptor: any flag, the first SNR
@@ -333,9 +371,9 @@ def test_truth():
         # K and Fringe: delays in ns, each against the truth and against the other
         expected = _expected_delay_ns(truth, b[name].ds.frequency.values)
         kds, fds = k[name].ds, fr[name].ds
-        assert kds.CALPARAM_DELAY.attrs["units"] == "ns" and fds.CALPARAM_DELAY.attrs["units"] == "ns"
-        kd = kds.CALPARAM_DELAY.squeeze(squeeze).values           # (time, antenna, receptor)
-        fd = fds.CALPARAM_DELAY.squeeze(squeeze).values
+        assert kds.CALPARAM_DELAY.attrs["units"] == "s" and fds.CALPARAM_DELAY.attrs["units"] == "s"
+        kd = kds.CALPARAM_DELAY.squeeze(squeeze).values * 1e9     # (time, antenna, receptor), in ns
+        fd = fds.CALPARAM_DELAY.squeeze(squeeze).values * 1e9
         assert np.abs(kd - expected[None]).max() < 0.05
         assert np.abs(fd - expected[None]).max() < 0.05
         assert np.abs(fd - kd).max() < 0.05
@@ -446,8 +484,15 @@ def test_arguments():
     assert list(one.children) == ["spw_1"]
     with pytest.raises(ValueError):
         open_caltab(path, spw=[7])
-    rl = open_caltab(path, receptor_labels=["R", "L"])
-    assert list(rl["spw_0"].ds[S.RECEPTOR].values) == ["R", "L"]
+    rl = open_caltab(path, polarization_type=["R", "L"])        # a caller who knows what they are
+    ds = rl["spw_0"].ds
+    assert list(ds[S.RECEPTOR].values) == ["pol_0", "pol_1"]     # the labels stay positional
+    assert ds[S.POLARIZATION_TYPE].dims == (S.ANTENNA, S.RECEPTOR)
+    assert (ds[S.POLARIZATION_TYPE].values == ["R", "L"]).all()
+    assert ds.CALPARAM_GAIN.where(ds[S.POLARIZATION_TYPE] == "L").notnull().sum() \
+        == ds.CALPARAM_GAIN.sel({S.RECEPTOR: "pol_1"}).notnull().sum() > 0      # select by what it is
+    assert (xr.open_datatree(path, engine="casa-caltab", polarization_type=["X", "Y"])["spw_1"]
+            .ds[S.POLARIZATION_TYPE].values[0].tolist()) == ["X", "Y"]
     ds = xr.open_dataset(path, engine="casa-caltab", group="spw_1")
     assert ds.attrs["spectral_window_id"] == 1 and ds.attrs["type"] == S.DATASET_TYPE
     assert ds.attrs["source"] == one.attrs["source"]             # the table's attributes come along

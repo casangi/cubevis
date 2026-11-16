@@ -45,7 +45,15 @@ def describe(path: str) -> None:
         units = f" [{var.attrs['units']}]" if "units" in var.attrs else ""
         print(f"  {name:22s} {str(var.dtype):10s} {var.dims}{units}")
     print(f"  coords     {', '.join(ds.coords)}")
-    print(f"  attrs      { {k: v for k, v in ds.attrs.items()} }")
+    if "polarization_type" in ds.coords:
+        print(f"  receptors  {dict(zip(ds.receptor_label.values.tolist(), ds.polarization_type.values[0].tolist()))}"
+              "  (polarization_type)")
+    else:
+        print(f"  receptors  {ds.receptor_label.values.tolist()}  (the table does not say what they are)")
+    width = ds.frequency.attrs["channel_width"]["data"]
+    print(f"  frequency  {ds.sizes['frequency']} channel(s) from {float(ds.frequency[0]) / 1e6:.3f} MHz, "
+          f"width {width / 1e6:g} MHz")
+    print(f"  attrs      { {k: v for k, v in ds.attrs.items() if k != 'creator'} }")
     solved = (ds.SOURCE_ROW >= 0).values
     print(f"  solutions  {int(solved.sum())} of {solved.size} (time, antenna) cells have a row; "
           f"{100 * float(ds.FLAG.values[0][solved].mean()):.1f} % of those are flagged")
@@ -56,7 +64,8 @@ def main(argv: list[str]) -> int:
 
     heading("0. a table to work on (synthetic, written with arcae)")
     tree = synthetic_caltab("Fringe", nant=6, nspw=2, ntime=8, flag_fraction=0.05,
-                            antenna_names=["BR", "FD", "HN", "KP", "LA", "MK"], reference_antenna="FD")
+                            antenna_names=["BR", "FD", "HN", "KP", "LA", "MK"], reference_antenna="FD",
+                            polarization_type=["R", "L"])     # a CASA table does not say; see the document
     table = write_caltab(tree, os.path.join(work, "example.fringe"))
     print(f"wrote {table}")
 
@@ -65,9 +74,12 @@ def main(argv: list[str]) -> int:
     dt = xr.open_datatree(table)                             # the engine is found from the table
     ds = dt["spw_0"].ds
     delay = ds.CALPARAM_DELAY.sel(antenna_name="KP", receptor_label="pol_0").squeeze()
-    print(f"  KP delay, first times: {np.round(delay.values[:3], 3)} {delay.attrs['units']}"
+    print(f"  KP delay, first times: {delay.values[:3]} {delay.attrs['units']}"
           f"   (reference antenna {ds.attrs['reference_antenna']}: "
           f"{float(abs(ds.CALPARAM_DELAY.sel(antenna_name='FD')).max())} exactly)")
+    left = ds.CALPARAM_DELAY.where(ds.polarization_type == "L", drop=True)   # by what a receptor is
+    print(f"  the L receptor is {left.receptor_label.values.tolist()}: {left.sizes['receptor_label']} of "
+          f"{ds.sizes['receptor_label']} receptors")
 
     heading("2. to Zarr and back")
     store = os.path.join(work, "example.zarr")
@@ -91,19 +103,21 @@ def main(argv: list[str]) -> int:
     heading("4. solutions as flat arrays (what a plotter asks for)")
     reader = CalTableReader.open(table)                      # also takes the Zarr store, or a tree
     info = reader.info()
-    print(f"{info.caltype}: antennas {info.antennas}, receptors {info.receptors}, "
+    print(f"{info.caltype}: antennas {info.antennas}, receptors {info.receptors} = {info.polarization}, "
           f"spws {[w.id for w in info.spws]}")
     print(f"quantities: {', '.join(f'{q.name} [{q.units}]' if q.units else q.name for q in info.quantities)}")
     s = reader.read("delay", antenna=["KP", "MK"], spw=0, include_flagged=False)
     print(f"read('delay', antenna=['KP', 'MK'], spw=0): {len(s)} unflagged solutions")
     for a in sorted(set(s.antenna.tolist())):
         cell = s.where(s.antenna == a)                       # one antenna: a cell of a grid of plots
-        print(f"  {s.antennas[a]}: {len(cell):3d} points, delay {cell.y.min():.2f} to {cell.y.max():.2f} {s.units}")
+        print(f"  {s.antennas[a]}: {len(cell):3d} points, delay {cell.y.min() * 1e9:.2f} to "
+              f"{cell.y.max() * 1e9:.2f} ns")                 # the values are in s (s.units)
 
     heading("5. a delay table as the phase it applies")
     k = CalTableReader.open(synthetic_caltab("K", nant=4, nspw=1, ntime=1))
     e = k.evaluate("phase", antenna="A03", receptor="pol_0", nfreq=5)
-    print(f"A03 delay {k.read('delay', antenna='A03', receptor='pol_0').y[0]:.1f} ns, as phase across the band:")
+    print(f"A03 delay {k.read('delay', antenna='A03', receptor='pol_0').y[0] * 1e9:.1f} ns, "
+          "as phase across the band:")
     for f, p in zip(e.frequency, e.y):
         print(f"  {f / 1e6:8.1f} MHz  {p:+.4f} rad")
     print("(2 pi x delay x (frequency - the table's frequency): what CASA's applycal applies)")

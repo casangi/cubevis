@@ -123,6 +123,8 @@ def _plan_casa(table, path: str, tree, antenna_names: list[str]) -> dict[str, An
         _check_rows(table, path, s, ds, rows, ti, ai, antenna_names)
         before = au.as_bool(au.getcol_rows(table, "FLAG", rows))     # (row, chan, par)
         want = want[ti, ai].astype(bool)                             # (row, chan, last)
+        if ds.attrs.get(S.CHANNEL_ORDER) == S.REVERSED:              # the table's channels run the other way
+            want = want[:, ::-1]
         nchan, npar = before.shape[1:]
         if want.shape[1] != nchan:
             raise FlagCommitError(f"{path}: spectral window {s} has {nchan} channels in the table and "

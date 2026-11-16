@@ -14,8 +14,11 @@ piece is a reader, and that reader may be useful on its own:
   `casa-caltab`.  It reads a table with [arcae](https://github.com/ratt-ru/arcae),
   so it needs no CASA.
 - **The result is an `xarray.DataTree`** shaped after xradio's draft
-  calibration schema (PR 578, branch `545-calset-schema`), where the
-  draft says something.
+  calibration schema (PR 578, branch `545-calset-schema`).  It follows
+  the code on that branch, the discussion on the PR where that has
+  settled something, and the conventions of xradio's Conventions page
+  (PR 690).  The section "Against the discussion on PR 578" says where
+  it agrees and where it is still behind.
 - **It goes both ways.**  A tree can be saved to Zarr, and it can be
   written back as a CASA calibration table that `applycal` accepts.
 - **Flags can be written back** to the table, with a backup and a
@@ -41,25 +44,26 @@ table, then does what one would do with a real one.  Its output, trimmed:
 === 1. the table as an xarray.DataTree ====================================
 example.fringe: 'Fringe Jones' -> caltype 'Fringe', 2 spectral window(s): spw_0, spw_1
   dims       {'direction': 1, 'time': 8, 'antenna_name': 6, 'frequency': 1, 'receptor_label': 2}
-  CALPARAM_PHASE         float32    (direction, time, antenna_name, frequency, receptor_label) [rad]
-  CALPARAM_DELAY         float32    (...) [ns]
-  CALPARAM_RATE          float32    (...) [dimensionless]
-  CALPARAM_DISP_DELAY    float32    (...)
-  CALERROR_<each>        float32    (...)
-  SNR                    float32    (...)
+  CALPARAM_PHASE         float64    (direction, time, antenna_name, frequency, receptor_label) [rad]
+  CALPARAM_DELAY         float64    (...) [s]
+  CALPARAM_RATE          float64    (...) [dimensionless]
+  CALPARAM_DISP_DELAY    float64    (...)
+  CALERROR_<each>        float64    (...)
+  SNR                    float32    (...) [dimensionless]
   FLAG                   bool       (...)
   SOURCE_ROW             int64      (time, antenna_name)
   INTERVAL               float64    (time, antenna_name) [s]
-  coords     direction, time, antenna_name, frequency, channel_width, receptor_label, field_name, scan_name
-  attrs      {'type': 'antenna_calibration', 'caltype': 'Fringe', 'casa_subtype': 'Fringe Jones',
-              'spectral_window_id': 0, 'spectral_window_name': 'spw0', 'reference_antenna': 'FD'}
+  coords     direction, time, antenna_name, frequency, receptor_label, polarization_type, field_name, scan_name
+  receptors  {'pol_0': 'R', 'pol_1': 'L'}  (polarization_type)
+  frequency  1 channel(s) from 1432.000 MHz, width 64 MHz
+  KP delay, first times: [2.e-09 2.e-09 2.e-09] s   (reference antenna FD: 0.0 exactly)
 
 === 2. to Zarr and back ===================================================
 wrote example.zarr; read back identical: True
 
 === 3. flag an antenna and write the flags to the table ===================
 flagged 16 solutions in 8 rows; read back and verified: True
-previous flags saved in example.fringe.caltab_flag_backup_20261116_151015.npz
+previous flags saved in example.fringe.caltab_flag_backup_20261116_160316.npz
 after restore_flags:   MK in spw 1 flagged: 0 %
 
 === 5. a delay table as the phase it applies ==============================
@@ -69,6 +73,10 @@ A03 delay 3.0 ns, as phase across the band:
     1464.0 MHz  +0.6032 rad
 ```
 
+Run on a real table, the same listing ends with
+`receptors ['pol_0', 'pol_1'] (the table does not say what they are)`:
+see finding 1.
+
 In a session:
 
 ```python
@@ -77,8 +85,9 @@ import cubevis.xarray.caltab                          # only needed if cubevis i
 
 dt = xr.open_datatree("tl016b.gff")                   # engine="casa-caltab" is found from the table
 ds = dt["spw_0"].ds
-ds.CALPARAM_DELAY.sel(antenna_name="KP")              # ns: see its "units"
+ds.CALPARAM_DELAY.sel(antenna_name="KP")              # seconds: see its "units"
 
+dt = xr.open_datatree("tl016b.gff", polarization_type=["R", "L"])     # if you know what the receptors are
 dt.to_zarr("tl016b_gff.zarr")                         # the whole table, as Zarr
 
 from cubevis.xarray.caltab import write_caltab, commit_flags
@@ -97,17 +106,20 @@ One node per spectral window, `spw_<id>`.  Each node is a Dataset:
 | dims | `direction` (length 1), `time`, `antenna_name`, `frequency`, `receptor_label` |
 | variables | `CALPARAM_<name>`, `CALERROR_<name>`, `SNR`, `FLAG` over all five dims |
 | | `SOURCE_ROW`, `INTERVAL` over `(time, antenna_name)` |
-| coords | `field_name(time)`, `scan_name(time)`, `channel_width(frequency)` |
-| attrs | `type`, `caltype`, `casa_subtype`, `spectral_window_id`, `spectral_window_name`, `reference_antenna` |
+| coords | `field_name(time)`, `scan_name(time)`; `polarization_type(antenna_name, receptor_label)` when something says what the receptors are |
+| `time` | Unix seconds, increasing, with MSv4's time attributes |
+| `frequency` | Hz, increasing, with MSv4's attributes: `type`, `long_name`, `units`, `channel_width` |
+| `receptor_label` | positional: `pol_0`, `pol_1` (`all` for a T Jones) |
+| attrs | `type`, `caltype`, `casa_subtype`, `schema_version`, `type_version`, `creator`, `spectral_window_id`, `spectral_window_name`, `reference_antenna` |
 
 | CASA subType | `caltype` | Variables | Units |
 |---|---|---|---|
-| G Jones, B Jones, Accor Jones | G, B, Accor | `CALPARAM_GAIN` (complex) | dimensionless |
-| T Jones | T | `CALPARAM_GAIN` (complex), one receptor | dimensionless |
-| K Jones | K | `CALPARAM_DELAY` | ns |
-| B TSYS | Tsys | `CALPARAM_TSYS` | K |
-| Fringe Jones | Fringe | `CALPARAM_PHASE`, `_DELAY`, `_RATE`, `_DISP_DELAY` | rad, ns, dimensionless, not given |
-| anything else | the subType | `CALPARAM` over a `parameter` dim | not given |
+| G Jones, B Jones, Accor Jones | G, B, Accor | `CALPARAM_GAIN` (complex64) | dimensionless |
+| T Jones | T | `CALPARAM_GAIN` (complex64), one receptor | dimensionless |
+| K Jones | K | `CALPARAM_DELAY` (float64) | s |
+| B TSYS | Tsys | `CALPARAM_TSYS` (float64) | K |
+| Fringe Jones | Fringe | `CALPARAM_PHASE`, `_DELAY`, `_RATE`, `_DISP_DELAY` (float64) | rad, s, dimensionless, not given |
+| anything else | the subType | `CALPARAM` over a `parameter` dim, as stored | not given |
 
 A type the reader does not know is still read: its parameters are kept
 as they are, over a `parameter` dimension.  The gain curve
@@ -121,7 +133,9 @@ observation (TL016B, calibrated as in the CASA VLBA guide with CASA
 6.7.7: Accor, Tsys, gain curve, two fringe fits, B, K, and two G).
 
 - **Against casatools, exactly.**  Every row's parameters, errors, flags,
-  SNR, time, antenna, field, scan and interval, on all 15 tables.
+  SNR, time, antenna, field, scan and interval, on all 15 tables.  A
+  delay is CASA's single-precision ns times 1e-9; converted back, it is
+  the same bits.
 - **Against known answers.**  G amplitudes within 0.005, delays within
   0.05 ns, fringe rates within 5e-15, on the simulated set.
 - **To Zarr and back**: identical.
@@ -176,55 +190,97 @@ These may be known to you; they were not obvious from outside.
 
 ## Choices we made
 
-xradio's draft defines one dataset, `FringeJonesXds`.  Where it says
-something we followed it.  The rest is ours, and all of it is in one
-module (`cubevis/xarray/caltab/_schema.py`), so it is cheap to change.
+The code on the branch (commit `f871ae3`, 2026-08-06) defines one
+dataset, `FringeJonesXds`.  Where the code, the discussion or xradio's
+conventions say something, we followed it.  The rest is ours.  All of it
+is in one module (`cubevis/xarray/caltab/_schema.py`), so it is cheap to
+change.
 
-From the draft:
-- the five dimensions and their order;
-- `CALPARAM_PHASE`, `_DELAY`, `_RATE`; `CALERROR_<name>`; `SNR`;
-- `field_name(time)` and `scan_name(time)`;
-- `type = "antenna_calibration"` and `reference_antenna`.
+Followed:
+- the five dimensions and their order (the code);
+- `CALPARAM_PHASE`, `_DELAY`, `_RATE` as float64 in rad, s and
+  dimensionless; `CALERROR_<name>`; `SNR` (the code);
+- `schema_version`, `creator`, `creation_date`, `type_version`,
+  `field_name(time)`, `scan_name(time)`, `type`, `reference_antenna`
+  (the code);
+- positional receptor labels, with `polarization_type(antenna_name,
+  receptor_label)` saying what a receptor is (the discussion; MSv4's
+  antenna dataset);
+- `time` and `frequency` increasing, and `frequency`'s attributes
+  (the Conventions page; MSv4).
 
 Ours, and why:
 
 | Choice | Why |
 |---|---|
-| One node per spectral window | Windows differ in channel count and in solution times.  The draft does not say how a calibration set is arranged. |
-| `CALPARAM_GAIN`, `_TSYS`, `_DISP_DELAY` | The draft has no dataset for G, B, K or Tsys. |
-| `FLAG` in every dataset | The draft has a flag array type, but `FringeJonesXds` has no flags. |
-| CASA's units as stored (delay in ns) | Exact comparison with CASA.  The draft has seconds.  Each variable says its units. |
+| One node per spectral window | Windows differ in channel count and in solution times.  Nothing says yet how a calibration set is arranged. |
+| `CALPARAM_GAIN`, `_TSYS`, `_DISP_DELAY` | There is no dataset for G, B, K or Tsys yet. |
+| `FLAG` in every dataset | The code has a flag array type, but `FringeJonesXds` has no flags. |
 | A missing solution is NaN, flagged, with `SOURCE_ROW` -1 | "No solution" and "flagged" need telling apart. |
 | One SNR and one FLAG per receptor | See finding 3.  The reader warns if a table ever differs. |
-| Receptor labels `pol_0`, `pol_1`; `all` for T Jones | See finding 1.  A caller who knows can give R, L or X, Y. |
-| `direction` with one label, `direction_independent` | A CASA table is direction-independent; the draft has the dimension. |
-| `channel_width(frequency)` | See finding 9.  Evaluating a delay across the band needs it. |
+| `polarization_type` is left out when nothing says | See finding 1.  A caller who knows can give it. |
+| `all` for the one receptor of a T Jones | The discussion calls it "non-specific"; it needs some label. |
+| `direction` with one label, `direction_independent` | A CASA table is direction-independent; the schema has the dimension. |
+| A window stored in decreasing frequency is reversed, and says so (`casa_channel_order`) | `frequency` must increase; the table must be written back as it was. |
 | `CALPARAM` over `parameter` for an unknown type | Better read than refused. |
 | `SOURCE_ROW`, `INTERVAL` | Writing flags back to the right row; the solution interval. |
 
 Each tree lists these in its `schema_deviations` attribute.
 
+## Against the discussion on PR 578
+
+The reader was first written from the branch's code alone.  The
+discussion on the PR has gone further, through the 28 October meeting
+and George's text of 9 November.  We have since brought the reader into
+line where the discussion seemed settled.  Here is how it stands, as we
+understand it.
+
+| The discussion | The reader | |
+|---|---|---|
+| An "ontological" parameter (a delay, a rate, a Tsys) is its own array, with its own units | `CALPARAM_DELAY`, `_RATE`, `_PHASE`, `_TSYS` | agrees |
+| `receptor_label` is positional, not R, L or X, Y | `pol_0`, `pol_1`, which is what xradio's MSv2 and ASDM converters write | agrees |
+| What each receptor is comes from `polarization_type(antenna_name, receptor_label)` | That coordinate, when `PolBasis` or the caller says | agrees |
+| A scalar gain has one receptor, which is "non-specific" | T Jones has one receptor, labelled `all`, with no `polarization_type` | agrees in substance; the label is ours |
+| A singleton `direction` is acceptable | `direction` of length 1 | agrees |
+| "Phenomenological" gains have a `parameter` axis after the receptor: 1 for a diagonal gain, 2 for a full Jones | `CALPARAM_GAIN` for G, B, T and Accor has no `parameter` axis | **behind**: waiting for the axis to be in the schema |
+| Polynomial coefficients go along `parameter` | The gain curve's 16 values are along `parameter`, with no receptor axis | **behind**: waiting for question 7 |
+| Every array has units | The dispersive delay and the unknown-type form have none | **behind**: waiting for question 8 |
+
+We did not find these in the discussion: how a calibration set is
+arranged as a tree, and where flags live and how a missing solution is
+marked.  They are the first questions below.
+
+The thread writes the positional labels as `pos_0`, `pos_1`.  We used
+`pol_0`, `pol_1` because that is what the converters on xradio's main
+branch write.
+
 ## Questions
 
 For the schema:
 
-1. How will G, B, K and Tsys be represented: a named variable per
-   parameter, as the fringe fit is, or something generic?
-2. How is a calibration set arranged as a tree: a node per spectral
-   window, per table, per something else?
-3. What does `direction` hold for a direction-independent solution?
+1. How is a calibration set arranged as a tree: a node per spectral
+   window (our choice), per table, per something else?  Solution times
+   and channel counts differ by window in every real table we have.
+2. Will a diagonal gain (G, B) always carry the `parameter` axis, of
+   length 1, or may it be left off?
+3. What should the one receptor of a scalar gain be called?
 4. Where do flags live, and how is "no solution" told from "flagged"?
-5. Are delays always in seconds?  Is dispersive delay coming?
+   A Tsys table has rows for under half of its time by antenna grid.
+5. Is dispersive delay coming, and in what units?
+6. A calibration set made from a CASA table cannot fill in
+   `polarization_type` (finding 1).  May the coordinate be left out, as
+   we do, or must the set point at an antenna dataset?
 
 For CASA:
 
-6. What are the 16 values of an `EPowerCurve` row?
-7. What are the units of the fringe table's dispersive delay?
-8. Is finding 10 the rule for every K table, or particular to
+7. Are the 16 values of an `EPowerCurve` row two polarizations of eight
+   polynomial coefficients?  In what variable, and in what order?
+8. What are the units of the fringe table's dispersive delay?
+9. Is finding 10 the rule for every K table, or particular to
    `gaincal(gaintype="K")`?
-9. Is finding 3 guaranteed, or can a polarization's parameters be
-   flagged separately?
-10. Which other types matter most to read properly?  We have not seen
+10. Is finding 3 guaranteed, or can a polarization's parameters be
+    flagged separately?
+11. Which other types matter most to read properly?  We have not seen
     polarization tables (D-terms, X-Y phase), antpos, opacity, or an
     ALMA Tsys with channels.
 
@@ -237,12 +293,11 @@ For the schema:
 
 - **Say how a set is arranged before much is built on it.**  A node per
   window is an easy thing for us to change now and a hard one later.
-- **Record what the receptors are.**  A calibration set that says R, L or
-  X, Y avoids repeating `PolBasis = unknown`.
+- **Allow for a set whose receptors are not known.**  One converted from
+  a CASA table has positional labels and nothing to put in
+  `polarization_type`, unless the MS is at hand.
 - **Give every dataset type its flags**, and one stated way to mark a
   solution that does not exist.
-- **Keep units as attributes on each variable**, whichever units are
-  chosen, so a reader never has to know them by type.
 - **Store the frequency a delay-like parameter is referenced to**, and the
   band a single-channel solution stands for.  Finding 10 had to be found
   by experiment.
@@ -277,11 +332,18 @@ Where it should live is your call as much as ours.
 
 - **Types**: G, T, B, K, Fringe, Tsys and Accor are known.  Others are
   read in the generic form.
+- **The trees are not checked against xradio's schema checker.**  The
+  draft is not on xradio's main branch, and the reader is knowingly
+  behind the discussion in the three rows above.
 - **A written table's subtables hold names and frequencies only.**
   Antenna positions and field directions are zero, so a type that needs
   them when applied is unchecked.
 - **A written table numbers antennas and fields in the tree's order**,
   since a tree holds names and not CASA's ids.
+- **One channel width per window**, as in MSv4.  A window whose channels
+  differ in width keeps the first's.
+- **A window stored in decreasing frequency** is handled, but only
+  synthetic tables have exercised it.
 - **Everything is read at once.**  Fine for these tables (the largest read
   takes 65 ms); a very large bandpass table would want lazy reads.
 - **Locks**: not tested against CASA writing the same table.
@@ -299,6 +361,6 @@ Where it should live is your call as much as ours.
 | The simulated tables | `devel/tools/calplot/make_caltables.py` (needs CASA) |
 | The tests | `tests/manual/calplot/` |
 | The record | `devel/notes/drs/calplot/calplot_notes.md` |
-| The plan | `devel/docs/gridplot/grid_and_calplot_plan.md`, sections 10 and 19 to 22 |
+| The plan | `devel/docs/gridplot/grid_and_calplot_plan.md`, sections 10 and 19 to 24 |
 
 Contact: Darrell Schiebel.

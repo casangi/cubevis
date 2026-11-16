@@ -59,7 +59,8 @@ def test_the_example_runs():
     assert out.returncode == 0, out.stderr[-1500:]
     for line in ("caltype 'Fringe', 2 spectral window(s)", "read back identical: True",
                  "read back and verified: True", "MK in spw 1 all flagged: True",
-                 "MK in spw 1 flagged: 0 %", "KP:  16 points", "+0.6032 rad"):
+                 "MK in spw 1 flagged: 0 %", "KP:  16 points, delay 2.00 to 2.20 ns", "+0.6032 rad",
+                 "polarization_type", "[s]"):
         assert line in out.stdout, line
 
 
@@ -77,7 +78,8 @@ def test_info():
     assert info.fields == ("a", "b") and info.scans == ("1", "2", "3", "4")
     assert info.reference_antenna == "A02"
     assert [(q.name, q.units) for q in info.quantities] == [
-        ("phase", "rad"), ("delay", "ns"), ("rate", ""), ("disp_delay", ""), ("snr", "")]
+        ("phase", "rad"), ("delay", "s"), ("rate", ""), ("disp_delay", ""), ("snr", "")]
+    assert info.polarization == ()                                   # the table does not say
     assert info.evaluations == ()
     assert info.nsolutions == 3 * 8 * 5 * 2 and 0.15 < info.nflagged / info.nsolutions < 0.35
     assert info.can_write_flags is False                             # a tree from numbers: nowhere to write
@@ -91,6 +93,8 @@ def test_info_by_type():
     assert [q.label for q in g.quantities][:2] == ["Gain amplitude", "Gain phase"]
     assert [q.units for q in g.quantities] == ["", "rad", "", "", ""]
     assert _reader("T").info().receptors == ("all",)
+    rl = _reader("G", polarization_type=["R", "L"]).info()
+    assert rl.receptors == ("pol_0", "pol_1") and rl.polarization == ("R", "L")
     k = _reader("K").info()
     assert k.evaluations == ("phase",) and k.reference_antenna is None
     assert [q.name for q in _reader("Tsys").info().quantities] == ["tsys", "snr"]
@@ -107,16 +111,16 @@ def test_read_is_flat_arrays_of_the_right_values():
     r = _reader("K", nant=4, nspw=2, ntime=3)
     s = r.read("delay")
     assert isinstance(s, CalSamples) and len(s) == 2 * 3 * 4 * 2
-    assert (s.quantity, s.units, s.label) == ("delay", "ns", "Delay")
+    assert (s.quantity, s.units, s.label) == ("delay", "s", "Delay")
     for col in ("y", "flag", "time", "frequency", "channel", "antenna", "spw", "receptor", "field",
                 "scan", "error"):
         v = getattr(s, col)
         assert type(v) is np.ndarray and v.shape == (len(s),), col   # numpy, nothing of xarray's
     assert s.flag.dtype == bool and s.antenna.dtype == np.int64
     want = synthetic_value("K", "DELAY", s.antenna, s.receptor, 0.0, 0.0).astype(np.float32)
-    np.testing.assert_array_equal(s.y, want)                         # each entry is its own antenna's
+    np.testing.assert_array_equal(s.y, want.astype(np.float64) * 1e-9)   # each entry is its own antenna's
     assert s.antennas == r.info().antennas and s.receptors == ("pol_0", "pol_1")
-    np.testing.assert_array_equal(s.error, (1.0 / (20.0 + s.antenna)).astype(np.float32))
+    np.testing.assert_array_equal(s.error, (1.0 / (20.0 + s.antenna)).astype(np.float32).astype(np.float64) * 1e-9)
     assert sorted(set(s.spw.tolist())) == [0, 1] and set(s.channel.tolist()) == {0}
     assert set(np.round(s.frequency[s.spw == 1] - s.frequency[s.spw == 0][0]).tolist()) == {128e6}
     cell = s.where(s.antenna == 2)                                   # a grid cell
@@ -152,6 +156,12 @@ def test_selection():
     assert n(antenna=["A01", 4]) == len(full) // 3
     assert n(spw=1) == n(spw=[1]) == len(full) // 3 and n(spw=[0, 2]) == 2 * len(full) // 3
     assert n(receptor="pol_1") == n(receptor=1) == len(full) // 2
+    known = _reader("B", nant=6, nspw=3, ntime=8, nscan=4, nchan=8, polarization_type=["R", "L"])
+    by_type = known.read("amplitude", receptor="L")                  # by what it is, when the data say
+    assert len(by_type) == len(full) // 2 and set(by_type.receptor.tolist()) == {1}
+    assert len(known.read("amplitude", receptor=["R", "pol_1"])) == len(full)
+    with pytest.raises(ValueError, match="there are: pol_0, pol_1"):
+        r.read("amplitude", receptor="L")                            # this table does not say
     assert n(field="a") == n(field=0) == len(full) // 2
     assert n(scan="2") == n(scan=2) == len(full) // 4 and n(scan=[1, 4]) == len(full) // 2
     assert n(channel=(2, 5)) == len(full) // 2
@@ -317,7 +327,9 @@ def test_real_samples_are_casas(table, quantity, par):
     index = {n: i for i, n in enumerate(names)}
     rows = np.array([row[(t + 3506716800.0, index[s.antennas[a]], w)]
                      for t, a, w in zip(s.time.tolist(), s.antenna.tolist(), s.spw.tolist())])
-    np.testing.assert_array_equal(s.y, fpar[s.receptor * nparam + par, 0, rows])
+    scale = 1e-9 if quantity == "delay" else 1.0                     # CASA's ns; the reader's seconds
+    assert s.units == {"delay": "s", "rate": "", "tsys": "K"}[quantity]
+    np.testing.assert_array_equal(s.y, fpar[s.receptor * nparam + par, 0, rows].astype(np.float64) * scale)
     np.testing.assert_array_equal(s.flag, flag[s.receptor * nparam + par, 0, rows].astype(bool))
     assert sorted(set(rows.tolist())) == list(range(len(time)))      # every row, twice (two receptors)
 

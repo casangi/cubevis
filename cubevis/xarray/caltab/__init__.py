@@ -3,7 +3,7 @@
     import xarray as xr
     dt = xr.open_datatree("tl016b.gff", engine="casa-caltab")
     ds = dt["spw_0"].ds
-    ds.CALPARAM_DELAY.sel(antenna_name="BR")          # ns; see its "units"
+    ds.CALPARAM_DELAY.sel(antenna_name="BR")          # seconds; see its "units"
 
 or ``open_caltab(path)``, the same without xarray's entry point.
 

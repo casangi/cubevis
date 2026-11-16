@@ -81,7 +81,10 @@ class CalInfo:
     caltype: str                       # "G", "B", "K", "Fringe", "Tsys" ... or CASA's subtype
     casa_subtype: str
     antennas: tuple[str, ...]
-    receptors: tuple[str, ...]         # labels; for an unknown type, the parameter numbers
+    receptors: tuple[str, ...]         # positional labels (pol_0, pol_1); for an unknown type, the
+                                       # parameter numbers
+    polarization: tuple[str, ...]      # what each receptor is ("R", "L"), when the data say and it is
+                                       # the same for every antenna; else ()
     spws: tuple[SpwInfo, ...]
     fields: tuple[str, ...]
     scans: tuple[str, ...]
@@ -200,7 +203,7 @@ class CalTableReader:
         """A reader for *source*: a CASA calibration table, a tree saved to
         Zarr, or a tree already in hand (``synthetic_caltab(...)``).
 
-        *kwargs* go to the opener (``spw=``, ``receptor_labels=`` for a
+        *kwargs* go to the opener (``spw=``, ``polarization_type=`` for a
         CASA table).
         """
         if hasattr(source, "children") and hasattr(source, "attrs"):         # a DataTree
@@ -279,8 +282,8 @@ class CalTableReader:
             for a in ds[S.ANTENNA].values:
                 antennas.setdefault(str(a))
             freq = ds[S.FREQUENCY].values
-            width = (float(np.abs(ds[S.CHANNEL_WIDTH].values).sum())
-                     if S.CHANNEL_WIDTH in ds.coords else 0.0)
+            w = S.quantity_value(ds[S.FREQUENCY].attrs.get(S.CHANNEL_WIDTH))
+            width = 0.0 if w is None else abs(w) * int(freq.size)
             spws.append(SpwInfo(s, str(ds.attrs.get("spectral_window_name", "")), int(freq.size),
                                 (float(freq[0]), float(freq[-1])), width, int(ds.sizes[S.TIME])))
             t_lo, t_hi = min(t_lo, float(ds[S.TIME].values.min())), max(t_hi, float(ds[S.TIME].values.max()))
@@ -291,7 +294,13 @@ class CalTableReader:
                 refs.add("varies")
             else:
                 refs.add(ds.attrs.get("reference_antenna"))
-        last = next(iter(self._nodes.values())).ds[self._last].values
+        first = next(iter(self._nodes.values())).ds
+        last = first[self._last].values
+        polarization: tuple[str, ...] = ()
+        if S.POLARIZATION_TYPE in first.coords:
+            types = first[S.POLARIZATION_TYPE].values
+            if (types == types[:1]).all():                           # every antenna the same
+                polarization = tuple(str(v) for v in types[0])
         reference = "varies" if "varies" in refs or len(refs) > 1 else next(iter(refs))
         from ...xarray.caltab._flags import COMMITTERS
         source, fmt = str(tree.attrs.get("source", "")), str(tree.attrs.get("source_format", ""))
@@ -299,7 +308,8 @@ class CalTableReader:
         self._info = CalInfo(
             source=source, source_format=fmt, caltype=caltype,
             casa_subtype=str(tree.attrs.get("casa_subtype", "")),
-            antennas=tuple(antennas), receptors=tuple(str(v) for v in last), spws=tuple(spws),
+            antennas=tuple(antennas), receptors=tuple(str(v) for v in last),
+            polarization=polarization, spws=tuple(spws),
             fields=self._names("field_name"), scans=self._names("scan_name"),
             time_range=(t_lo, t_hi), reference_antenna=reference,
             quantities=self._quantities(), evaluations=_EVALUATIONS.get(caltype, ()),
@@ -320,7 +330,11 @@ class CalTableReader:
             if missing:
                 raise ValueError(f"no spectral window {missing}; there are: {spw_ids}")
         ant = _pick(sel.antenna, info.antennas, "antenna")
-        rec = _pick(sel.receptor, info.receptors, "parameter" if self._generic else "receptor")
+        receptor = sel.receptor
+        if receptor is not None and info.polarization:               # "R" as well as "pol_0"
+            receptor = [info.receptors[info.polarization.index(v)] if isinstance(v, str)
+                        and v in info.polarization else v for v in _as_list(receptor)]
+        rec = _pick(receptor, info.receptors, "parameter" if self._generic else "receptor")
         fields = _as_list(sel.field)
         if fields is not None:
             fields = [info.fields[int(f)] if isinstance(f, (int, np.integer)) else str(f) for f in fields]
@@ -403,7 +417,8 @@ class CalTableReader:
             ``"value"`` for a type the schema does not know.
         antenna, field, scan, receptor
             Names, or numbers into ``info()``'s tuples; one or several.
-            Default: all.
+            Default: all.  A receptor may also be named by what it is
+            (``"R"``), when ``info().polarization`` says.
         spw
             Spectral window id(s).
         time, frequency
@@ -497,7 +512,7 @@ class CalTableReader:
             if frequencies is not None and s in frequencies:
                 freq = np.asarray(frequencies[s], dtype=np.float64)
             else:
-                width = (float(abs(ds[S.CHANNEL_WIDTH].values[0])) if S.CHANNEL_WIDTH in ds.coords else 0.0)
+                width = abs(S.quantity_value(ds[S.FREQUENCY].attrs.get(S.CHANNEL_WIDTH)) or 0.0)
                 if width <= 0:
                     raise ValueError(f"spectral window {s}: the band's width is not known; "
                                      "give frequencies={spw: [...]}")

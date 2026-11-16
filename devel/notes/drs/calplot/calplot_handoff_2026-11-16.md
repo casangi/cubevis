@@ -7,7 +7,9 @@ flagging in it (C2), and the later stages.
 Read first:
 - `devel/notes/drs/calplot/calplot_notes.md`: one section per slice
   (1 the reader, 2 the synthetic source and writer, 3 engine
-  registration, 4 `commit_flags`, 5 `CalTableReader`, 6 the document).
+  registration, 4 `commit_flags`, 5 `CalTableReader`, 6 the document,
+  7 what xradio's PR 578 discussion and PR 690 say, and how the
+  reader was brought into line).
 - `devel/docs/gridplot/grid_and_calplot_plan.md`, mirrored to the
   claude.ai project doc `claude/grid_and_calplot_plan.md`: sections 4
   (calplot's scope), 3 (the grid component), 9.4 to 9.6, and 19 to 23
@@ -20,12 +22,12 @@ Read first:
 
 ## Where things stand
 
-* **Branch `calplot`** (started from `gridplot` at `3ef11065`).  This
-  slice is `calplot-c0f_d9a7690d.zip`; ask Darrell whether it is pushed
-  before starting.
+* **Branch `calplot`** (started from `gridplot` at `3ef11065`).  The
+  last slice is `calplot-c0h_460f502e.zip` (it replaces `c0g`, which was
+  never applied); ask Darrell whether it is pushed before starting.
 * **`gridplot` is not yet merged to main.**  A grid fix found while
   building C1 has to go to both branches until it is.
-* **Tests**: `tests/manual/calplot/`, 144 passing with `CALTABLES` and
+* **Tests**: `tests/manual/calplot/`, 151 passing with `CALTABLES` and
   casatools; the `caltab` suite in `tests/ci/suites.toml` runs the ones
   that need neither.
 
@@ -60,6 +62,7 @@ from cubevis.xarray.caltab import (open_caltab, synthetic_caltab, write_caltab,
 from cubevis.toolbox.calplot import CalTableReader
 
 dt = xr.open_datatree("cal.G")                    # engine "casa-caltab"; one node per SPW
+dt = xr.open_datatree("cal.G", polarization_type=["R", "L"])   # if the receptors are known
 dt = synthetic_caltab("Fringe", nant=27)          # the same shape, from numbers
 write_caltab(dt, "x.cal")                         # a CASA table; applycal accepts it
 dt["spw_0"]["FLAG"].loc[dict(antenna_name="A03")] = True
@@ -151,18 +154,58 @@ CALTABLES=/path/to/tables /tmp/ivenv/bin/python -m pytest -q tests/manual/calplo
   parameters, then the second's.
 * **Solution times differ by SPW**, and a Tsys table is ragged: a time
   and antenna with no row has `SOURCE_ROW` -1, NaN and FLAG set.
-* **`PolBasis` is `unknown`** in every table, so receptor labels are
-  `pol_0`, `pol_1` unless given; `all` for T Jones.
+* **`PolBasis` is `unknown`** in every table.  Receptor labels are
+  always positional (`pol_0`, `pol_1`; `all` for T Jones).  What a
+  receptor is goes in the `polarization_type` coordinate, which is
+  there only when the caller or `PolBasis` says.  Do not relabel the
+  axis R, L.
 * **Zarr returns variables sorted by name.**  Do not rely on a tree's
   variable order.
-* **CASA's delays are ns**; visplot's `Axis.DELAY` says seconds.
+* **CASA's delays are ns; the tree's are seconds**, float64, as the
+  draft's code has them (`Param.scale`).  `RawCalTable` holds CASA's
+  values; `build_tree` and `tree_to_raw` convert.  Show ns to people.
+* **`frequency` always increases in the tree.**  A window CASA stores
+  the other way is reversed on reading (`casa_channel_order =
+  "reversed"` on its node) and reversed back by `tree_to_raw` and by the
+  flag commit.  Anything new that maps tree channels to table channels
+  must do the same.
+* **`channel_width` is an attribute of `frequency`**, a quantity dict as
+  in MSv4, not a coordinate: one positive number per window.
 * **A K delay's phase is referenced to the table's own `CHAN_FREQ`**
   (the band's middle), which is why the tree has `channel_width`.
 * **`applycal` refuses a cal table whose subtables are not valid MS
   subtables.**  `_write.py` uses arcae's `ms_descriptor` for them.
 * **`xr.backends.list_engines()` loads every backend** (so arcae, via
   xarray-ms).  It is cached; `_register.py` clears the cache.
-* **Values are single precision.**  Compare in float32.
+* **CASA's values are single precision.**  The tree's float parameters
+  are float64, so compare with `float32 value .astype(float64) * scale`,
+  or convert back and compare in float32.
+
+## The schema: what follows xradio, and what waits
+
+Notes section 7 has the detail.  The reader follows, in this order: the
+code on xradio's branch `545-calset-schema` (PR 578); the discussion on
+that PR where it has settled something; and xradio's Conventions page
+(PR 690).  As of this slice:
+
+* **Done**: delays in seconds and float parameters as float64;
+  positional receptor labels with a `polarization_type(antenna_name,
+  receptor_label)` coordinate; `frequency` increasing, with MSv4's
+  attributes (`channel_width` a quantity); the draft's `schema_version`,
+  `type_version`, `creator` and `creation_date`.
+* **Waiting for the schema, or for George and Des**:
+  1. a `parameter` axis on gains (G, B, T, Accor): proposed in the
+     discussion, not in the schema's code;
+  2. the gain curve as receptor by polynomial coefficient;
+  3. units for the dispersive delay, and for an unknown type;
+  4. how a calibration set is arranged (we use a node per window), and
+     where flags and missing solutions go.
+
+Each of these is an edit to `_schema.py` and `_build.py`, and each
+changes the schema, so it needs Darrell's go.  `CalTableReader` hides
+them from the application, so C1 need not wait.  The trees have not
+been run through xradio's schema checker; that would be a good test to
+add once PR 578's module is on a branch that imports.
 
 ## Next: C1, the application (to propose, then wait for go)
 
@@ -201,8 +244,12 @@ Settle with Darrell before writing code:
    visplot's wrapper, and what `plotfile=` writes.
 6. **Quantities and `Axis`**: reuse visplot's `Axis` members
    (`GAIN_AMPLITUDE`, `GAIN_PHASE`, `DELAY`, `TSYS`, `SNR`) or keep
-   calplot's own names.  Mind the delay units.
+   calplot's own names.  The reader gives delays in seconds, as
+   `Axis.DELAY` says; a plot should show ns.
 7. **Detection** in `data_format.py`, beside MS detection (plan 9.6).
+8. **Titles and legends** should name a receptor by
+   `info().polarization` ("R", "L") when it is known, and by its
+   position otherwise.
 
 Then C2 (plan 3.6): FlagDB's list, undo and preview edit the reader's
 flags (`set_flags`), and `commit_flags` writes them.
@@ -210,9 +257,16 @@ flags (`set_flags`), and `commit_flags` writes them.
 ## Open
 
 * **The document has gone, or is going, to George and Des.**  Their
-  answers to its ten questions may change `_schema.py`: the tree's
-  arrangement, units, receptor labels, EPowerCurve's values, the
+  answers to its eleven questions may change `_schema.py`: the tree's
+  arrangement, the `parameter` axis, units, EPowerCurve's values, the
   dispersive delay's units.  Ask Darrell what came back.
+* **GitHub's pages are closed to the sandbox.**  The discussion on a PR
+  or issue can only be read if Darrell saves the page ("Webpage, single
+  file", `.mhtml`) and uploads it; he says that is no trouble.  PR 578
+  and PR 690 were read that way on 2026-11-16.  Ask for PR 578 again
+  before changing the schema.  Unread: `casangi/RADPS-roadmap#4`,
+  `JSKenyon/gain-skeletons` (mock-ups of the calibration layout), and
+  xradio PR 693 (checker upgrades).
 * **Not covered by any table**: an ALMA Tsys with channels (the ALMA
   Antennae Band 7 guide ships one), polarization tables, antpos and
   opacity, a real table whose reference antenna changes.
@@ -226,9 +280,11 @@ flags (`set_flags`), and `commit_flags` writes them.
 * **Where the backend should live**: cubevis for now.  xradio, or a
   package of its own, is a move (`cubevis/xarray` imports nothing of
   cubevis's GUI).
-* **xradio's draft** (PR 578, `545-calset-schema`, commit `f871ae3`) was
-  unchanged from 2026-08-06 to 2026-11-15.  Check it again at each
-  stage: `git fetch https://github.com/casangi/xradio.git
-  refs/pull/578/head`.
+* **xradio's draft** (PR 578, `545-calset-schema`, commit `f871ae3`):
+  the code was unchanged from 2026-08-06 to 2026-11-15, but the
+  discussion is active (meetings on 2026-06-30 and 2026-10-28, George's
+  text of 2026-11-09).  Check the code at each stage with `git fetch
+  https://github.com/casangi/xradio.git refs/pull/578/head`, and ask
+  for the page.
 * Carried from the gridplot handoff: retake the G0 to G3 timings on
   TW Hya and the VLBA subset.

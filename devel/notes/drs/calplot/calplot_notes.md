@@ -557,7 +557,7 @@ This closes C0.
   explained for the people working on CASA calibration and on xradio's
   calibration schema.  How to try it, what a table becomes, what was
   checked, twelve findings about CASA's tables, the choices made and
-  why, ten questions, and suggestions.
+  why, ten questions (eleven after section 7), and suggestions.
 - `devel/tools/calplot/caltab_example.py` (new): the tour that document
   tells them to run.  No CASA, no data: it makes a synthetic fringe
   table, writes it as a CASA table, opens it, sends it to Zarr and back,
@@ -590,3 +590,150 @@ usable.
 
 **Next**: C1, the application.  The handoff has a first slice to
 propose and the questions to settle first.
+
+## 7. C0h: PR 578's discussion and PR 690 read; the reader brought into line (base `460f502e`, 2026-11-16)
+
+This slice replaces `calplot-c0g`, which was never applied.
+
+**What happened.**  Sections 1 to 6 took xradio's draft from the branch's
+code alone: the sandbox cannot open GitHub's pages or API, so the PR's
+conversation had not been read.  Darrell saved the pages of PR 578 and
+PR 690 and uploaded them.  PR 578 has 25 comments, the last substantive
+one on 2026-11-09.  The reader was then brought into line with what is
+settled, and the document for George and Des revised, before it was
+sent.
+
+**Corrections to what these notes said.**
+- "The draft is one file, unchanged since 2026-08-06" is true of the
+  **code**.  The **discussion** is active: calibration meetings on
+  2026-06-30 and 2026-10-28, and a long text from George on 2026-11-09.
+- The work is Des Small's (`dessmalljive`).  Simon Perkins
+  (`sjperkins`) opened the PR on 2026-05-25 so it could be found and
+  reviewed.  Reviewers: J. Kenyon, V. Morello, and George Moellenbrock
+  (`gmoellen`, review requested 2026-06-30).  So both of the document's
+  readers are already in this discussion.
+- Section 1's first "question for the draft's author" (how G, B, K and
+  Tsys will be represented) is largely answered there.
+- **Section 1's decisions 2 and 5 are reversed** (below): delays are
+  now in seconds, and the receptor axis is never relabelled R, L.
+
+**What PR 578's discussion says** (dates are the comments').
+- *Ontological and phenomenological* (Des 10-19, George 10-27 and
+  11-09).  Ontological calibration is physical parameters (delay,
+  rate, TEC, antenna position, gain curve, Tsys).  Phenomenological is
+  gains in a form equivalent to Jones matrices, ready to apply.
+- *Each ontological parameter is its own array* (Des 10-20), because
+  the schema framework requires explicit units on every array.
+- *Six axes* (George 11-09): Direction, Time, Antenna or Baseline,
+  Frequency, Receptor or Correlation, and **parameter**.
+  - Antenna-based gains: receptor and parameter together are the Jones
+    matrix.  A general Jones has 2 receptors by 2 parameters; a
+    diagonal gain has 1 parameter; a scalar gain also has 1 receptor,
+    which is "non-specific".
+  - Along `parameter` the units must be uniform.  Parameters with
+    different units go in separate arrays.  Polynomial coefficients
+    are the stated exception: they go along `parameter`.
+- *`receptor_label` is positional* (meeting of 10-28; Des 10-19): not
+  X, Y, R, L.  What each receptor is comes from
+  `polarization_type(antenna_name, receptor_label)`, as in MSv4's
+  antenna dataset, so that heterogeneous arrays work.
+  - The thread writes the labels as `pos_0`, `pos_1`.  xradio's own
+    converters (MSv2 and ASDM, main at 2026-11-15) write `pol_0`,
+    `pol_1`, which is what the reader uses.
+- *`direction`*: a singleton is acceptable (06-30).
+- *The parameter axis has come and gone and come back*: present in May,
+  removed in June, proposed again by George in October for full-Jones
+  gains and polynomials.  The branch's code is the June state.
+
+**What PR 690 says** (Jan-Willem, draft, 2026-11-15; code read at
+`cb97eb4`).  Shared bases for xradio's schemas and a Conventions page;
+no schema content changes.
+- `time` and `frequency` coordinates must increase.
+- Data variables are UPPER_SNAKE; coordinates and attributes
+  lower_snake.
+- `FrequencyCoordArrayBase`: `type`, `long_name`, `units`, `observer`,
+  and `channel_width` as an attribute (a quantity), which is how MSv4
+  already stores it.
+- `ReceptorLabelArrayBase`, and `FlagArrayBase` with `flag_bits`.  Its
+  open question 7 asks whether that flag base fits PR 578's
+  calibration flags.
+- PR 578's module uses `UnitsRadians`, `UnitsSeconds` and
+  `UnitsDimensionless` without importing them; it will fail to import
+  once PR 690 lands, until it imports them.
+
+**What was changed to follow them.**
+1. **Delays in seconds, float parameters float64.**  The draft's code
+   has `CALPARAM_DELAY` as float64 in `s`.  CASA stores single-precision
+   ns.  `Param` has a `scale` (1e-9 for a delay); `build_tree`
+   multiplies, `tree_to_raw` divides and casts back.  ns → s → ns gives
+   the same bits (tested).  Complex gains stay complex64, and an unknown
+   type's values stay as stored.
+2. **`polarization_type(antenna_name, receptor_label)`.**  The receptor
+   axis is always `pol_0`, `pol_1` (`all` for T Jones).  The coordinate
+   is there when `PolBasis` is linear or circular, or when the caller
+   gives `polarization_type=["R", "L"]`; it is left out otherwise, so
+   for every CASA 6.7 table.  The argument `receptor_labels=` is gone
+   from `open_caltab`, the backend and `synthetic_caltab`.
+3. **`frequency` increases.**  A window CASA stores in decreasing
+   frequency is reversed on reading, and its node has
+   `casa_channel_order = "reversed"`.  `tree_to_raw` and the flag commit
+   reverse it back, so the table is written as it was (CHAN_WIDTH
+   negative there).
+4. **`frequency`'s attributes are MSv4's**: `type`, `long_name`,
+   `units`, and `channel_width` as a quantity
+   (`{"data": w, "dims": [], "attrs": {"units": "Hz", "type":
+   "quantity"}}`).  It replaces section 5's `channel_width` coordinate.
+   One number per window, positive; a window whose channels differ in
+   width keeps the first's, with a warning.
+5. **The draft's attributes**: `schema_version` (now 0.2.0),
+   `type_version`, `creator` (with cubevis's version) on each node;
+   `creation_date` on the root, from the table's modification time.
+6. **`SNR` has units** (`dimensionless`).
+7. **`CalTableReader`**: `info().polarization` (`("R", "L")`, or `()`
+   when the data do not say); `read(receptor="R")` works when they do.
+   Delays are in seconds (`units` says so); `evaluate` reads the units.
+   The application should show ns.
+
+**Still behind the discussion, on purpose.**
+- No `parameter` axis on gains (G, B, T, Accor).  It is proposed, not
+  in the schema's code, and the document asks whether a diagonal gain
+  will always carry it.
+- The gain curve is read as an unknown type.  It is probably receptor
+  by polynomial coefficient (MSv4's `gain_curve_xds` has `poly_term`).
+- No units on the dispersive delay or on an unknown type's values.
+- The trees have not been run through xradio's schema checker.
+
+Not found in either PR: how a calibration set is arranged as a tree,
+where flags live and how a missing solution is marked.
+
+**Files.**
+- `cubevis/xarray/caltab/`: `_schema.py`, `_build.py`, `_reader.py`,
+  `_backend.py`, `_synthetic.py`, `_flags.py`, `__init__.py`.
+- `cubevis/toolbox/calplot/reader.py`.
+- All four test files; `devel/tools/calplot/caltab_example.py`.
+- `devel/docs/calplot/casa_caltab_xarray.md`: rewritten for the reader
+  as it now is.  New section "Against the discussion on PR 578"; eleven
+  questions (six for the schema, five for CASA).
+- The handoff and the plan (section 24).
+
+**Checked.**
+- 151 tests pass with `CALTABLES` and casatools.
+- The casatools comparison is still exact on all 15 real tables, now
+  through the units: the tree's value is CASA's float32 times the
+  scale, and back.
+- `applycal` still gives identical corrected data from written G, B and
+  K tables, and still honors a flag written here.
+- New: a table stored in decreasing frequency (synthetic) gives the
+  same tree as one stored increasing; is written back in its own order;
+  and a flag set at a frequency lands on that frequency's channel.
+- The tests fail when the flag commit ignores a reversed window, when
+  the writer does not go back to CASA's units, and when a reversed
+  window is not reversed back (each tried).
+
+**For any later session**: GitHub's pages are closed to the sandbox.
+To read a PR or issue, ask Darrell to save the page ("Webpage, single
+file", `.mhtml`) and upload it; he says that is no trouble.
+`git fetch <repo> refs/pull/<n>/head` gives the code.  Unread, and
+possibly relevant: `casangi/RADPS-roadmap#4` (the calibration epic),
+`JSKenyon/gain-skeletons` (mock-ups; its PRs 8 and 10), and xradio
+PR 693 (checker upgrades).

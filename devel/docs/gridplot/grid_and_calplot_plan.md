@@ -407,7 +407,7 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 | **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event. **Built 2026-11-11: section 12** (remote waits for G2) | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
 | **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets. **Built 2026-11-11: sections 13, 14** (rasters; presets are the panel presets in Grid; TW Hya / VLBA to test) | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
 | **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only; scatter grids; "whole grid" color scope by default (kept at "this page" for now: section 16); the grid's own template panel (section 14). **The grid's own panel built 2026-11-13: section 15; read once, split: section 16; scatter grids: section 17; compound iteration and the `axes_override` hook: section 18. G3 done** | M | Page time inside the G0 target |
-| **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables. **The `casa-caltab` reader built 2026-11-15: section 19; the synthetic source and a table writer 2026-11-16: section 20** (`commit_flags` and `CalTableReader` to come; C0 closes with a document and example for xradio's schema authors) | M | Round-trip of values and flags against casatools reads |
+| **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables. **The `casa-caltab` reader built 2026-11-15: section 19; the synthetic source and a table writer 2026-11-16: section 20; `commit_flags`: section 21** (`CalTableReader` to come; C0 closes with a document and example for xradio's schema authors) | M | Round-trip of values and flags against casatools reads |
 | **C1** | calplot app: selection (antenna, SPW, field, pol, time), grid per antenna, overlay mode, flagged solutions shown, refant in titles, PNG pages; remote kernels via the existing setup | L | Gain, bandpass and fringe tables from a real VLA/VLBA reduction |
 | **C2** | Solution flagging: box in drill-down panel, FlagDB list/undo, commit to `FLAG` with a backup copy | M | Flag, undo, commit, reopen in plotms and see the same flags |
 | G4 / C3 (optional) | Flag-in-cell with the shared tool (3.6 v2) | M | — |
@@ -1067,6 +1067,31 @@ Record: `devel/notes/drs/calplot/calplot_notes.md` section 2.
   the draft leaves open, with an example that runs without CASA or data.
 
 Next: `commit_flags`, then the thin `CalTableReader`.
+
+## 21. C0, third slice built: `commit_flags` (2026-11-16, base `7f989ffb`)
+
+Record: `devel/notes/drs/calplot/calplot_notes.md` section 4.
+
+- **The tree is the request.**  Edit a tree's `FLAG`; `commit_flags(tree)`
+  makes the table say the same.  `dry_run=True` only reports.
+- **The steps of visplot's MSv2 commit** (section 10.1): check the table
+  is the one the tree was read from, plan from a fresh read, back up the
+  rows to be written in a side file, write, read back.  `restore_flags`
+  undoes one commit; `list_flag_backups` finds them.
+- **One flag per receptor**: a changed cell sets all of that receptor's
+  parameters in the row, and an unchanged one is never written.
+- **Reader independence** (9.6): the commit is done by a committer chosen
+  by where the tree came from.  CASA's is the only one; a calset's
+  registers beside it.
+- **Checked**: only the changed cells differ, on each of the 15 real
+  tables, by casatools; restore is exact; **`applycal` flags the data of a
+  solution flagged here**.
+- **For C2**: FlagDB's list, undo and preview edit the tree's `FLAG`, and
+  this writes the result.  Section 3.6's "its own commit/backup in the
+  reader" is this.
+
+Next: the thin `CalTableReader`, then the document for xradio's schema
+authors.
 
 ## Sources
 

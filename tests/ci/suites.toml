@@ -95,9 +95,11 @@ after = "tiny-ms"
 name = "caltab"
 # the casa-caltab xarray backend (cubevis.xarray.caltab, calplot C0): the
 # schema table, the entry point, what is not a table; the synthetic source,
-# and tables written from it with arcae and read back.  The tests of real
+# tables written from it with arcae and read back, and flags committed to
+# them.  The tests of real
 # tables need CALTABLES (and casatools for the comparison); they skip here
-pytest = ["tests/manual/calplot/test_caltab.py", "tests/manual/calplot/test_caltab_synthetic.py"]
+pytest = ["tests/manual/calplot/test_caltab.py", "tests/manual/calplot/test_caltab_synthetic.py",
+          "tests/manual/calplot/test_caltab_flags.py"]
 args = ["-q"]
 requires = ["xarray", "arcae"]
 

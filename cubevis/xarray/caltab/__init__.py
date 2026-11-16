@@ -20,6 +20,10 @@ same shape with values that follow a stated rule, and
 ``write_caltab(tree, path)`` makes a CASA table of any tree, with arcae
 alone (for tests; see ``_write``).
 
+Flags are written back with ``commit_flags(tree)``: edit the tree's
+``FLAG``, and the table is made to say the same, with a backup of what
+it said before and a read-back (``_flags``).
+
 Importing this package is enough for ``engine="casa-caltab"``: where the
 entry point is not installed (a checkout on ``PYTHONPATH``), the import
 registers the engine with xarray (``cubevis.xarray._register``).
@@ -31,12 +35,15 @@ checkout, registering the engine imports it.
 from __future__ import annotations
 
 __all__ = ["open_caltab", "caltab_info", "NotACalTable", "CaltabBackendEntrypoint",
-           "synthetic_caltab", "synthetic_value", "write_caltab", "register_backend"]
+           "synthetic_caltab", "synthetic_value", "write_caltab", "register_backend",
+           "commit_flags", "restore_flags", "list_flag_backups", "FlagCommitError"]
 
 _WHERE = {"open_caltab": "_reader", "caltab_info": "_reader", "NotACalTable": "_reader",
           "CaltabBackendEntrypoint": "_backend",
           "synthetic_caltab": "_synthetic", "synthetic_value": "_synthetic",
-          "write_caltab": "_write"}
+          "write_caltab": "_write",
+          "commit_flags": "_flags", "restore_flags": "_flags", "list_flag_backups": "_flags",
+          "FlagCommitError": "_flags"}
 
 
 ENGINE = "casa-caltab"

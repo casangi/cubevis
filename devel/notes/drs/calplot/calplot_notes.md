@@ -359,3 +359,85 @@ needs no CASA and no data.  It says what the tree looks like, which
 names are the draft's and which are ours and why, what the draft leaves
 open, and what was checked (casatools parity, `applycal`).  Written
 when `commit_flags` and `CalTableReader` are done.
+
+## 4. C0d: `commit_flags` (base `7f989ffb`, 2026-11-16)
+
+**What it is.**  The tree says what the flags should be; `commit_flags`
+makes the table say the same.
+
+```python
+from cubevis.xarray.caltab import open_caltab, commit_flags, restore_flags, list_flag_backups
+dt = open_caltab("cal.G")
+dt["spw_0"]["FLAG"].loc[dict(antenna_name="ea05")] = True
+report = commit_flags(dt)                 # commit_flags(dt, dry_run=True) only reports
+restore_flags(report["backup"])           # puts back what that commit replaced
+```
+
+**Files.**
+- `cubevis/xarray/caltab/_flags.py` (new): `commit_flags`,
+  `restore_flags`, `list_flag_backups`, `FlagCommitError`.
+- `tests/manual/calplot/test_caltab_flags.py` (new); the `caltab` CI
+  suite runs it.
+
+**The steps**, as visplot's `flag_commit.commit_msv2_arcae`:
+1. **Check** that every row the tree points at (`SOURCE_ROW`) is still
+   that time, antenna and window.  If CASA has solved the table again,
+   nothing is written and `FlagCommitError` says to read it again.
+2. **Plan** from a fresh read of the table's flags.  A cell the tree
+   does not change is never written.
+3. **Back up** the previous flags of the rows to be written, in
+   `<table>.caltab_flag_backup_<stamp>.npz` next to the table.
+4. **Write** those rows.
+5. **Read back** through a new handle and compare (`verified`).
+A `HISTORY` row is added, best effort.  With nothing to change there is
+no write, no backup and no history row.
+
+**Choices.**
+- **The tree is the request.**  There is no list of flag operations at
+  this level.  C2's FlagDB (list, undo, preview) edits the tree's
+  `FLAG`; this writes the result.
+- **One flag per receptor.**  A row has a flag per parameter and the
+  tree one per receptor.  A changed tree cell sets all of that
+  receptor's parameters; an unchanged one leaves them as they are, even
+  when they differ among themselves.
+- **No solution, nothing to write.**  Unflagging a time and antenna
+  that has no row is counted (`no_solution`) and skipped.  It stays
+  flagged in every later read.
+- **A backup holds only the rows its commit wrote.**  Restoring one
+  undoes that commit and leaves a later commit's other rows alone.
+  Restore refuses a table of another type or row count.
+- **Reader independence.**  `commit_flags` picks a *committer* by the
+  tree's `source_format` (`COMMITTERS`).  There is one, for CASA
+  tables.  `SOURCE_ROW` is its business alone.  An xradio calset
+  committer (a Zarr write, no rows) registers beside it, with the same
+  five steps and the same report.
+
+**The report**: `flagged`, `unflagged` (solutions of the tree),
+`no_solution`, `written` (values in the table), `to_write`, `rows`,
+`backup`, `verified`, `mismatched`, `history`, `timing`, `dry_run`.
+
+**Checked.**
+- Only the changed cells differ afterwards, and no other column is
+  touched: on written tables with arcae, and on a copy of each of the 15
+  real tables with casatools.
+- Restore brings each real table's flags back exactly.
+- **`applycal` honors a flag written here.**  With antenna 3 flagged in
+  window 0 of `sim.G`, `applycal` flags every baseline of that antenna
+  in that window, and nothing else.
+- The tests fail when the row check is removed, when unchanged cells
+  are rewritten, and when restore writes the wrong values (each tried).
+
+**Timing**: a commit of 571 rows of the real Tsys takes 32 ms (plan 25,
+backup 2, write and read-back 5).
+
+**Tests** (`test_caltab_flags.py`): 25 with `CALTABLES` and casatools; 9
+run with neither.  All three files: 127 pass.
+
+**Not done.**
+- Locks: what happens if CASA holds the table open for writing during a
+  commit (plan 10.5).
+- A committer for a tree saved to Zarr.  It waits for xradio's layout.
+
+**Next**: the thin `CalTableReader` (selection, K evaluated to phase,
+the flag hook), which is the only thing calplot should talk to.  Then
+the document and example for xradio's schema authors, which closes C0.

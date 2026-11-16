@@ -547,3 +547,46 @@ four files: 143 pass.
 
 **Next**: the document and example for xradio's schema authors, which
 closes C0.
+
+## 6. C0f: the document, the example and the handoff (base `d9a7690d`, 2026-11-16)
+
+This closes C0.
+
+**Files.**
+- `devel/docs/calplot/casa_caltab_xarray.md` (new): the backend
+  explained for the people working on CASA calibration and on xradio's
+  calibration schema.  How to try it, what a table becomes, what was
+  checked, twelve findings about CASA's tables, the choices made and
+  why, ten questions, and suggestions.
+- `devel/tools/calplot/caltab_example.py` (new): the tour that document
+  tells them to run.  No CASA, no data: it makes a synthetic fringe
+  table, writes it as a CASA table, opens it, sends it to Zarr and back,
+  flags and restores, reads samples, and evaluates a delay as phase.
+  Given a path, it also describes that table.
+- `tests/manual/calplot/test_calplot_reader.py`: `test_the_example_runs`
+  runs it, so the document's instructions cannot go stale unnoticed.
+- `devel/notes/drs/calplot/calplot_handoff_2026-11-16.md` (new), also
+  the project doc `claude/calplot_handoff_2026-11-16.md`.
+
+**How it goes out** (Darrell, 2026-11-16).  A short message of
+invitation to George (who leads CASA's calibration team) and Des (fringe
+fitting in AstroVIPER, and the schema draft), pointing at the document
+in the repository.  The document is the information; the message is not
+kept here.  It is an update, with suggestions that would make things
+easier later, and a note that the backend might serve CASA or
+xradio/AstroVIPER for legacy cal tables.
+
+**Checked for this slice.**  A fresh environment with only
+`pip install "cubevis[xarray] @ git+https://github.com/casangi/cubevis@calplot"`
+(no casatools) runs the example and has the engine registered.  It
+needs Python 3.12 or later.
+
+**A correction on the way**: in CASA's cal tables `TOTAL_BANDWIDTH`
+holds the sum of the channel frequencies (4.5792e10 for 32 channels
+around 1.431 GHz), not a width.  Section 5 said only that it was not
+usable.
+
+**Tests**: 144 pass with `CALTABLES` and casatools.
+
+**Next**: C1, the application.  The handoff has a first slice to
+propose and the questions to settle first.

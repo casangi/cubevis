@@ -407,7 +407,7 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 | **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event. **Built 2026-11-11: section 12** (remote waits for G2) | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
 | **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets. **Built 2026-11-11: sections 13, 14** (rasters; presets are the panel presets in Grid; TW Hya / VLBA to test) | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
 | **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only; scatter grids; "whole grid" color scope by default (kept at "this page" for now: section 16); the grid's own template panel (section 14). **The grid's own panel built 2026-11-13: section 15; read once, split: section 16; scatter grids: section 17; compound iteration and the `axes_override` hook: section 18. G3 done** | M | Page time inside the G0 target |
-| **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables. **The `casa-caltab` reader built 2026-11-15: section 19; the synthetic source and a table writer 2026-11-16: section 20; `commit_flags`: section 21; `CalTableReader`: section 22** (C0 closes with a document and example for xradio's schema authors) | M | Round-trip of values and flags against casatools reads |
+| **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables. **The `casa-caltab` reader built 2026-11-15: section 19; the synthetic source and a table writer 2026-11-16: section 20; `commit_flags`: section 21; `CalTableReader`: section 22; the document and example: section 23.  C0 done 2026-11-16** | M | Round-trip of values and flags against casatools reads |
 | **C1** | calplot app: selection (antenna, SPW, field, pol, time), grid per antenna, overlay mode, flagged solutions shown, refant in titles, PNG pages; remote kernels via the existing setup | L | Gain, bandpass and fringe tables from a real VLA/VLBA reduction |
 | **C2** | Solution flagging: box in drill-down panel, FlagDB list/undo, commit to `FLAG` with a backup copy | M | Flag, undo, commit, reopen in plotms and see the same flags |
 | G4 / C3 (optional) | Flag-in-cell with the shared tool (3.6 v2) | M | — |
@@ -1117,6 +1117,25 @@ Record: `devel/notes/drs/calplot/calplot_notes.md` section 5.
 
 Next: the document and example for xradio's schema authors, which closes
 C0.  Then C1, the application.
+
+## 23. C0 closed: the document and example (2026-11-16, base `d9a7690d`)
+
+Record: `devel/notes/drs/calplot/calplot_notes.md` section 6.
+
+- **`devel/docs/calplot/casa_caltab_xarray.md`**: the backend explained
+  for the people working on CASA calibration and on xradio's schema, with
+  what CASA's tables turned out to hold, the choices made where the draft
+  is silent, ten questions and some suggestions.  It goes out with a short
+  message of invitation.
+- **`devel/tools/calplot/caltab_example.py`**: a tour that needs no CASA
+  and no data; a test runs it.
+- **The answers may change the schema** (the tree's arrangement, units,
+  receptor labels).  That is an edit to `caltab/_schema.py`, and the
+  application is behind `CalTableReader` (section 22).
+- **Handoff**: `devel/notes/drs/calplot/calplot_handoff_2026-11-16.md`.
+
+C0 is done.  Next: C1, the calplot application (section 4; stage table in
+section 6).
 
 ## Sources
 

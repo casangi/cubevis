@@ -46,6 +46,23 @@ def test_import_is_light():
     assert out.stdout.strip() == ""
 
 
+def test_the_example_runs():
+    """``devel/tools/calplot/caltab_example.py`` is what the document for
+    CASA's and xradio's people tells them to run
+    (``devel/docs/calplot/casa_caltab_xarray.md``): it must keep working."""
+    pytest.importorskip("zarr")
+    example = os.path.join(os.path.dirname(__file__), "..", "..", "..", "devel", "tools", "calplot",
+                           "caltab_example.py")
+    if not os.path.exists(example):
+        pytest.skip("the example is not in this checkout")
+    out = subprocess.run([sys.executable, example], capture_output=True, text=True, timeout=300)
+    assert out.returncode == 0, out.stderr[-1500:]
+    for line in ("caltype 'Fringe', 2 spectral window(s)", "read back identical: True",
+                 "read back and verified: True", "MK in spw 1 all flagged: True",
+                 "MK in spw 1 flagged: 0 %", "KP:  16 points", "+0.6032 rad"):
+        assert line in out.stdout, line
+
+
 # --- what a table is --------------------------------------------------------------------------
 
 def test_info():

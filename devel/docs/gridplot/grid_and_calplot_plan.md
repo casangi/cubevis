@@ -742,6 +742,13 @@ arcae reads every column and keyword.  The first bullet is answered for
 synthetic tables; a real VLBA fringe-fit and ALMA Tsys are still worth
 checking.*
 
+*Real tables 2026-11-15: TL016B, calibrated as in the CASA VLBA guide
+(`devel/tools/calplot/tl016b_caltables.py`; notes section 14).  Nine
+tables: Accor, Tsys, EPowerCurve (gain curve), two Fringe, B, K, and G
+(phase and amplitude).  The fringe packing is confirmed.  arcae returns
+FLAG as `uint8`.  The meaning of EPowerCurve's 16 values is still to be
+checked.  An ALMA Tsys spectrum is still not covered.*
+
 - Cal-table keyword names and the `FPARAM`/`CPARAM` packing per type, on
   real VLA, VLBA and ALMA tables.
 - How arcae returns complex and variably shaped columns (its README: complex

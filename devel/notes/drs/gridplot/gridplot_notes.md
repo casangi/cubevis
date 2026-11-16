@@ -1068,3 +1068,38 @@ a copy, and writes `layout.txt` and a small `caltables.tgz`.
 Run end to end on the simulated MS: 7 tables.  `accor` was skipped
 because that MS has no autocorrelations, and `--gff-solint 120s` was
 needed because its integrations are 30 s.
+
+**The real TL016B tables (from Darrell, 2026-11-15).**  The script ran
+on `tl016b_sub.ms`; the split kept SYSCAL and GAIN_CURVE, so all nine
+tables came out.  Read with arcae alone:
+
+| Table | subType (`table.info`) | Param | Shape per row | Rows | Flagged |
+|---|---|---|---|---|---|
+| tl016b.accor | Accor Jones | CPARAM | (2, 1) | 5520, 332 times | 0 % |
+| tl016b.tsys | B TSYS | FPARAM | (2, 1), in K | 22656, 1181 times | 4.2 % |
+| tl016b.gc | EPowerCurve | FPARAM | (16, 1) | 40, one time | 0 % |
+| tl016b.sbd | Fringe Jones | FPARAM | (8, 1) | 40, one scan | 6.2 % |
+| tl016b.gff | Fringe Jones | FPARAM | (8, 1) | 2320, 217 times | 6.5 % |
+| tl016b.bpass | B Jones | CPARAM | (2, 128) | 40 | 6.2 % |
+| cal1.dcal | K Jones | FPARAM | (2, 1), in ns | 880, per scan | 7.5 % |
+| cal1.pcal | G Jones | CPARAM | (2, 1), phase only | 1840, 20 s | 8.0 % |
+| cal1.apcal | G Jones | CPARAM | (2, 1) | 880, per scan | 7.5 % |
+
+Every table covers 10 antennas and 4 SPWs.  New for the reader:
+- **Two more types.**  `Accor Jones`, and `EPowerCurve` (the gain
+  curve).  EPowerCurve's 16 values are two pols × 8; for one pol only
+  the first (≈ 0.11) is non-zero.  Their meaning per type is still to be
+  checked against CASA's code (`EPowerCurve`).  The reader should keep
+  an unknown type's parameters as `CALPARAM` with an index, not refuse
+  it.
+- **arcae returns FLAG as `uint8`, not `bool`.**  `~flag` then gives
+  255s.  The backend must cast.
+- **Fringe**: the order phase, delay, rate, dispersive is confirmed on
+  real data.  The reference station (FD) is exactly 0 in every value.
+  Dispersive delay was not solved, so it is 0.
+- **Real outliers**: Tsys reaches 13,800 K on unflagged data (the
+  typical range is 34–60 K).  Good for calplot's scaling and a
+  "hide flagged / clip" choice.
+- `caltables.tgz` (the nine tables alone) is 0.86 MiB.  It is not
+  committed.  The C0 tests will find it through a `CALTABLES` variable
+  and skip without it, as the visplot tests do with `VLBA`.

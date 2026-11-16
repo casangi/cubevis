@@ -21,6 +21,10 @@ or the NRAO archive), the MS made from it, or a subset split from that MS
 
     python devel/tools/calplot/tl016b_caltables.py INPUT OUTDIR [--refant FD]
 
+Run through a symlink from a folder holding a casatasks / casatools build,
+put that folder on the path: Python searches the real file's folder, not
+the current one (``PYTHONPATH=$PWD python3 tl016b_caltables.py ...``).
+
 It works on a copy of the MS in OUTDIR (applycal writes CORRECTED_DATA), so
 INPUT is left as it is.  At the end, OUTDIR/layout.txt lists each table's
 columns, shapes and keywords, and OUTDIR/caltables.tgz holds the tables
@@ -207,7 +211,8 @@ def main() -> int:
     made(P("cal1.apcal"))
 
     # --- what calplot needs to know, and a small archive ------------------
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    # beside the real file, also when this is run through a symlink
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     from make_caltables import layout
     names = [n for n in ("tl016b.accor", "tl016b.tsys", "tl016b.gc", "tl016b.sbd",
                          "tl016b.gff", "tl016b.bpass", "cal1.dcal", "cal1.pcal", "cal1.apcal")

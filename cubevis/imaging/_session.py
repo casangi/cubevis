@@ -27,11 +27,13 @@
 ########################################################################
 '''``LocalImagingSession``: the imaging layer in this process -- a
 ``Deconvolver`` (casatasks' ``gclean``, or the module ``iclean_backend``
-names) and an ``ImageCube`` per field over a ``CasatoolsImageStore``.
+names) and an ``ImageCube`` per field over an ``ImageStore``
+(``image_store``: ``XarrayImageStore``, or ``CasatoolsImageStore`` when asked).
 
 The same class is what a remote worker will hold; "remote" only puts a
 proxy in front of it.'''
 
+import os
 from os.path import abspath, basename, join
 from typing import Callable, Dict, List, Optional
 
@@ -39,6 +41,34 @@ from ._protocols import CycleResult
 from ._image_cube import ImageCube
 from ._casatools_store import CasatoolsImageStore
 from ._progress import CycleProgress
+
+#: environment variable naming the store for images: "xarray" or "casatools"
+IMAGE_STORE_ENV = 'CUBEVIS_IMAGE_STORE'
+IMAGE_STORES = ('xarray', 'casatools')
+
+
+def image_store(name: Optional[str] = None) -> Callable:
+    '''The ``ImageStore`` class for images on disk:
+
+    * ``"xarray"`` -- ``XarrayImageStore``: CASA images through arcae and
+      xradio images in Zarr, by way of ``ImageReader``; no casatools.
+      (``"arcae"`` means the same.)
+    * ``"casatools"`` -- ``CasatoolsImageStore``, as before 2026-11.
+
+    Without ``name``, what the environment variable ``CUBEVIS_IMAGE_STORE``
+    says, read where the images are (a remote kernel's own environment).
+    Without that: xarray, or casatools where arcae or xarray is not
+    installed.  So ``CUBEVIS_IMAGE_STORE=casatools`` puts everything back.'''
+    choice = (name or os.environ.get(IMAGE_STORE_ENV) or '').strip().lower()
+    if choice in ('xarray', 'arcae'):
+        from ._xarray_store import XarrayImageStore        # pylint: disable=import-outside-toplevel
+        return XarrayImageStore
+    if choice == 'casatools':
+        return CasatoolsImageStore
+    if choice:
+        raise ValueError(f'image store {choice!r}: one of {", ".join(IMAGE_STORES)}')
+    from ._xarray_store import XarrayImageStore, xarray_store_available      # pylint: disable=import-outside-toplevel
+    return XarrayImageStore if xarray_store_available() else CasatoolsImageStore
 
 
 def resolve_deconvolver(iclean_backend: str = 'PROD'):
@@ -64,13 +94,13 @@ class LocalImagingSession:
         an object with gclean's surface (``Deconvolver``)
     store_factory:
         ``store_factory(image_path, mask_path)`` makes the ``ImageStore``
-        for one field; ``CasatoolsImageStore`` by default
+        for one field; by default what ``image_store()`` gives
     '''
 
-    def __init__(self, deconvolver, *, store_factory: Callable = CasatoolsImageStore,
+    def __init__(self, deconvolver, *, store_factory: Optional[Callable] = None,
                  log_path: Optional[Callable] = None):
         self._dec = deconvolver
-        self._store_factory = store_factory
+        self._store_factory = store_factory if store_factory is not None else image_store()
         self._cubes: Dict[str, ImageCube] = {}
         self._products = None
         ### the running cycle's progress, from the imager's log: the deconvolver's own
@@ -229,7 +259,8 @@ def as_imaging_session(obj) -> 'LocalImagingSession':
     return LocalImagingSession(obj)
 
 
-def open_image_cube(image_path: str, mask_path: Optional[str] = None) -> ImageCube:
+def open_image_cube(image_path: str, mask_path: Optional[str] = None, *,
+                    store: Optional[str] = None) -> ImageCube:
     '''An ``ImageCube`` over a CASA image on this computer (createmask,
-    createregion, a standalone ``ImagePipe``).'''
-    return ImageCube(CasatoolsImageStore(image_path, mask_path), track='ctime')
+    createregion, a standalone ``ImagePipe``); ``store`` as ``image_store``.'''
+    return ImageCube(image_store(store)(image_path, mask_path), track='ctime')

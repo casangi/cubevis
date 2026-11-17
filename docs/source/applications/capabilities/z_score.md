@@ -1,3 +1,5 @@
+(cap-zscore)=
+
 # Z-Score
 
 **Status:** available on rasters and scatter plots, and as a flag
@@ -36,3 +38,7 @@ are outliers in time.
 visplot(vis="obs.ms", preset="zscore")
 visplot(vis="obs.ms", scatter_x="TIME", scatter_y="Z_SCORE")
 ```
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

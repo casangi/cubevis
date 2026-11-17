@@ -1,3 +1,5 @@
+(cap-phasestab)=
+
 # Phase stability: Phase RMS and Coherence
 
 **Status:** available on rasters and scatter plots.
@@ -65,6 +67,8 @@ visplot(vis="obs.ms", raster_y="BASELINE", raster_x="CHANNEL",
 visplot(vis="obs.ms", raster_qty="PHASE_RMS", stat_time_window=60)
 ```
 
+(cap-phasestab-limits)=
+
 ## Limits
 
 - **Windows are set in seconds or scans**, not in a number of
@@ -73,3 +77,7 @@ visplot(vis="obs.ms", raster_qty="PHASE_RMS", stat_time_window=60)
   cookbook suggests the RMS of amplitude over time intervals; `visplot`
   measures the scatter of phase only. If you need amplitude RMS, please
   ask.
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

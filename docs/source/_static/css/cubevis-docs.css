@@ -54,3 +54,18 @@ div.pydoc-box.container {
     margin: 0.4rem 0 0 0;
     background: var(--color-background-primary, #fff);
 }
+
+/* Crosswalk tables (applications/capabilities/from_*.md): fixed column
+ * widths so the Notes column is readable; the Reviewed column stays narrow. */
+div.crosswalk table.docutils {
+    table-layout: fixed;
+    width: 100%;
+    font-size: 0.86rem;
+}
+div.crosswalk table.docutils th:nth-child(1) { width: 20%; }
+div.crosswalk table.docutils th:nth-child(2) { width: 21%; }
+div.crosswalk table.docutils th:nth-child(3) { width: 9%; }
+div.crosswalk table.docutils th:nth-child(4) { width: 30%; }
+div.crosswalk table.docutils th:nth-child(5) { width: 10%; }
+div.crosswalk table.docutils th:nth-child(6) { width: 10%; }
+div.crosswalk table.docutils td { overflow-wrap: anywhere; vertical-align: top; }

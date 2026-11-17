@@ -1,3 +1,5 @@
+(cap-flagging)=
+
 # Flagging
 
 **Status:** available.
@@ -66,9 +68,15 @@ visplot(vis="obs.ms", flag_preview=True,
 Custom filters can be added with `flag_filters={name: function}`; they
 run only with local data.
 
+(cap-flagging-limits)=
+
 ## Limits
 
 - Flag boxes are refused on the antenna × antenna matrix.
 - AIPS keyboard shortcuts are deliberately not reproduced.
 - There is no `flagdata` command export; JSON export and writing to the
   MS replace it.
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

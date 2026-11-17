@@ -1,3 +1,5 @@
+(cap-averaging)=
+
 # Averaging
 
 **Status:** available. Averaging by a *number of integrations* has been
@@ -72,6 +74,8 @@ visplot(vis="obs.ms", raster_y="TIME", raster_x="CHANNEL",
         baseline_combine="max")
 ```
 
+(cap-averaging-limits)=
+
 ## Limits
 
 - **Averaging by number of integrations is not yet available.** Time
@@ -81,3 +85,11 @@ visplot(vis="obs.ms", raster_y="TIME", raster_x="CHANNEL",
   count of integrations is often the more natural unit. This has been
   requested and is planned.
 - Scatter averaging applies to Amplitude, Phase, Real and Imaginary only.
+- **Rasters are not averaged in time.** A raster with a Time axis shows
+  every integration; AIPS's smoothing time has no equivalent yet.
+- **No spectral smoothing.** Channels can be averaged on scatter plots,
+  but not smoothed (AIPS SPFLG's Gaussian smoothing).
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

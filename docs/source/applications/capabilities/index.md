@@ -15,6 +15,18 @@ argument names given on each page are stable.
 
 *Updated 2026-11-16.*
 
+## Coming from plotms or AIPS
+
+Two pages go through the parameters of CASA `plotms` and the modes and
+menu items of the AIPS editing and plotting tasks, one by one, and give
+the `visplot` equivalent of each, with a link to the page that
+describes it:
+
+- {ref}`cap-from-plotms`
+- {ref}`cap-from-aips`
+
+Both are under review by the testers; corrections are welcome.
+
 ## Capabilities
 
 | Capability | Status | In short |
@@ -58,6 +70,8 @@ in [](../visplot.rst).
 ```{toctree}
 :hidden:
 
+from_plotms
+from_aips
 data_access
 selection
 plot_types

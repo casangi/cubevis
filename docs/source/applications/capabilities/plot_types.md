@@ -1,3 +1,5 @@
+(cap-plots)=
+
 # Rasters, scatter plots and layouts
 
 **Status:** available.
@@ -58,6 +60,9 @@ round. The grid is for comparing many baselines or antennas at a glance.
 - **Grid color range.** The plots on a page share one color range by
   default. Alternatively every plot in the grid can share one range, so
   that pages compare, or each plot can have its own.
+- **Grid axes.** The plots in a grid can share one axis scale, so that
+  zooming one zooms them all, or each can have its own. Pages can be
+  stepped through, or played in turn.
 - Dark and light themes are available.
 
 ## From Python
@@ -75,6 +80,8 @@ visplot(vis="obs.ms", baseline_order="length", time_labels="elapsed",
 
 `panels=[{...}, {...}]` gives each panel's settings separately.
 
+(cap-plots-limits)=
+
 ## Limits
 
 - At most two independently configured panels; the grid repeats a single
@@ -82,3 +89,7 @@ visplot(vis="obs.ms", baseline_order="length", time_labels="elapsed",
 - Correlation cannot be a raster axis.
 - Elevation, hour angle, azimuth and parallactic angle are not available
   as axes.
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

@@ -1,3 +1,5 @@
+(cap-views)=
+
 # Standard views
 
 **Status:** available.
@@ -51,7 +53,13 @@ visplot(vis="obs.ms", preset="spectrum", antenna="EA01&EA02")
 visplot(vis="obs.ms", preset="vplot", pin_layout=True, layout="one")
 ```
 
+(cap-views-limits)=
+
 ## Limits
 
 - Flag boxes are refused on the antenna matrix. Find the antenna there,
   then flag it on a Baseline × Time view.
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

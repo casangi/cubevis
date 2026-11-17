@@ -1,3 +1,5 @@
+(cap-quantities)=
+
 # Plotted quantities
 
 **Status:** available.
@@ -45,8 +47,14 @@ Raster values for `raster_qty`: `AMPLITUDE`, `PHASE`, `REAL`,
 `Z_SCORE`. Scatter values for `scatter_y`: `AMPLITUDE`, `PHASE`, `REAL`,
 `IMAGINARY`, `U`, `V`, `PHASE_RMS`, `COHERENCE`, `Z_SCORE`.
 
+(cap-quantities-limits)=
+
 ## Limits
 
 - Weights, and calibration quantities (gains, delays, Tsys), cannot be
   plotted yet.
 - There is no amplitude RMS quantity (see [](phase_stability.md)).
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

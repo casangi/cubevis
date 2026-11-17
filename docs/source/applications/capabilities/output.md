@@ -1,3 +1,5 @@
+(cap-output)=
+
 # Saving and describing plots
 
 **Status:** available.
@@ -35,3 +37,7 @@ visplot(vis="obs.ms", layout="grid", iterate_by="baseline",
 
 With a grid, `exprange` chooses which pages are written: `"current"`
 (the first page), `"all"`, or page numbers such as `"1-3,5"`.
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

@@ -1,3 +1,5 @@
+(cap-colormaps)=
+
 # Colormaps and color scaling
 
 **Status:** available. A cyclic colormap is used automatically for
@@ -41,6 +43,7 @@ cells. Linear or logarithmic scaling is better for reading values.
   colormap returns when the quantity changes.
 - **Phase Diff** (0 to 180°) and Phase RMS do not wrap, so they use the
   ordinary colormap.
+- The color range can be set explicitly, or taken from the data.
 - Changing the colormap or the scaling redraws immediately, without
   reading the data again.
 - Colormaps are adjusted for the theme so the low or high end never
@@ -59,8 +62,14 @@ Raster names: `plasma`, `viridis`, `inferno`, `cividis`, `plasma_r`,
 `viridis_r`, `gray_r`. Scatter names: `polar`, `warm`, `polar_light`,
 `gray_light`.
 
+(cap-colormaps-limits)=
+
 ## Limits
 
 - The cyclic colormap cannot be chosen by name, or turned off for Phase.
 - Scatter plots are colored by density, by a category (scan, field,
   antenna, baseline, spectral window) or by Z-Score, not by phase.
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

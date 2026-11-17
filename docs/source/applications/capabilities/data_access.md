@@ -1,3 +1,5 @@
+(cap-data)=
+
 # Data formats and access
 
 **Status:** available.
@@ -48,8 +50,14 @@ visplot(vis="twhya_selfcal_contsub_ms", datacolumn="corrected")
 
 Give exactly one of `vis`, `ms` (MSv2 only) or `ps` (MSv4 only).
 
+(cap-data-limits)=
+
 ## Limits
 
 - Not yet available in Jupyter notebooks. Run `visplot` from `ipython` or
   a `casa` prompt.
 - Calibration tables cannot be plotted yet.
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

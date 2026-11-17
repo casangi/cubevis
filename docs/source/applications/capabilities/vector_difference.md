@@ -1,3 +1,5 @@
+(cap-vdiff)=
+
 # Difference from the mean: Amp V Diff and Phase Diff
 
 **Status:** available on rasters. Not yet on scatter plots.
@@ -56,8 +58,17 @@ visplot(vis="obs.ms", raster_y="TIME", raster_x="CHANNEL",
         raster_qty="PHASE_DIFF", stat_time_window=120)   # vs 2-minute mean
 ```
 
+(cap-vdiff-limits)=
+
 ## Limits
 
 - **Rasters only.** They are not yet offered on scatter plots.
 - **The window is set in seconds or scans**, not in a number of
   integrations (requested; see [](averaging.md)).
+- **No scalar amplitude difference.** AIPS's AMPL DIFF (the difference
+  between a sample's amplitude and the scalar mean amplitude) is not
+  available.
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

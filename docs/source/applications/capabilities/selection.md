@@ -1,3 +1,5 @@
+(cap-selection)=
+
 # Selecting data
 
 **Status:** available.
@@ -62,8 +64,14 @@ visplot(vis="obs.ms", antenna="DA44&DV19")  # one baseline
 `time_range=(start, end)` (UNIX seconds, UTC) and `uvdist_range=(min,
 max)` (metres) are numeric alternatives to `timerange` and `uvrange`.
 
+(cap-selection-limits)=
+
 ## Limits
 
 - One time range at a time.
 - The antenna syntax is a subset of CASA's MSSelection. Names, IDs,
   exclusions with `!`, and baselines as `NAME&NAME` are supported.
+
+---
+
+Coming from plotms or AIPS? See {ref}`cap-from-plotms` and {ref}`cap-from-aips`.

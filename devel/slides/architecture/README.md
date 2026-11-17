@@ -7,10 +7,10 @@ How hosts, processes and communication channels connect in each mode
 `cubevis` supports. Every slide uses the same visual vocabulary:
 
 - **Dashed region**: a host
-- **Box with a coloured header**: a process (blue Python, orange browser,
+- **Box with a colored header**: a process (blue Python, orange browser,
   purple Jupyter, green execution context)
 - **Grey block**: a component inside that process, named by its class
-- **Arrow**: a channel; its colour and dash identify the protocol, listed
+- **Arrow**: a channel; its color and dash identify the protocol, listed
   in the legend at the bottom of each slide
 
 ## Regenerating

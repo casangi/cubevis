@@ -2656,7 +2656,7 @@
 <text x="1130" y="470.2000000000001" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="white" text-anchor="middle"  xml:space="preserve">4</text>
 <text x="1156" y="470.2000000000001" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">Scatter</text>
 <text x="1156" y="495.2000000000001" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#4A5563" text-anchor="start"  xml:space="preserve">Several correlations or quantities as layers;</text>
-<text x="1156" y="516.0000000000001" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#4A5563" text-anchor="start"  xml:space="preserve">colour by axis (antenna, scan, field …) or by</text>
+<text x="1156" y="516.0000000000001" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#4A5563" text-anchor="start"  xml:space="preserve">color by axis (antenna, scan, field …) or by</text>
 <text x="1156" y="536.8000000000001" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#4A5563" text-anchor="start"  xml:space="preserve">Z-Score.</text>
 <circle cx="1130" cy="567.6" r="14" fill="#C9711F"/>
 <text x="1130" y="573.6" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="white" text-anchor="middle"  xml:space="preserve">5</text>

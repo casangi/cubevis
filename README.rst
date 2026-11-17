@@ -36,6 +36,9 @@ application you're using:
    # Visibility Plotter (in development - no stable API yet)
    pip install cubevis[visplot]
 
+   # both applications in one environment
+   pip install cubevis[iclean,visplot]
+
    # add Jupyter/anywidget support for either, if working in a notebook
    pip install cubevis[iclean,notebook]
 
@@ -47,11 +50,11 @@ working with legacy Measurement Sets.
 ``iclean`` and ``visplot`` are convenience aliases for the underlying
 ``casa6`` and ``xarray`` extras, respectively; those backend-named extras
 are also available directly for anyone assembling a custom environment.
-Installing ``casa6`` and ``xarray`` together in the same plain ``pip``
-environment is not currently supported, since the two backends can require
-mutually incompatible native library versions (notably ``libprotobuf``) that
-``pip`` has no mechanism to reconcile - use a `pixi <https://pixi.sh>`_ or
-conda environment for combined installs.
+The two can be installed together in one plain ``pip`` environment
+(``cubevis[iclean,visplot]``, which is also what ``cubevis.setup`` installs
+for a remote kernel that serves both applications): ``casatools`` and
+``arcae`` each bring their own native libraries and work side by side in
+one process.
 
 Interactive Clean
 -----------------

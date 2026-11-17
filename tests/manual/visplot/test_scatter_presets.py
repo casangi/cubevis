@@ -248,7 +248,11 @@ class TestPresetConstruction:
                 for line in ("panel0_kind_switch.active = 1;", "panel1_kind_switch.active = 1;",
                              "layout_rbg.active = lay;", "pos0_scatter_layout.visible = true;",
                              "pos1_scatter_layout.visible = (lay !== 0);",
-                             "pin_cb.active.length > 0) ? layout_rbg.active : 2;",
+                             "pin_cb.active.length > 0) ? layout_rbg.active : 2;",  # pinned: kept
+                             # in Grid: the grid's own panel (gridplot G3)
+                             "if (layout_rbg.active === 3 && grid_tmpl) {",
+                             "grid_tmpl.kind.active = 1;",
+                             f"grid_tmpl.sx.value = '{x}';",
                              f"panel0_sx_sel.value = '{x}';", f"panel1_sx_sel.value = '{x}';",
                              "panel0_sy_sel.value = 'AMPLITUDE';", "panel1_sy_sel.value = 'PHASE';",
                              f"panel0_sat_sel.value = '{at}';", f"panel1_sac_sel.value = '{ac}';",
@@ -399,7 +403,7 @@ class TestDisplay:
         assert spread_sparse(b, 1.0)
         drawn = (b >> 24) > 0
         assert drawn[4:7, 4:9].all() and drawn[0:2, 0:2].all() and drawn.sum() == 15 + 4
-        assert b[5, 5] == a[5, 5] and b[5, 7] == a[5, 7]       # points keep their colour
+        assert b[5, 5] == a[5, 5] and b[5, 7] == a[5, 7]       # points keep their color
         assert b[4, 4] == a[5, 5] and b[4, 8] == a[5, 7]
         c = a.copy()
         assert not spread_sparse(c, 3.0) and (c == a).all()    # bins already big enough

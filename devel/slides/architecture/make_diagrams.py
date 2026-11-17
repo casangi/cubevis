@@ -27,14 +27,14 @@ FONT = "Helvetica, Arial, sans-serif"
 
 # ---- palette / vocabulary -------------------------------------------------
 HOST_FILL, HOST_STROKE = "#F3F5F8", "#8A94A0"
-PROC = {  # process kind -> header colour
+PROC = {  # process kind -> header color
     "python": "#3B6EA8",
     "browser": "#C9711F",
     "jupyter": "#6A4C93",
     "exec": "#2E7D5B",
 }
 COMP_FILL, COMP_STROKE = "#EEF2F7", "#A9B8CA"
-CHAN = {  # channel kind -> (colour, dash, label for legend)
+CHAN = {  # channel kind -> (color, dash, label for legend)
     "ws": ("#1F6FB2", None, "WebSocket"),
     "comms": ("#6A4C93", None, "Jupyter Comm (notebook's own channel)"),
     "ccomm": ("#6A4C93", None, "Colab kernel comm (JS to Python)"),

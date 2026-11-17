@@ -214,13 +214,13 @@ y_range.end   = d['full_y1'][0];
     ))
 
     # ------------------------------------------------------------------
-    # Colour mode toggle button
+    # Color mode toggle button
     #    "Global" — span anchored to full data y_range; stable on zoom.
     #    "Local"  — Datashader normalises to viewport; reveals detail.
     # Sends vs_set_color_mode j2p via the Comm channel; Python re-composites
     # without re-querying the backend.
     # ------------------------------------------------------------------
-    btn_color = _dark_button("Global colour", width=130)
+    btn_color = _dark_button("Global color", width=130)
     btn_color.js_on_click(CustomJS(
         args={"comm": comm, "state": vs._state_source,
               "btn": btn_color, "image_source": vs._image_source},
@@ -231,7 +231,7 @@ comm.send('{msg_color_mode}', {{mode: next}}, function(resp) {{
     if (resp && resp.status === 'ok') {{
         state.data = Object.assign({{}}, state.data,
                                    {{color_mode: [resp.color_mode]}});
-        btn.label = resp.color_mode === 'global' ? 'Global colour' : 'Local colour';
+        btn.label = resp.color_mode === 'global' ? 'Global color' : 'Local color';
         if (resp.image != null) {{
             image_source.data['image'] = [resp.image];
             image_source.data['x']     = [resp.x0];

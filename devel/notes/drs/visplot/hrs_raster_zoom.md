@@ -38,8 +38,8 @@ the cell budget and held *beside* it (`VisibilityRaster._detail`).
 - A small pan, zooming back out, and zooming back in to the same place
   cost no query. A pan beyond the margin, or a deeper zoom into a detail
   that is itself still decimated, queries again.
-- Axis ranges, the time origin, the colour scaling and the colour bar
-  stay those of the whole selection, so colours do not shift between
+- Axis ranges, the time origin, the color scaling and the color bar
+  stay those of the whole selection, so colors do not shift between
   the two levels.
 - A Channel axis keeps the channel numbers of the selection. The zoomed
   query is narrowed in frequency through the full aggregate's reference

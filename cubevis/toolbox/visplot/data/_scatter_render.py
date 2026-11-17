@@ -44,6 +44,7 @@ Package location
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import NamedTuple, Optional
 
@@ -70,11 +71,13 @@ try:
 except ImportError:
     HAS_SCIPY = False
 
-from .. import colormap_scaling as _cms
+from ...gridplot import colormap_scaling as _cms
 from .reader import (ScatterLayerSpec, ScatterLayerRender, ScatterLayerReference,
                      AntennaZScoreSummary,
                      COLORIZE_AXIS_COLUMNS,
                      OTHER_CATEGORY_LABEL, OTHER_CATEGORY_COLOR, OTHER_CATEGORY_ALPHA)
+
+log = logging.getLogger(__name__)
 
 # Mirrors VisibilityScatter._MIN_ALPHA -- see that module's docstring
 # for the measured rationale (Datashader's min_alpha=40 default makes a
@@ -1352,7 +1355,7 @@ def _resample_interpolate(
     ``VisibilityRaster._resample_method`` exactly (see that method's
     docstring for the "why nearest" rationale: an interpolated image
     shows fabricated intermediate values a probe cannot back up, while a
-    smoothed gradient's displayed colour varies even though every probe
+    smoothed gradient's displayed color varies even though every probe
     returns the same underlying number).
     """
     x0, x1 = x_range

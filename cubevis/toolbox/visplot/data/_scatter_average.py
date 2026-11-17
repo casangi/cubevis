@@ -31,7 +31,7 @@ or are not averages, and are drawn as before.
 
 The X value of a point is the mean of its samples' X values (mean time,
 mean frequency, mean UV distance...).  Other columns (scan, field,
-baseline, spectral window, used by colouring and by the hover readout)
+baseline, spectral window, used by coloring and by the hover readout)
 are those of the window's first sample; a window never mixes scans, so
 they are the same for all of its samples except time and frequency,
 which are the means.

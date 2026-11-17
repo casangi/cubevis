@@ -71,9 +71,15 @@ def _validate_params(
         kind,
         preset,
         pin_layout,
+        iterate_by,
+        gridrows,
+        gridcols,
+        gridcolor,
+        exprange,
         time_labels,
         autocorr,
         panels,
+        grid_panel,
         raster_y,
         raster_x,
         raster_qty,
@@ -128,9 +134,15 @@ def _validate_params(
         'kind': 'Optional[str]',
         'preset': 'Optional[str]',
         'pin_layout': 'bool',
+        'iterate_by': 'str',
+        'gridrows': 'int',
+        'gridcols': 'int',
+        'gridcolor': 'str',
+        'exprange': 'str',
         'time_labels': 'str',
         'autocorr': 'str',
         'panels': 'Optional[list]',
+        'grid_panel': 'Optional[dict]',
         'raster_y': 'Optional[str]',
         'raster_x': 'Optional[str]',
         'raster_qty': 'Optional[str]',
@@ -243,9 +255,15 @@ def _validate_params(
     _check('kind', kind, _type_map['kind'])
     _check('preset', preset, _type_map['preset'])
     _check('pin_layout', pin_layout, _type_map['pin_layout'])
+    _check('iterate_by', iterate_by, _type_map['iterate_by'])
+    _check('gridrows', gridrows, _type_map['gridrows'])
+    _check('gridcols', gridcols, _type_map['gridcols'])
+    _check('gridcolor', gridcolor, _type_map['gridcolor'])
+    _check('exprange', exprange, _type_map['exprange'])
     _check('time_labels', time_labels, _type_map['time_labels'])
     _check('autocorr', autocorr, _type_map['autocorr'])
     _check('panels', panels, _type_map['panels'])
+    _check('grid_panel', grid_panel, _type_map['grid_panel'])
     _check('raster_y', raster_y, _type_map['raster_y'])
     _check('raster_x', raster_x, _type_map['raster_x'])
     _check('raster_qty', raster_qty, _type_map['raster_qty'])
@@ -300,9 +318,15 @@ def _visplot_t(
         kind: Optional[str] = None,
         preset: Optional[str] = None,
         pin_layout: bool = False,
+        iterate_by: str = 'baseline',
+        gridrows: int = 3,
+        gridcols: int = 3,
+        gridcolor: str = 'page',
+        exprange: str = 'current',
         time_labels: str = 'utc',
         autocorr: str = 'exclude',
         panels: Optional[list] = None,
+        grid_panel: Optional[dict] = None,
         raster_y: Optional[str] = None,
         raster_x: Optional[str] = None,
         raster_qty: Optional[str] = None,
@@ -356,9 +380,15 @@ def _visplot_t(
         kind = kind,
         preset = preset,
         pin_layout = pin_layout,
+        iterate_by = iterate_by,
+        gridrows = gridrows,
+        gridcols = gridcols,
+        gridcolor = gridcolor,
+        exprange = exprange,
         time_labels = time_labels,
         autocorr = autocorr,
         panels = panels,
+        grid_panel = grid_panel,
         raster_y = raster_y,
         raster_x = raster_x,
         raster_qty = raster_qty,
@@ -541,14 +571,17 @@ class _visplot:
         ``scatter_avg_time``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
-        panels, side by side), or ``"over"`` (both panels, one above
-        the other). Default ``"side"``. ``"raster"``/``"scatter"`` are
+        panels, side by side), ``"over"`` (both panels, one above
+        the other), or ``"grid"`` (the first panel repeated once per
+        baseline, antenna, SPW, field, scan or correlation -- see
+        ``iterate_by``; a raster or a scatter). Default ``"side"``.
+        ``"raster"``/``"scatter"`` are
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
         an explicit, conflicting ``kind=`` raises ``ValueError``.
     row_height : int, str or list
         Height of each row of plots, in pixels: the plot with its axes,
-        not the readout and colour bars below it.  ``None`` (default):
+        not the readout and color bars below it.  ``None`` (default):
         550 for One and Side by Side, 280 for Over / Under.  ``"fit"``:
         the rows share the window's height (never less than 250 px).  A
         list gives one height per row (Over / Under has two).  The GUI's
@@ -583,6 +616,31 @@ class _visplot:
         Start with "Pin layout" ticked: presets (this ``preset`` and the
         toolbar buttons) keep the current layout -- ``layout`` -- instead
         of switching to their own.  Default ``False``.
+    iterate_by : str
+        What the Grid layout makes one plot of each: ``"baseline"``
+        (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
+        ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
+        selection, as plotms's ``iteraxis``.  Two axes, outer first,
+        make one plot of each pair: ``"antenna,spw"`` is each antenna's
+        SPWs in turn (not both baseline and antenna).  Every plot is drawn
+        as the grid's own panel is (``grid_panel``).
+    gridrows : int
+        Rows of plots on a page of the Grid layout (1-8, default 3).
+    gridcols : int
+        Columns of plots on a page of the Grid layout (1-8, default 3).
+    gridcolor : str
+        The Grid layout's color range: ``"page"`` (default), one range
+        for the plots on a page; ``"grid"``, one for every plot in the
+        grid, so that pages compare (found cell by cell in the
+        background; until then a page is colored by its own range);
+        ``"cell"``, each plot its own.  With ``eq_hist`` the plots that
+        share a range share its curve too.
+    exprange : str
+        Which pages of the Grid layout ``plotfile=`` writes: ``"current"``
+        (default: the first page, as plotms), ``"all"``, or page numbers
+        such as ``"2"`` or ``"1-3,5"``.  Several pages are written to
+        ``plotfile`` with ``_page01``, ``_page02``, ... before the
+        extension, unless the name contains ``{page}``.
     panels : list[dict] | None
         Each panel's configuration, in screen order: ``[{...}, {...}]``,
         one dict per panel, so that a two-panel view can be written as
@@ -594,7 +652,7 @@ class _visplot:
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
         ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
         ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
-        and ``vmax`` (its colour scale).  A key left out takes the value
+        and ``vmax`` (its color scale).  A key left out takes the value
         the flat argument (or ``preset``) gives that panel, so the flat
         arguments still describe the first panel; an unknown key raises.
         At most two panels for now.  ``layout`` still decides how many are
@@ -605,6 +663,19 @@ class _visplot:
                     dict(kind="scatter", scatter_x="FREQUENCY",
                          scatter_y="PHASE", scatter_avg_time="scan")],
             layout="over"
+    grid_panel : dict | None
+        The Grid layout's own panel: what every plot of the grid is
+        drawn as, apart from the panels -- so ``layout="grid"`` can start
+        with both the grid and the panels set up.  The keys of one
+        ``panels`` entry; a key left out takes the first panel's value.
+        Without it the grid starts as a copy of the first panel, made
+        the first time Grid is shown.  In the GUI it is "Grid panel" in
+        the Grid section; a tapped plot is shown in the first panel set up
+        as this one.  A raster or a scatter.  Example::
+
+            layout="grid", iterate_by="antenna",
+            grid_panel=dict(raster_y="TIME", raster_x="BASELINE",
+                            raster_qty="PHASE")
     autocorr : str
         Autocorrelations (baselines from an antenna to itself):
         ``"exclude"`` (default; cross-correlations only), ``"include"``
@@ -663,7 +734,7 @@ class _visplot:
         How pending flags are shown: ``"hide"`` (flagged points disappear,
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
-        Colour for pending flags when ``flag_display="color"``.
+        Color for pending flags when ``flag_display="color"``.
     flag_reach : str
         How far a flag box reaches beyond what is drawn, as the "Flag
         reaches" controls start: a comma-separated list of
@@ -682,18 +753,24 @@ class _visplot:
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
         default; toggled in the Flagging controls.
     flag_flagged_color : str
-        Colour for flagged data when ``flag_show_flagged`` is on.
+        Color for flagged data when ``flag_show_flagged`` is on.
     frame_cache_mb : float | None
         Budget (MiB) of the cache of scatter frames -- the decoded samples a
         scatter panel draws, flags and probes.  When a selection's frames do
         not fit, every redraw and flag operation re-reads them from the data
         (an INFO/WARNING line says so).  ``None`` (default): the
         ``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` environment variable if set, else
-        a tenth of physical memory, clamped to 256 MiB .. 4 GiB.  Remote
-        sessions apply it in the worker, where the frames live.  Example:
-        TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
-        about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
-        and a flag box took 3.6 s instead of 0.5 s.
+        by the host: a tenth of memory below 12 GiB; a quarter, at most
+        half of what is free and 16 GiB, above; on a host with 48 GiB or
+        more free (a compute node) 40 % of what is free, up to 64 GiB.  The
+        budget chosen is logged (INFO).  Remote sessions apply it in the
+        worker, where the frames live.  The Grid layout's rows held in
+        memory count in it: while they are held, frames and rows may take
+        it past the budget by ``CUBEVIS_VISPLOT_GRID_OVERFLOW`` percent
+        (default 25), no more.  Example: TW Hya with all fields
+        (2 x 31 M samples, ~1.5 GiB per frame) needs about 3-4 GiB; on a 24
+        GB Mac the old 2.4 GiB default evicted frames and a flag box took
+        3.6 s instead of 0.5 s.
     plotfile : str | None
         Write a PNG of the plot to this path instead of opening the GUI
         (the ``visplot`` task then returns the path).  Implies
@@ -761,9 +838,15 @@ class _visplot:
             kind: Optional[str] = None,
             preset: Optional[str] = None,
             pin_layout: bool = False,
+            iterate_by: str = 'baseline',
+            gridrows: int = 3,
+            gridcols: int = 3,
+            gridcolor: str = 'page',
+            exprange: str = 'current',
             time_labels: str = 'utc',
             autocorr: str = 'exclude',
             panels: Optional[list] = None,
+            grid_panel: Optional[dict] = None,
             raster_y: Optional[str] = None,
             raster_x: Optional[str] = None,
             raster_qty: Optional[str] = None,
@@ -831,9 +914,15 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             kind = kind,
             preset = preset,
             pin_layout = pin_layout,
+            iterate_by = iterate_by,
+            gridrows = gridrows,
+            gridcols = gridcols,
+            gridcolor = gridcolor,
+            exprange = exprange,
             time_labels = time_labels,
             autocorr = autocorr,
             panels = panels,
+            grid_panel = grid_panel,
             raster_y = raster_y,
             raster_x = raster_x,
             raster_qty = raster_qty,
@@ -888,9 +977,15 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'kind=' + repr(kind),
                 'preset=' + repr(preset),
                 'pin_layout=' + repr(pin_layout),
+                'iterate_by=' + repr(iterate_by),
+                'gridrows=' + repr(gridrows),
+                'gridcols=' + repr(gridcols),
+                'gridcolor=' + repr(gridcolor),
+                'exprange=' + repr(exprange),
                 'time_labels=' + repr(time_labels),
                 'autocorr=' + repr(autocorr),
                 'panels=' + repr(panels),
+                'grid_panel=' + repr(grid_panel),
                 'raster_y=' + repr(raster_y),
                 'raster_x=' + repr(raster_x),
                 'raster_qty=' + repr(raster_qty),
@@ -946,9 +1041,15 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 kind = kind,
                 preset = preset,
                 pin_layout = pin_layout,
+                iterate_by = iterate_by,
+                gridrows = gridrows,
+                gridcols = gridcols,
+                gridcolor = gridcolor,
+                exprange = exprange,
                 time_labels = time_labels,
                 autocorr = autocorr,
                 panels = panels,
+                grid_panel = grid_panel,
                 raster_y = raster_y,
                 raster_x = raster_x,
                 raster_qty = raster_qty,

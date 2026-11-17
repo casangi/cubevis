@@ -180,7 +180,7 @@ A user can change a sidebar dropdown without pressing Plot. Export renders
 ### 3.1 `panel_spec.py` (new)
 
 ```
-ColorBand    — one value→colour mapping (raster: 1; scatter: 1 per layer)
+ColorBand    — one value→color mapping (raster: 1; scatter: 1 per layer)
 PanelSpec    — everything about a panel except its pixels
 RenderedPanel— PanelSpec + image + optional viewport
 ```
@@ -1172,7 +1172,7 @@ the bright end is *also* near-white, so the panel collapses toward the
 background. A light theme needs ramps running **light to dark**.
 
 Measured, compositing density 0..1 with alpha rising against each background —
-peak colour distance from the background:
+peak color distance from the background:
 
 | family | background | peak |
 |---|---|---|
@@ -1193,7 +1193,7 @@ acceptable while the scatter did not.
 
 **A palette is a render-time choice, not a chrome choice.** It is applied before
 `tf.shade()`, lives in `ColorBand.cmap`, and by the time `png_export` sees a
-`RenderedPanel` the pixels are already coloured. `export_png(theme=...)`
+`RenderedPanel` the pixels are already colored. `export_png(theme=...)`
 therefore **cannot** fix a mismatched palette — it would have to re-shade, and it
 deliberately has no backend access.
 
@@ -1217,7 +1217,7 @@ different pixels were shaded. That is the honest form of the claim.
   cost concern: replot already re-queries and re-shades, so palette changes need
   no new machinery and no fast path.
 * **The Light/Dark toggle marks the plot stale** — chrome flips instantly, with a
-  hint to press Plot to update colours. Keeps the toggle free and makes the
+  hint to press Plot to update colors. Keeps the toggle free and makes the
   coupling visible, rather than auto-replotting (~2 s here) or silently leaving
   the pixels wrong.
 * **Sticky override, per role.** Once the user picks a palette by hand, the theme
@@ -1235,7 +1235,7 @@ vanishing into the dark ground**. Measured against the dark axes background
 (luminance 0.098), *every* dark-theme ramp started within 0.1 — `polar[1]`
 started at 0.09, a separation of 0.008.
 
-Both failures are one constraint violated at opposite ends: **no ramp colour may
+Both failures are one constraint violated at opposite ends: **no ramp color may
 sit near the background luminance.** It applies to opaque rasters too — a
 plasma-minimum cell (0.07) against the dark ground is indistinguishable from an
 empty cell, so the lowest data value and "no data" look identical.
@@ -1277,11 +1277,11 @@ viridis_r, gray_r. Scatter families: polar, warm, polar_light, gray_light.
 
 Unknown names fall back to the theme default rather than raising — a palette name
 is cosmetic, and failing a whole render over one is worse than drawing it in the
-default colours.
+default colors.
 
 `check_background_contrast()` asserts that after conditioning every ramp clears
 its background by the role margin, *and* that direction is right so the sparse
-end is the one that fades. **This defect is invisible in a swatch** — the colours
+end is the one that fades. **This defect is invisible in a swatch** — the colors
 look fine alone and only the composited image shows it — so it needs a
 programmatic check rather than review. Its tolerance allows 0.005 for 8-bit
 quantisation in `_hex()`, without which it flags ramps that miss by 0.001.
@@ -1375,7 +1375,7 @@ export, and the reason the output "lost its sensory appeal".
 **The trim was unnecessary.** `#0d0887` differs from the dark axes ground
 `#181825` by only 0.026 in *luminance* but by **100 RGB units** — deep blue
 versus dark navy-grey, obviously different to the eye. Luminance alone was
-measuring the wrong thing: two colours of similar brightness and different hue
+measuring the wrong thing: two colors of similar brightness and different hue
 are perfectly distinguishable, especially for an *opaque* raster cell.
 
 **Switched to Euclidean RGB distance** (0–441), with per-role thresholds:
@@ -1431,8 +1431,8 @@ see when a handler over-reaches:
 
 | Level | Meaning | Examples |
 |---|---|---|
-| `CHROME` | no pixel change | titles, labels, theme colours, tick format |
-| `SHADE` | same aggregation, different colours | cmap, scaling/alpha/gamma/vmin/vmax, layer alpha, `color_mode`, viewport within cache |
+| `CHROME` | no pixel change | titles, labels, theme colors, tick format |
+| `SHADE` | same aggregation, different colors | cmap, scaling/alpha/gamma/vmin/vmax, layer alpha, `color_mode`, viewport within cache |
 | `AGGREGATE` | same rows, different binning | canvas resize, `raster_interpolate` |
 | `QUERY` | new rows | axes, quantity, polarisation, any `SelectionSpec` field |
 
@@ -1456,7 +1456,7 @@ is still an oversight, not a default.
   layer DataFrames via `_composite_and_push()` at the current viewport.
 * `VisibilityPlotter.set_theme()` — re-resolves palettes for roles that are not
   user-set, recomputes both ramps (a user-set *name* still resolves to different
-  colours per theme, because `condition()` trims against the background), and
+  colors per theme, because `condition()` trims against the background), and
   pushes the new cmaps to all four panels.
 
 ### Wired to the toggle — DONE 2026-08-17
@@ -1588,7 +1588,7 @@ envelope is JSON-safe with twice as many numeric fields.
 
 ## 8.19 `__call__` is the terminal verb in both modes (2026-08-17)
 
-### The colour bug that prompted it
+### The color bug that prompted it
 
 The first headless export came out washed out. `VisibilityPlotter(headless=True)`
 defaults to `theme="dark"` so the palettes were dark-conditioned, while
@@ -1693,7 +1693,7 @@ a small shim rather than a design question.
 ### `min_alpha` — the other half of the sparse-end problem
 
 `palettes.condition` could only half-address faint sparse scatter: it moves the
-*colour* away from the background, but **alpha decides how much of that colour
+*color* away from the background, but **alpha decides how much of that color
 survives**. All three `tf.shade` branches omitted `min_alpha`, taking
 Datashader's default of 40/255, which makes a single-point pixel nearly
 invisible against either ground.
@@ -2403,9 +2403,9 @@ already describe, recurring in two new places.
 
 ### Section headings
 
-Built as `Div(text="<span style='color:#cdd6f4;...'>")` — the colour baked into
+Built as `Div(text="<span style='color:#cdd6f4;...'>")` — the color baked into
 inline HTML. Now created through a `_section()` helper that collects them into
-`self._section_divs`; the restyle rewrites the inline colour with a regex against
+`self._section_divs`; the restyle rewrites the inline color with a regex against
 `_SECTION_DARK`/`_SECTION_LIGHT`.
 
 ### `DataTable`
@@ -2448,7 +2448,7 @@ had bare `try/catch` keep it, but **every catch now reports** under a
 `catch(e) {}`, swallowing failures entirely, which is the same invisibility this
 whole section is about.
 
-Colour constants stay at top level, since every block reads them.
+Color constants stay at top level, since every block reads them.
 
 **The body is syntax-checked under node**, wrapped in a scope with every arg
 stubbed. A brace error inside a Python string is otherwise invisible until the

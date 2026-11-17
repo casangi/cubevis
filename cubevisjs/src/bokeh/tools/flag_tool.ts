@@ -216,7 +216,7 @@ export class FlagToolView extends DragToolView {
     ov.bottom  = Math.min(y0, y1)
     ov.top     = Math.max(y0, y1)
     // Flag vs. unflag reads visually distinct even mid-drag, before the
-    // toolbar-button colour swap (which lives outside this view).
+    // toolbar-button color swap (which lives outside this view).
     ov.fill_color = this.model.flag ? "#f38ba8" : "#a6e3a1"
     // An amber, solid outline while "Flag reaches" goes beyond the box
     // (set from the Flagging panel): the box drawn is not all it takes.

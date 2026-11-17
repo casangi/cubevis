@@ -273,24 +273,32 @@ class TestBudgetDefaults:
     def test_a_garbage_environment_value_falls_back_to_the_default(self, monkeypatch):
         monkeypatch.setenv(rd.FRAME_CACHE_ENV, "lots")
         monkeypatch.setattr(rd, "_physical_memory_bytes", lambda: 16 * 2 ** 30)
-        assert rd._default_frame_cache_bytes() == int(0.10 * 16 * 2 ** 30)
+        monkeypatch.setattr(rd, "_available_memory_bytes", lambda: 12 * 2 ** 30)
+        assert rd._default_frame_cache_bytes() == 4 * 2 ** 30
 
-    @pytest.mark.parametrize("phys_gib,expected_bytes", [
-        (1, 256 * 2 ** 20),                       # clamped up to the floor
-        (16, int(0.10 * 16 * 2 ** 30)),           # a tenth of memory
-        (512, 4 * 2 ** 30),                       # clamped down to the ceiling
+    @pytest.mark.parametrize("phys_gib,free_gib,expected_gib", [
+        (1, 0.5, 0.25),                 # clamped up to the floor (256 MiB)
+        (8, 4, 0.8),                    # small machine: a tenth of memory
+        (24, 16, 6),                    # a quarter of memory (Darrell's Mac)
+        (24, 8, 4),                     # ... at most half of what is free
+        (512, 40, 16),                  # a busy large host: up to 16 GiB
+        (256, 200, 64),                 # a compute node: 40 % of free, <= 64
+        (96, 80, 32),                   # ... 40 % of the 80 GiB free
     ])
-    def test_default_is_a_tenth_of_memory_clamped(self, monkeypatch, phys_gib, expected_bytes):
+    def test_default_follows_the_host(self, monkeypatch, phys_gib, free_gib, expected_gib):
         monkeypatch.delenv(rd.FRAME_CACHE_ENV, raising=False)
-        monkeypatch.setattr(rd, "_physical_memory_bytes", lambda: phys_gib * 2 ** 30)
-        assert rd._default_frame_cache_bytes() == expected_bytes
+        monkeypatch.setattr(rd, "_physical_memory_bytes", lambda: int(phys_gib * 2 ** 30))
+        monkeypatch.setattr(rd, "_available_memory_bytes", lambda: int(free_gib * 2 ** 30))
+        assert rd._default_frame_cache_bytes() == pytest.approx(expected_gib * 2 ** 30, rel=1e-6)
 
     def test_the_default_leaves_room_for_a_reads_transient_peak(self, monkeypatch):
-        """A read peaks at ~4x its final frame; the cache must not be so big
-        that cache + one such read exceeds memory on any machine size."""
+        """A read peaks at ~4x its final frame; on a small machine the cache
+        must not be so big that cache + one such read exceeds memory (a
+        larger host is held to half of what is free instead)."""
         monkeypatch.delenv(rd.FRAME_CACHE_ENV, raising=False)
-        for gib in (2, 4, 8, 16, 64, 256):
+        for gib in (2, 4, 8):
             monkeypatch.setattr(rd, "_physical_memory_bytes", lambda g=gib: g * 2 ** 30)
+            monkeypatch.setattr(rd, "_available_memory_bytes", lambda g=gib: g * 2 ** 29)
             b = rd._default_frame_cache_bytes()
             assert b + 4 * b <= 0.75 * gib * 2 ** 30 or b == 256 * 2 ** 20
 
@@ -484,6 +492,45 @@ class TestFrameCacheUnit:
         assert c.stats()["entries"] == 3 and c.bytes == 3 * one
         assert c.count_token("a") == 0 and c.count_token("b") == 3
         assert c.drop_token("nobody") == 0
+
+    # -- a grid's rows held in memory count in the cache (2026-11-17) --------
+
+    def test_a_reservation_evicts_frames_and_may_overflow_by_the_share(self):
+        one = rd._frame_nbytes(self._frame())
+        c = rd._FrameCache(10 * one, overflow=0.25)
+        for i in range(10):
+            c.put(("f", i), 0, self._frame())
+        assert c.frame_budget() == 10 * one and c.reserve_limit("g") == int(12.5 * one)
+        assert not c.reserve("g", 13 * one)                     # over size + 25 %
+        assert c.reserved_bytes == 0 and c.stats()["entries"] == 10
+        assert c.reserve("g", 8 * one)
+        # frames + rows stay within 12.5 frames: 4 frames left
+        assert c.frame_budget() == int(12.5 * one) - 8 * one
+        assert c.bytes + c.reserved_bytes <= int(12.5 * one)
+        assert c.stats()["entries"] == 4
+        c.release("g")
+        assert c.frame_budget() == 10 * one and c.reserved_bytes == 0
+
+    def test_a_small_reservation_leaves_the_frames_their_size(self):
+        one = rd._frame_nbytes(self._frame())
+        c = rd._FrameCache(10 * one, overflow=0.25)
+        assert c.reserve("g", 2 * one)
+        assert c.frame_budget() == 10 * one                    # within the overflow
+
+    def test_reservations_share_the_overflow(self):
+        one = rd._frame_nbytes(self._frame())
+        c = rd._FrameCache(10 * one, overflow=0.0)
+        assert c.reserve("a", 6 * one)
+        assert c.reserve_limit("b") == 4 * one and not c.reserve("b", 5 * one)
+        assert c.reserve("a", 9 * one)                          # replaces a's own
+        c.try_drop_token("a")
+        assert c.reserved_bytes == 0
+
+    def test_the_overflow_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv(rd.GRID_OVERFLOW_ENV, "50")
+        assert rd._FrameCache(100).overflow == 0.5
+        monkeypatch.setenv(rd.GRID_OVERFLOW_ENV, "lots")
+        assert rd._FrameCache(100).overflow == rd._GRID_OVERFLOW_DEFAULT
 
 
 # ---------------------------------------------------------------------------

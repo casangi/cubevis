@@ -196,7 +196,7 @@ class FlagTool(DragTool):
     True once the figure's viewport is zoomed to (or past) one screen
     pixel per aggregation cell. Recomputed client-side on every x_range /
     y_range change. Watched by CustomJS elsewhere to toggle the toolbar
-    button's colour (red -> green) as a "you're at flagging resolution
+    button's color (red -> green) as a "you're at flagging resolution
     now" signal. The box is sent to Python on every release regardless of
     this value (included in the payload) — Python decides whether to
     record a FlagDelta and reports back via notify_div either way, rather

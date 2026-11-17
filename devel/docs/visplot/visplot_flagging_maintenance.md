@@ -38,9 +38,9 @@
   flag files in the working directory and next to the data. See
   `devel/notes/drs/visplot/hrs_h5_flag_reach.md`.
 * **Display**: *Hide flagged* (draws what a fresh open of the committed data
-  would draw) or *Show in colour* (on-disk flags hidden, pending ones painted
-  in the pending colour); *Show flagged data (to unflag)* paints everything
-  flagged — on disk or pending — in the flagged colour so an Unflag box can
+  would draw) or *Show in color* (on-disk flags hidden, pending ones painted
+  in the pending color); *Show flagged data (to unflag)* paints everything
+  flagged — on disk or pending — in the flagged color so an Unflag box can
   aim at it.
 * **Export / commit** menu (MSv2 and MSv4 alike): *Save flags as JSON*,
   *Write flags to the MS / PS*, *Load flags from JSON (as pending)*, *Restore
@@ -147,7 +147,7 @@ results cross the wire (deltas, counts, images).
 | view | drawn samples | used for |
 |---|---|---|
 | `effective` | not flagged on disk ⊕ pending | Hide flagged |
-| `disk` | not flagged on disk | Show in colour (base image) |
+| `disk` | not flagged on disk | Show in color (base image) |
 | `pending` | samples whose state pending changes | pending overlay |
 | `proposal` | samples the proposal under review changes | proposal overlay |
 | `flagged` | flagged now (disk ⊕ pending), never padding | Show flagged data overlay |
@@ -186,8 +186,8 @@ Raster: `_flag_mask(ds)` computes the view lazily with dask
 * Stale panels re-read on their next re-render (`_handle_rerender`).
   Zoomed in clearly beyond the reference resolution, the scatter does a single
   viewport (Level-2) query (`_prepare_stale_render` returns True); its result
-  already carries the full-data extent, global scaling and colour-bar inputs.
-* Overlay-only changes (Show flagged, colours, display switch with nothing
+  already carries the full-data extent, global scaling and color-bar inputs.
+* Overlay-only changes (Show flagged, colors, display switch with nothing
   pending) don't mark panels stale: `push_state(data_changed=False)` sets
   `_overlays_stale`; the raster recomputes only its overlay aggregates.
 * Re-renders run in a worker thread (`_handle_rerender_async`) — on the event
@@ -375,7 +375,7 @@ only).
    scripts and the report's flagdata commands stay removed; JSON is the
    exchange format.
 5. **MSv4 backups are side files** (no flag versions in MSv4).
-6. **"Show flagged data" stays fully in the flag colour**; **"Hide flagged"
+6. **"Show flagged data" stays fully in the flag color**; **"Hide flagged"
    shows what a fresh open after the commit shows** (pinned by a test) — no
    partial-cell marker.
 7. **Autosave only for remote sessions** (no overhead locally).

@@ -900,7 +900,7 @@ def test_zoomed_redraw_after_flag_skips_full_extent_reference(plotter):
         assert np.array_equal(new, old)
         state_old = (tuple(sc._x_range), tuple(sc._y_range), sc.colorbar_html(),
                      [None if h is None else np.asarray(h).tolist() for h in sc._layer_hist_counts])
-        assert state_new == state_old        # extent, colour bar, histograms
+        assert state_new == state_old        # extent, color bar, histograms
     finally:
         sc._backend.query_columns = orig
         sc.__dict__.pop("_prepare_stale_render", None)

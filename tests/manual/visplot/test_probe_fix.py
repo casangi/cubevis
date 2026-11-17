@@ -71,7 +71,7 @@ def make_layers(seed: int = 20260810, n: int = 60):
 
 
 def shade_aggs(dfs, x_range, y_range, w, h):
-    """Exactly what _shade_all_layers does, minus the colour mapping."""
+    """Exactly what _shade_all_layers does, minus the color mapping."""
     aggs = []
     for df in dfs:
         cvs = ds.Canvas(plot_width=w, plot_height=h,

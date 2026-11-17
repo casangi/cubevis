@@ -24,8 +24,8 @@ familiarity with the ``cubevis`` internals.
 Status of this document
 ------------------------
 
-*Updated 2026-10-18.*  Current: installing, launching ``visplot``, the
-task arguments, *Large selections*, *A commissioning workflow*,
+*Updated 2026-11-17.*  Current: installing, launching ``visplot``, the
+task arguments, the *Grid* layout, *Large selections*, *A commissioning workflow*,
 *Reporting a problem* and *Scope, explicitly*.  The *Layout tour* still describes the controls in
 outline only; every control explains itself in the status area at the
 bottom of the window while the pointer is over it.
@@ -228,14 +228,15 @@ Task arguments (preview)
        number of channels.
    * - ``layout``
      - str
-     - ``"side"`` (side by side), ``"over"`` (stacked) or ``"one"`` --
-       initial panel layout (also the *One / Side by Side / Over /
-       Under* buttons). ``"raster"`` / ``"scatter"`` mean one panel of
-       that kind.
+     - ``"side"`` (side by side), ``"over"`` (stacked), ``"one"`` or
+       ``"grid"`` (one small plot per baseline, antenna, SPW, ... -- see
+       *Grid* below) -- initial layout (also the *One / Side by Side /
+       Over / Under / Grid* buttons). ``"raster"`` / ``"scatter"`` mean
+       one panel of that kind.
    * - ``row_height``
      - int, str or list, optional
      - Height of each row of plots in pixels (the plot with its axes,
-       not the readout and colour bars under it). Default: 550 for One
+       not the readout and color bars under it). Default: 550 for One
        and Side by Side, 280 for Over / Under. ``"fit"``: the rows share
        the window's height (never below 250 px; the plot area scrolls
        instead). A list gives one height per row, e.g. ``[250, 400]``
@@ -258,6 +259,38 @@ Task arguments (preview)
        ``scaling``, ``vmin``, ``vmax``. A key left out takes what the
        flat arguments or ``preset`` give that panel. This is the form the
        plot summary prints (see *Reporting a problem*).
+   * - ``iterate_by``
+     - str
+     - What the Grid layout makes one plot of: ``"baseline"`` (default),
+       ``"antenna"`` (each antenna's baselines), ``"spw"``, ``"field"``,
+       ``"scan"`` or ``"correlation"``, within the selection -- plotms's
+       ``iteraxis``. Two axes, outer first, give one plot per pair:
+       ``"antenna,spw"`` is each antenna's SPWs in turn (not baseline
+       and antenna together).
+   * - ``grid_panel``
+     - dict, optional
+     - The Grid layout's own panel: what every plot of the grid is drawn
+       as. The keys of one ``panels`` entry; a key left out takes the
+       first panel's value. Without it the grid starts as a copy of the
+       first panel. A raster or a scatter.
+   * - ``gridrows``, ``gridcols``
+     - int
+     - Rows and columns of plots on a page of the Grid layout (1-8,
+       default 3 x 3) -- plotms's ``gridrows`` / ``gridcols``. When every
+       plot fits on one page the grid shrinks to them.
+   * - ``gridcolor``
+     - str
+     - The Grid layout's color range (rasters): ``"page"`` (default), one
+       range for the plots on a page; ``"grid"``, one for every plot, so
+       that pages compare (found in the background; until then a page has
+       its own); ``"cell"``, each plot its own.
+   * - ``exprange``
+     - str
+     - Which pages of the Grid layout ``plotfile`` writes:
+       ``"current"`` (default: the first page, as plotms), ``"all"``, or
+       page numbers such as ``"2"`` or ``"1-3,5"``. Several pages get
+       ``_page01``, ``_page02``, ... before the extension, unless the name
+       contains ``{page}``.
    * - ``time_labels``
      - str
      - ``"utc"`` (default): time axes and the cursor readout give UTC
@@ -268,7 +301,8 @@ Task arguments (preview)
      - str, optional
      - Write a PNG of the plot to this path instead of opening the
        window; the task returns the path. Each plot's data area is
-       ``column_width`` by ``row_height``.
+       ``column_width`` by ``row_height``. With ``layout="grid"``, pages
+       of the grid (``exprange``), the axes drawn as on screen.
    * - ``preset``
      - str, optional
      - Named axis preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
@@ -342,7 +376,7 @@ Toolbar
     and each cell showing the largest amplitude among them (the AIPS
     FTFLG view), with Amplitude vs Channel below: a quick survey for
     interference
-  * *Z-Score* — Baseline vs Time coloured by Z-Score, to spot outliers
+  * *Z-Score* — Baseline vs Time colored by Z-Score, to spot outliers
   * *φrms·t*, *φrms·ν*, *φrms·uv* — Phase RMS against time, against
     frequency (channel) and against UV distance. The raster shows which
     baseline and when (or at which channel); the scatter shows the same
@@ -470,6 +504,47 @@ When both panels share the same X quantity (e.g. both are plotted
 against time), their X ranges are linked, so panning one pans the
 other.
 
+Grid
+````
+
+*Grid* (the fourth Layout button, ``layout="grid"``) draws one plot many
+times over: once for each baseline, antenna, SPW, field, scan or
+correlation in the selection, as small plots on a page, paged through --
+plotms's iteration (``iteraxis``, ``gridrows``, ``gridcols``), AIPS
+VPLOT and POSSM, difmap's vplot.  The point is to compare: the one
+baseline or antenna that looks unlike its neighbours.
+
+* **What is drawn** is the grid's own panel, *⚙ Grid panel* in the
+  sidebar's Grid section (or the gear in the grid's toolbar): the same
+  choices as a panel's gear tab, raster or scatter.  It starts as a copy
+  of the first panel; a preset pressed in Grid sets it.
+  ``grid_panel=`` sets it from the start.
+* **Iterate by** chooses the axis, and *then* a second one (Antenna, then
+  SPW: each antenna's SPWs in turn).  The plots are of the current
+  selection only: select five antennas and iterate by antenna for five
+  plots.  *Rows* and *Cols* set a page's size; ⏮ ◀ ▶ ⏭ in the toolbar
+  page through, and *Play* steps through the pages (*Pages/s*, *Loop*).
+  When everything fits on one page, *Play* steps the sidebar's stepper
+  instead (the next antenna, say).
+* **Scale**: *common* (default) gives every plot the same axes, drawn
+  once along the top row and down the left column, and a zoom in one
+  plot zooms them all; *per cell* gives each plot its own axes and zoom.
+  **Color** (rasters): one color range for the page (default), for the
+  whole grid, or per plot.  A scatter plot is shaded by its own density.
+* **Hover** gives that plot's value under the cursor, as in a panel.
+* **Tap a plot** to open it in the One layout with the sidebar set to its
+  selection.  Flag there as usual.  *Grid* again brings back the grid
+  and its selection; flags added or written meanwhile show at once, with
+  no need to press *Plot*.  Flagging is not done in the grid's plots
+  themselves.
+* **Export PNG** in the toolbar writes the page shown;
+  ``plotfile=`` with ``layout="grid"`` writes pages without a window
+  (``exprange``).
+
+The selection is read once for all the plots of a grid and held in
+memory, within the frame cache (see *Large selections*).  A grid too big
+for that still works: each plot then reads its own rows, more slowly.
+
 Large selections
 -----------------
 
@@ -482,6 +557,12 @@ estimated to need more is refused before anything is read, with a
 message saying what to narrow.  (``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` is a
 different setting: how much read data is kept for redrawing.)
 
+The Grid layout holds the rows of its selection in memory, counted in that
+frame cache: while it holds them, the cache may run past its size by a
+quarter, no more (``CUBEVIS_VISPLOT_GRID_OVERFLOW=<percent>`` changes the
+share; ``0`` keeps it within the size).  A grid whose rows do not fit is
+drawn plot by plot instead, reading each plot's own rows.
+
 A commissioning workflow
 -------------------------
 
@@ -493,7 +574,7 @@ panels at once.
 
    * *Ant×Ant* -- one cell per baseline, averaged over the selection. An
      antenna that is bad on every baseline is a whole row and column.
-   * *Z-Score* -- Baseline × Time coloured by how unusual each sample is
+   * *Z-Score* -- Baseline × Time colored by how unusual each sample is
      for its own baseline; isolated bright cells are outliers in time.
    * *φrms·t* / *φrms·uv* -- phase stability per baseline over time, and
      against baseline length: a rise with length is the atmosphere, one
@@ -549,7 +630,7 @@ Each plot's toolbar has a **Describe this plot** button (a page icon,
 beside the gear). It opens a page with everything that went into that
 plot: the data set and how it was opened (local or remote kernel), the
 selection in full, the axes and every setting that shaped the image, the
-colour scaling, the displayed range and zoom, the number of pending
+color scaling, the displayed range and zoom, the number of pending
 flags, the versions of cubevis (with its git commit when run from a
 checkout) and the main libraries, and the ``visplot(...)`` call that
 reproduces the view, with a *Copy* button. The same page is available
@@ -563,7 +644,7 @@ When reporting a problem, please include:
   AIPS plot of the same data that shows it.
 
 The summary lists what the call does not reproduce (zoom, pending flags,
-scatter colour settings, theme), so say if any of those matter.
+scatter color settings, theme), so say if any of those matter.
 
 Checking against plotms
 ------------------------
@@ -670,7 +751,7 @@ concepts line up as follows:
      - Flag (raster quantity: the flagged fraction of each cell)
      - flagged data can also be shown (Flagging, *Show flagged data*)
    * - ``coloraxis``
-     - Colourize (scatter, per layer)
+     - Colorize (scatter, per layer)
      - continuous, categorical (e.g. by antenna, baseline, scan, field)
        or statistical (Z-Score)
    * - ``elevation``, ``hourangle``, ``azimuth``, ``parang``
@@ -712,6 +793,9 @@ Present and working:
   (``VisibilityPlotter(..., headless=True)(plotfile=...)``), and from
   the task (``visplot(..., plotfile="out.png")``)
 * Shared pan/zoom/reset, linked X range when applicable; dark and light
+* The Grid layout: one plot per baseline, antenna, SPW, field, scan or
+  correlation (or two of them), raster or scatter, paged, with
+  drill-down to a full panel and PNG pages (*Grid*)
 
 Not yet available:
 
@@ -720,7 +804,8 @@ Not yet available:
   raster shows one correlation, or the parallel hands averaged, chosen
   in its gear tab and named in its title)
 * Flagging on the antenna × antenna matrix (refused, with the reason)
-* More than two panels
+* More than two panels (the Grid layout repeats one)
+* Flagging in the Grid layout's plots (tap one and flag in the panel)
 * Locate; on-the-fly calibration; plotting calibration tables
 * A ``flagdata`` command export (removed; JSON and writing to the MS
   replace it)

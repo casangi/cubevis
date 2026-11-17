@@ -1,0 +1,1270 @@
+"""
+png_export.py
+=============
+Matplotlib compositor: turns ``RenderedPanel`` objects into a PNG.
+
+Scope
+-----
+This module draws *chrome* — figure, axes, ticks, titles, legends,
+footer.  It produces no data pixels of its own: those arrive already
+shaded, as the same ``(H, W) uint32`` RGBA array the Bokeh
+``image_rgba`` glyph displays.  Bokeh and matplotlib are two
+chrome-drawers over one Datashader render, which is what makes keeping
+the GUI and the export in agreement a bounded problem rather than an
+open-ended one.
+
+It also knows nothing about where its panels came from.  The same call
+serves a headless ``visplot(ms=..., plotfile=...)`` render and the GUI's
+Export button (which supplies the browser's current viewport, since with
+no Bokeh server a pan or zoom never reaches Python).  Two producers, one
+consumer.
+
+Grid model
+----------
+Duo mode and M x N grid mode are the same call.  ``layout="side"``
+becomes ``(1, 2)``, ``"over"`` becomes ``(2, 1)``, ``"one"`` becomes
+``(1, 1)``, and grid mode passes its own ``gridrows``/``gridcols``.  No
+layout vocabulary reaches this module; the caller translates first.
+
+Cells are **blank but framed**: a grid position with no data still gets
+its axes, its title, and a note saying why it is empty.  Reflowing to
+fill the gap would make cell position meaningless across a sequence of
+exported files, which matters when someone is flipping through
+``out_ant00.png`` ... ``out_ant42.png``.
+
+Package location
+----------------
+``cubevis/cubevis/toolbox/gridplot/png_export.py`` (moved from ``toolbox/visplot`` in gridplot G1a, 2026-11-10)
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass
+from typing import Optional, Sequence
+
+import numpy as np
+
+from .panel_spec import ColorBand, PanelSpec, RenderedPanel
+from .tick_format import mpl_formatter
+
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Themes
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Theme:
+    """Colors for the chrome.
+
+    The GUI is dark; a publication PNG is almost always light.  That is a
+    deliberate difference between the two outputs, not a fidelity bug —
+    "matches the GUI" is a claim about data pixels, ranges, and tick
+    label text, not about background color.
+    """
+    figure:    str
+    axes:      str
+    text:      str
+    muted:     str
+    spine:     str
+    grid:      str
+    error:     str
+
+
+THEMES = {
+    "light": Theme(figure="#ffffff", axes="#ffffff", text="#1a1a1a",
+                   muted="#6a6a6a", spine="#9a9a9a", grid="#e0e0e0",
+                   error="#b4232a"),
+    # Catppuccin Mocha, matching the GUI's palette so a dark export looks
+    # like a screenshot of the app rather than an unrelated styling.
+    "dark":  Theme(figure="#1e1e2e", axes="#181825", text="#cdd6f4",
+                   muted="#a6adc8", spine="#585b70", grid="#313244",
+                   error="#f38ba8"),
+}
+
+def _check_background_agreement() -> None:
+    """Assert ``palettes.BACKGROUNDS`` matches this module's axes colors.
+
+    The same fact lives in two files: ``palettes`` trims ramps away from
+    the background, and ``png_export`` paints it.  If they drift, ramps
+    are conditioned against a background that is never drawn and the
+    sparse end quietly vanishes again -- the exact defect conditioning
+    exists to prevent, and one that is invisible in a swatch.
+
+    Warns rather than raises: a color mismatch degrades legibility, and
+    refusing to export over it would be a worse outcome than a slightly
+    faint plot.
+    """
+    try:
+        from .palettes import BACKGROUNDS
+    except Exception:                          # pragma: no cover
+        return
+    for name, theme in THEMES.items():
+        want = BACKGROUNDS.get(name)
+        if want is not None and want.lower() != theme.axes.lower():
+            log.warning(
+                "theme %r: png_export axes=%s but palettes.BACKGROUNDS=%s; "
+                "colormaps are being trimmed against the wrong background",
+                name, theme.axes, want,
+            )
+
+
+_check_background_agreement()
+
+
+# Chrome sizes in POINTS (1/72 inch), scaled to device pixels by dpi.
+#
+# Points rather than pixels so raising dpi does what people expect: the
+# layout keeps its proportions, text is rendered with more pixels, and the
+# file gets bigger.  The data area is the one thing held in pixels -- it is
+# exactly agg_n_x by agg_n_y device pixels at every dpi, so the Datashader
+# render is never resampled.  That is the basis of the fidelity claim, and
+# also why byte-identity with the GUI holds only when the export uses the
+# panel's own canvas size.
+_MARGIN_L_PT   = 66.0
+_MARGIN_R_PT   = 17.0
+_MARGIN_T_PT   = 12.0
+_MARGIN_B_PT   = 45.0
+_CELL_TITLE_PT = 19.0
+_WSPACE_PT     = 42.0
+_HSPACE_PT     = 50.0
+_FOOTER_PT     = 25.0
+_FOOTER_LINE_PT = 10.0     # each further footer line (B2)
+
+
+def _wrap_footer(text: str, width_pt: float, size_pt: float = 7.5) -> list:
+    """Lines of *text* no wider than *width_pt*, broken between its
+    ``|``-separated fields (a field longer than a line stays whole)."""
+    per_line = max(int(width_pt / (size_pt * 0.55)), 20)
+    fields = [f.strip() for f in text.split("|") if f.strip()]
+    lines, cur = [], ""
+    for f in fields:
+        cand = f if not cur else f"{cur}  |  {f}"
+        if cur and len(cand) > per_line:
+            lines.append(cur)
+            cur = f
+        else:
+            cur = cand
+    if cur:
+        lines.append(cur)
+    return lines
+_LEGEND_PT     = 16.0
+# axes="outer" (gridplot, 2026-11-11): the X tick labels and the X name go
+# above the top row, and only the gap between cells' frames is left
+_OUTER_NAME_PT  = 16.0     # an axis name drawn once (axes="outer")
+_OUTER_SPACE_PT = 8.0
+_CBAR_W_PT     = 9.0        # bar thickness
+_CBAR_PAD_PT   = 8.0        # gap between plot and bar
+_CBAR_LBL_PT   = 52.0       # tick labels + rotated axis label beside a bar
+# Sized so a per-cell bar's axis label clears the *next* cell's y-label:
+# in "each" mode the two are only _WSPACE_PT apart, and at 34pt they
+# overlapped into an unreadable "Amplitude (eq_hist)Time".
+
+# NOTE on measuring fidelity: matplotlib places the axes bbox at exactly
+# the requested device-pixel size, and imshow with interpolation="nearest"
+# fills it without resampling -- verified via ax.get_window_extent().  A
+# naive check that counts colored pixels in the output will come up one
+# row and one column short, because the axes spine overdraws the boundary
+# pixels.  That is a frame drawn over the image, not data loss; assert on
+# the bbox, not on pixel counts.  Do not "correct" it by padding the axes
+# rect: a 900.5-pixel-wide axes forces a resample of a 900-pixel image,
+# which is the very thing this layout exists to avoid.
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _plain_text(text: str) -> str:
+    """Flatten Bokeh ``Div`` markup to something a PNG can render.
+
+    ``VisibilityPlotter._status_text()`` is written for a ``Div``, so it
+    arrives as ``<b>name</b> | Layout: ...<br>Field: all | ...``.
+    matplotlib draws that literally, tags and all.  Deriving the footer
+    from ``_status_text()`` is still right — one summary, not two that
+    drift — so the flattening happens here instead.
+    """
+    import html
+    import re
+    if not text:
+        return text
+    text = re.sub(r"<\s*br\s*/?\s*>", "   |   ", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    return html.unescape(text).strip()
+
+
+def _is_degenerate(rng: tuple[float, float]) -> bool:
+    """True when a range cannot be drawn (zero width or non-finite)."""
+    lo, hi = rng
+    return not (np.isfinite(lo) and np.isfinite(hi)) or lo == hi
+
+
+def _union(extents):
+    """Bounding box of a list of ``(x0, x1, y0, y1)``, or ``None``."""
+    if not extents:
+        return None
+    xs = [v for e in extents for v in e[:2]]
+    ys = [v for e in extents for v in e[2:]]
+    return (min(xs), max(xs), min(ys), max(ys))
+
+
+class _ExtentIndex:
+    """Pass one of the two-pass render: what empty cells should inherit.
+
+    Empty cells inherit an extent so their axes stay put across a
+    sequence of exported files — flipping through per-antenna PNGs should
+    not make the axes jump whenever an antenna happens to have no data.
+
+    Inheritance is keyed on the axis label pair, not taken globally.  In
+    grid mode every cell shares one configuration so the distinction is
+    moot, but a duo export can pair a raster against a scatter, and
+    letting an empty ``Amplitude vs UV Distance`` cell inherit a
+    neighbour's ``Time vs Channel`` range would draw axes that are not
+    merely wrong but confidently mislabelled.  The global union is kept
+    only as a last resort for a panel whose labels match nothing.
+    """
+
+    def __init__(self, panels: Sequence[Optional[RenderedPanel]]):
+        groups: dict[tuple[str, str], list] = {}
+        donors: dict[tuple[str, str], PanelSpec] = {}
+        for p in panels:
+            if p is None or p.image is None or p.spec is None:
+                continue
+            x0, x1, y0, y1 = p.extent
+            if _is_degenerate((x0, x1)) or _is_degenerate((y0, y1)):
+                continue
+            key = (p.spec.x_label, p.spec.y_label)
+            groups.setdefault(key, []).append((x0, x1, y0, y1))
+            donors.setdefault(key, p.spec)
+        self._by_labels = {k: _union(v) for k, v in groups.items()}
+        self._global    = _union([e for v in groups.values() for e in v])
+        self._donors    = donors
+        self._donor_any = next(iter(donors.values()), None)
+
+    def lookup(self, spec: Optional[PanelSpec]):
+        """``(extent, donor_spec)`` for an empty cell described by *spec*.
+
+        The donor matters as much as the extent.  Elapsed-time ticks are
+        measured from the axis's ``full_x0``/``full_y0``, and an empty
+        panel's own range is whatever the degenerate branch left behind —
+        ``(0.0, 1.0)`` — so formatting its inherited MJD-second extent
+        against its own origin prints raw epoch seconds
+        (``4800001750.0000``) instead of ``29m 10s``.  Borrow the
+        neighbour's origin along with its range.
+        """
+        if spec is not None:
+            key = (spec.x_label, spec.y_label)
+            if key in self._by_labels:
+                return self._by_labels[key], self._donors.get(key)
+        return self._global, self._donor_any
+
+
+def _band_swatch(band: ColorBand) -> str:
+    """Representative color for a legend entry.
+
+    The high end of the band's colormap: scatter layers are told apart by
+    hue, and the top of each layer's ramp is where that hue is most
+    saturated.  Falls back to grey for a band with no cmap.
+    """
+    if not band.cmap:
+        return "#888888"
+    # Mid-ramp, not the top end.  Layer colormaps are chosen for the
+    # GUI's dark background, so their high end is near-white and vanishes
+    # as a swatch on a light export; the midpoint stays legible on both.
+    return band.cmap[len(band.cmap) // 2]
+
+
+# ---------------------------------------------------------------------------
+# Cell rendering
+# ---------------------------------------------------------------------------
+
+def _style_axes(ax, theme: Theme, spec: Optional[PanelSpec],
+                extent, show_ticks: bool,
+                tick_src: Optional[PanelSpec] = None) -> None:
+    """Apply theme, labels, and tick formatters to one cell's axes.
+
+    *spec* supplies the axis label text; *tick_src* supplies the
+    time-axis flags and origins, and defaults to *spec*.  They differ
+    only for an empty cell, which keeps its own labels but borrows a
+    populated neighbour's tick origin.
+    """
+    ax.set_facecolor(theme.axes)
+    for side in ("top", "right", "bottom", "left"):
+        ax.spines[side].set_color(theme.spine)
+        ax.spines[side].set_linewidth(0.8)
+    ax.tick_params(colors=theme.muted, labelsize=8, length=3, width=0.8)
+
+    if not show_ticks or extent is None:
+        # Nothing anywhere in the grid had a drawable range, so any tick
+        # values would be the (0, 1) degenerate fallback -- numbers that
+        # look like data and are not.  Draw the frame and nothing else.
+        ax.set_xticks([])
+        ax.set_yticks([])
+        return
+
+    x0, x1, y0, y1 = extent
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(y0, y1)
+
+    if spec is not None:
+        # axis_label()/axis_scale() rather than the raw label: the SI
+        # prefix lives in the label and the ticks are divided to match,
+        # exactly as the browser does it.
+        ax.set_xlabel(spec.axis_label("x"), color=theme.text, fontsize=9)
+        ax.set_ylabel(spec.axis_label("y"), color=theme.text, fontsize=9)
+    src = tick_src if tick_src is not None else spec
+    if src is not None:
+        # Elapsed-time labels are relative to the FULL extent's origin,
+        # not the viewport's -- so a zoomed export keeps the same tick
+        # vocabulary as the unzoomed one, exactly as the browser does.
+        tl = getattr(src, "time_labels", "elapsed")
+        ax.xaxis.set_major_formatter(
+            mpl_formatter(src.x_is_time, src.axis_origin("x"),
+                          src.axis_scale("x")[0], src.axis_ticks("x"),
+                          time_mode=tl, day0=src.time_day0("x")))
+        ax.yaxis.set_major_formatter(
+            mpl_formatter(src.y_is_time, src.axis_origin("y"),
+                          src.axis_scale("y")[0], src.axis_ticks("y"),
+                          time_mode=tl, day0=src.time_day0("y")))
+        # A UTC axis ticks on whole seconds / minutes / hours, at the
+        # spacing the browser's base-60 ticker would choose.
+        from matplotlib.ticker import MaxNLocator, MultipleLocator
+        from .tick_format import utc_tick_step
+        if tl == "utc":
+            # fewer ticks in a narrow cell (a grid page), so time-of-day
+            # labels do not run into each other; a panel-sized cell keeps
+            # the browser's six
+            fig = ax.figure
+            w_pt = ax.get_position().width * fig.get_figwidth() * 72.0
+            h_pt = ax.get_position().height * fig.get_figheight() * 72.0
+            nx = 6 if w_pt >= 330 else max(2, int(w_pt // 55))
+            ny = 6 if h_pt >= 90 else max(2, int(h_pt // 15))
+            if src.x_is_time:
+                ax.xaxis.set_major_locator(MultipleLocator(utc_tick_step(x0, x1, nx)))
+            if src.y_is_time:
+                ax.yaxis.set_major_locator(MultipleLocator(utc_tick_step(y0, y1, ny)))
+        # An axis drawn in whole positions has labels only at integers.
+        # Up to 30 positions (an antenna matrix, a small array's
+        # baselines): every label, as the browser shows them, and x labels
+        # longer than 3 characters upright (HRS B2, 2026-10-11; same rule
+        # as visibility_plot.x_label_orientation).
+        from matplotlib.ticker import FixedLocator
+        for axis, labels in ((ax.xaxis, src.axis_ticks("x")),
+                             (ax.yaxis, src.axis_ticks("y"))):
+            if not labels:
+                continue
+            if len(labels) <= 30:
+                axis.set_major_locator(FixedLocator(list(range(len(labels)))))
+            else:
+                axis.set_major_locator(MaxNLocator(nbins=8, integer=True))
+        xt = src.axis_ticks("x")
+        if xt and len(xt) <= 30 and max(len(str(t)) for t in xt) > 3:
+            ax.tick_params(axis="x", labelrotation=90)
+    ax.grid(True, color=theme.grid, linewidth=0.5, alpha=0.6)
+    ax.set_axisbelow(True)
+
+
+def _categorical_bands(bands):
+    """Visible bands with a real category legend to draw (Part 4)."""
+    return [b for b in bands if b.visible and b.kind == "categorical" and b.categories]
+
+
+def _wants_legend(spec: "PanelSpec") -> bool:
+    """True if *spec* justifies reserving legend space.
+
+    Either >=2 visible bands (the pre-Part-4 "identify which layer is
+    which" case) or any visible categorical band (Part 4: a category
+    legend is new information the title cannot carry, needed even for
+    a single band) -- see ``_legend_handles()`` for the same two cases
+    applied to the actual handles.
+    """
+    visible = [b for b in spec.bands if b.visible]
+    if len(visible) > 1:
+        return True
+    return bool(_categorical_bands(spec.bands))
+
+
+# Legend metrics per placement (Part 5d): (font size pt, columnspacing em), as
+# passed to ``fig.legend`` / ``ax.legend`` in the two draw helpers below.
+_LEGEND_METRICS = {"panel": (7.5, 1.2), "figure": (8.5, 1.6)}
+_LEGEND_GLYPH_EM = 0.66    # average glyph width, in em, for uppercase/digit-heavy labels
+
+
+def _legend_column_pt(bands, mode: str = "figure") -> float:
+    """Approximate width, in points, of ONE legend column for *bands*: the
+    longest entry's text plus the handle, its padding and the column gap.
+
+    An estimate on purpose (no renderer is available while layout space is
+    still being reserved): ~0.66 em per character measured on the
+    uppercase-and-digit labels a binned baseline axis produces, and matplotlib's
+    default 2.0 em handle length + this module's 0.4 em ``handletextpad`` +
+    the mode's ``columnspacing``.
+    """
+    fontsize, colspacing = _LEGEND_METRICS[mode]
+    labels = [h.get_label() for h in _legend_handles(bands, None)]
+    longest = max((len(str(s)) for s in labels), default=0)
+    return longest * _LEGEND_GLYPH_EM * fontsize + (2.0 + 0.4 + colspacing) * fontsize
+
+
+def _legend_ncol(bands, cap: int = 6, avail_pt: Optional[float] = None,
+                 mode: str = "figure") -> int:
+    """Column count for a legend of *bands*' combined handles.
+
+    *avail_pt* (Part 5d), when given, is the width in points the legend has to
+    fit in; a categorical legend then also gets no more columns than fit that
+    width at its longest label.  Before this the count was ``min(n, cap)``
+    whatever the labels said, so 20 binned baseline labels such as
+    "DA42&DA44\u2013DA42&DV13" were laid out six across and ran off both edges of
+    the image.  ``None`` keeps the original count-only behavior exactly.
+
+    A plain per-layer legend is one row (``ncol`` = its handle count,
+    as before Part 4) -- there are rarely more than 2-3 layers. A
+    categorical legend can have up to ``CATEGORY_CAP`` (20) entries for
+    a single band, which as one row would run off the figure -- capped
+    here so matplotlib wraps it into multiple rows instead.
+
+    Counts *handles*, not bands: one categorical band alone still needs
+    up to ``cap`` columns (its category count), not 1 (its band count).
+    """
+    n = _legend_handle_count(bands)
+    if not n:
+        return 1
+    if _categorical_bands(bands):
+        ncol = min(n, cap)
+        if avail_pt is not None and avail_pt > 0:
+            fit = max(1, int(avail_pt // _legend_column_pt(bands, mode)))
+            ncol = min(ncol, fit)
+        return ncol
+    return n
+
+
+def _legend_handle_count(bands) -> int:
+    """How many entries ``_legend_handles(bands, ...)`` would produce.
+
+    A count-only mirror of that function's own two cases (see its
+    docstring), used for reserving layout space before any matplotlib
+    ``Legend`` exists to measure — cheaper than building real handles
+    just to count them, and needs no ``Theme``.
+    """
+    visible     = [b for b in bands if b.visible]
+    categorical = _categorical_bands(bands)
+    plain       = [b for b in visible
+                   if not (b.kind == "categorical" and b.categories)]
+    n = len(plain) if (len(visible) > 1 and plain) else 0
+    n += sum(len(b.categories) for b in categorical)
+    # Part 5a: one caption entry per categorical band that carries a
+    # draw priority -- mirror of the handle _legend_handles appends.
+    n += sum(1 for b in categorical if b.priority_caption())
+    return n
+
+
+def _legend_rows(bands, cap: int = 6, avail_pt: Optional[float] = None,
+                 mode: str = "figure") -> int:
+    """Row count a legend of *bands* will wrap to, at ``_legend_ncol``'s
+    column count -- used to scale the reserved legend space up for a
+    categorical band's potentially many entries (a plain per-layer
+    legend is always 1 row, same as before Part 4)."""
+    n = _legend_handle_count(bands)
+    if n <= 0:
+        return 1
+    ncol = _legend_ncol(bands, cap, avail_pt, mode)
+    return -(-n // ncol)  # ceil division, no import needed
+
+
+def _legend_handles(bands, theme: Theme):
+    """Swatch handles for the visible bands.
+
+    Two different things can contribute a handle here, and a legend can
+    contain either or both:
+
+    - A *plain* (non-categorical) band contributes one handle
+      identifying which layer is which — only drawn when there are
+      >=2 visible bands **in total** (plain or categorical), since a
+      single band's identity is already in the title (unchanged from
+      before Part 4, when every band was "plain" and this was
+      equivalent to counting plain bands alone). A plain band overlaid
+      with even one categorical band still needs identifying — the
+      categorical band's own per-category swatches say nothing about
+      which layer the *other* band is.
+    - A *categorical* band (Part 4) contributes one handle PER
+      CATEGORY, from ``category_colors`` — this is new information the
+      title cannot carry (which color means which antenna/scan/SPW/
+      ...), so it is drawn even for a single visible band. Category
+      labels are prefixed with the band's own layer label only when
+      more than one band is visible in total, to disambiguate which
+      layer a category belongs to — with a single band the layer is
+      already unambiguous from the title.
+
+    Hidden bands are omitted throughout: an entry for a layer the user
+    turned off would claim something is on the plot that is not.
+    """
+    from matplotlib.lines import Line2D
+
+    visible     = [b for b in bands if b.visible]
+    categorical = _categorical_bands(bands)
+    plain       = [b for b in visible
+                   if not (b.kind == "categorical" and b.categories)]
+    multi_band  = len(visible) > 1
+
+    handles = []
+    if multi_band and plain:
+        handles += [
+            Line2D([], [], marker="s", linestyle="none", markersize=6,
+                   markerfacecolor=_band_swatch(b), markeredgecolor="none",
+                   label=b.legend_label())
+            for b in plain
+        ]
+    for b in categorical:
+        colors = b.category_colors or {}
+        for cat in b.categories:
+            label = f"{b.label}: {cat}" if multi_band else str(cat)
+            handles.append(
+                Line2D([], [], marker="s", linestyle="none", markersize=6,
+                       markerfacecolor=colors.get(cat, "#888888"),
+                       markeredgecolor="none", label=label)
+            )
+        caption = b.priority_caption()
+        if caption:
+            # Part 5a: a text-only entry (no marker) saying how
+            # overlapping categories were resolved, so a shared figure
+            # explains what a color means without the GUI beside it.
+            handles.append(
+                Line2D([], [], linestyle="none", marker="",
+                       label=(f"{b.label}: {caption}" if multi_band else caption))
+            )
+    return handles
+
+
+def _style_legend(leg, theme: Theme) -> None:
+    for txt in leg.get_texts():
+        txt.set_color(theme.text)
+
+
+def _draw_panel_legend(ax, spec: PanelSpec, theme: Theme) -> None:
+    """Legend in the reserved band above the axes.
+
+    Deliberately outside the data area.  An inside-the-axes legend
+    (matplotlib's default ``loc="upper right"``) sits on top of exactly
+    the corner a scatter of amplitude against uv-distance tends to
+    occupy, and there is no "empty corner" heuristic that survives real
+    data.  ``frameon=False`` because outside the frame there is nothing
+    to separate it from.
+    """
+    handles = _legend_handles(spec.bands, theme)
+    if not handles:
+        return
+    leg = ax.legend(handles=handles, loc="lower right",
+                    bbox_to_anchor=(0.0, 1.0, 1.0, 0.0),
+                    ncol=_legend_ncol(spec.bands, avail_pt=_axes_width_pt(ax),
+                                      mode="panel"),
+                    frameon=False, fontsize=7.5, handletextpad=0.4,
+                    columnspacing=1.2, borderaxespad=0.15)
+    _style_legend(leg, theme)
+
+
+def _axes_width_pt(ax) -> float:
+    """Width of *ax*'s frame in points -- what a legend anchored to it has."""
+    return ax.get_position().width * ax.figure.get_figwidth() * 72.0
+
+
+def _draw_figure_legend(fig, bands, theme: Theme, y: float,
+                        avail_pt: Optional[float] = None) -> None:
+    """One legend for the whole figure, at figure fraction *y*.
+
+    Used when every populated cell carries the same bands, which is the
+    normal case in grid mode: one configuration iterated over an axis
+    means N identical legends, and N-1 of them are noise.
+    """
+    handles = _legend_handles(bands, theme)
+    if not handles:
+        return
+    leg = fig.legend(handles=handles, loc="upper center",
+                     bbox_to_anchor=(0.5, y),
+                     ncol=_legend_ncol(bands, avail_pt=avail_pt, mode="figure"),
+                     frameon=False, fontsize=8.5, handletextpad=0.4,
+                     columnspacing=1.6)
+    _style_legend(leg, theme)
+
+
+def _band_key(spec: Optional[PanelSpec]):
+    """Identity of a panel's visible band set, for sameness testing.
+
+    Includes ``category_priority`` (Part 5a) for the same reason: two
+    otherwise-identical categorical bands drawn with different overlap
+    rules mean different things by the same color, so their legends
+    (which now caption it) must not be merged.
+
+    Includes ``categories`` (Part 4): two categorical bands with the
+    same label/cmap can still show genuinely different real categories
+    in different cells -- e.g. grid/iteration mode colorizing by Scan,
+    where each cell covers a different scan subset. Without this, two
+    such cells would be judged "the same" and share one figure legend
+    that is only correct for one of them. ``None`` for a non-
+    categorical band, so this is a no-op for every pre-Part-4 case.
+    """
+    if spec is None:
+        return None
+    # The priority is appended only when a band carries one, so a plain
+    # (non-categorical) band's key keeps exactly its pre-Part-5a shape.
+    return tuple(
+        (b.label, b.cmap, b.categories)
+        + ((b.category_priority,) if b.category_priority else ())
+        for b in spec.bands if b.visible
+    )
+
+
+def _resolve_legend(mode: str, cells) -> str:
+    """Turn ``legend="auto"`` into ``"figure"``, ``"panel"``, or ``"none"``.
+
+    ``"figure"`` when more than one populated cell shares one band set —
+    grid mode's single-configuration model guarantees this, and it is
+    also true of a duo showing the same scatter twice.  ``"panel"`` when
+    cells differ, which is what a heterogeneous duo needs.
+    """
+    if mode != "auto":
+        return mode
+    keys = [_band_key(c.spec) for c in cells
+            if c is not None and c.image is not None]
+    keys = [k for k in keys if k]
+    if not keys:
+        return "none"
+    if len(keys) > 1 and all(k == keys[0] for k in keys):
+        return "figure"
+    return "panel"
+
+
+def _cbar_mappings(cells, include_density: bool = True):
+    """Every drawable ``(spec, band)`` pair that could carry a colorbar.
+
+    *include_density* is ``False`` under ``colorbar="auto"``, which is
+    what keeps scatter density ramps out of a mixed duo.  Testing "are
+    *all* bands density?" is not enough: a raster paired with a scatter
+    has both, so the raster would drag the scatter's two density bars
+    onto the figure alongside it.
+    """
+    out = []
+    for c in cells:
+        if c is None or c.image is None or c.spec is None:
+            continue
+        for b in c.spec.bands:
+            if not b.visible or b.mapping is None:
+                continue
+            if not include_density and b.kind == "density":
+                continue
+            out.append((c.spec, b))
+    return out
+
+
+def _drawable_specs(cells):
+    """Specs of cells that actually rendered an image."""
+    return [c.spec for c in cells
+            if c is not None and c.image is not None and c.spec is not None]
+
+
+def _mappings_agree(pairs) -> bool:
+    """True when one colorbar would be correct for every pair.
+
+    For a raster this is ``color_mode="global"``: one reference
+    distribution, so one curve.  For a scatter it additionally requires
+    matching bin geometry, because density counts are only comparable
+    between panels whose bins cover the same area.
+    """
+    if len(pairs) < 2:
+        return True
+    def key(sb):
+        spec, b = sb
+        k = (b.kind, b.cmap, b.scaling,
+             round(float(b.mapping.vmin), 12),
+             round(float(b.mapping.vmax), 12))
+        if b.kind == "density":
+            ax, ay = b.bin_area(spec)
+            k += (round(ax, 9), round(ay, 9))
+        return k
+    first = key(pairs[0])
+    return all(key(p) == first for p in pairs[1:])
+
+
+def _resolve_colorbar(mode: str, cells) -> str:
+    """Turn ``colorbar="auto"`` into ``"shared"``, ``"each"``, or ``"none"``.
+
+    ``"auto"`` defaults scatter bands to ``"none"``: a scatter ramp is
+    points per pixel, two plotted quantities mean two bars per cell, and
+    in a grid that is a great deal of chrome for a number the legend
+    already reports.  Raster bands share one bar when their mappings
+    agree and take one each when they do not.
+
+    Forcing ``"shared"`` on mappings that disagree is refused rather than
+    obeyed: a single bar would be right for one cell and wrong for the
+    rest, and a quietly wrong colorbar in a paper is worse than an
+    unexpected layout.
+    """
+    pairs = _cbar_mappings(cells, include_density=(mode != "auto"))
+    if not pairs:
+        return "none"
+    if mode == "auto":
+        # A bar at the figure edge only reads as "this applies to
+        # everything" when everything actually has one.  In a
+        # heterogeneous duo -- a raster beside a scatter, where the
+        # scatter's density bands are excluded above -- exactly one panel
+        # contributes, and a figure-edge bar sits next to the panel it
+        # does NOT describe.  Attach it to its own panel instead.
+        contributing = {id(spec) for spec, _ in pairs}
+        if len(contributing) < len(_drawable_specs(cells)):
+            return "each"
+        return "shared" if _mappings_agree(pairs) else "each"
+    if mode == "shared" and not _mappings_agree(pairs):
+        log.warning(
+            "export_png: colorbar='shared' requested but panel mappings "
+            "differ (scaling, value range, or bin area); falling back to "
+            "'each' rather than drawing a bar that is wrong for most cells"
+        )
+        return "each"
+    return mode
+
+
+def _distinct_labels(values, start: int = 3, most: int = 8) -> list:
+    """``%g`` labels for *values* with the fewest significant digits (from
+    *start*) that tell neighbours apart."""
+    vals = [float(v) for v in values]
+    for d in range(start, most + 1):
+        labs = [f"{v:.{d}g}" for v in vals]
+        if len(set(labs)) == len(set(vals)):
+            return labs
+    return [f"{v:.{most}g}" for v in vals]
+
+
+def _bar_bands(spec: Optional[PanelSpec], mode: str,
+               include_density: bool = True):
+    """Bands of *spec* that should get their own bar under *mode*."""
+    if spec is None or mode != "each":
+        return []
+    return [b for b in spec.bands
+            if b.visible and b.mapping is not None
+            and (include_density or b.kind != "density")]
+
+
+def _draw_colorbar(fig, rect, band: ColorBand, theme: Theme,
+                   side: str, show_label: bool = True) -> None:
+    """Draw one colorbar into figure-fraction *rect*.
+
+    Placed in reserved space as its own axes rather than via
+    ``make_axes_locatable``, which steals width from the parent axes and
+    would break the 1:1 pixel mapping the whole layout is built around.
+
+    ``FuncNorm`` over the band's ``ScalarMapping`` is what puts ticks at
+    real data values under a non-linear scaling: ``eq_hist`` is a
+    monotonic CDF interpolation, so it is invertible and the bar's ticks
+    bunch where the data is dense — the information the scaling exists to
+    show.
+    """
+    from matplotlib.colors import ListedColormap, FuncNorm
+    import matplotlib.cm as cm
+
+    m = band.mapping
+    cax = fig.add_axes(rect)
+    norm = FuncNorm((m.forward, m.inverse), vmin=m.vmin, vmax=m.vmax)
+    sm = cm.ScalarMappable(norm=norm,
+                           cmap=ListedColormap(list(band.cmap) or ["#888"]))
+    orientation = "horizontal" if side == "bottom" else "vertical"
+    cb = fig.colorbar(sm, cax=cax, orientation=orientation)
+    try:
+        ticks = list(m.ticks(6))
+        cb.set_ticks(ticks)
+        # Enough significant digits that neighbouring ticks differ: the
+        # default formatter wrote "0.001" twice on an eq_hist bar of
+        # VLBI amplitudes around 0.001 (B2, 2026-10-11).
+        cb.set_ticklabels(_distinct_labels(ticks))
+    except Exception as exc:                       # pragma: no cover
+        log.debug("colorbar tick placement failed: %s", exc)
+    if show_label:
+        cb.set_label(band.bar_label(), color=theme.text, fontsize=8)
+    cb.ax.tick_params(colors=theme.muted, labelsize=7, length=2.5, width=0.7)
+    cb.outline.set_edgecolor(theme.spine)
+    cb.outline.set_linewidth(0.7)
+    if side == "left":
+        cax.yaxis.set_ticks_position("left")
+        cax.yaxis.set_label_position("left")
+
+
+def _tick_label_pt(specs, axis: str) -> float:
+    """About how far an axis's tick labels reach from it, pt: their
+    height for X (the length of the longest when written upright), their
+    width for Y.  An estimate from the labels' text (8 pt font), made
+    before anything is drawn, because the layout is fixed in points."""
+    cw = 8 * 0.6                      # an average character, 8 pt
+    longest, upright = 6, False
+    for sp in specs:
+        names = sp.axis_ticks(axis)
+        if names:
+            n = max(len(str(t)) for t in names)
+            if axis == "x" and len(names) <= 30 and n > 3:
+                upright = True
+        elif sp.x_is_time if axis == "x" else sp.y_is_time:
+            n = 8                      # 01:15:00
+        else:
+            n = 6
+        longest = max(longest, n)
+    if axis == "x":
+        return (longest * cw if upright else 10.0) + 6.0
+    return longest * cw + 8.0
+
+
+def _same_ticks(specs, axis: str) -> bool:
+    """Every cell names the positions along *axis* alike (or none does):
+    one set of tick labels then serves the whole row / column.  Not so
+    for a Baseline axis in a grid by antenna -- each cell's baselines are
+    its own."""
+    return len({tuple(sp.axis_ticks(axis) or ()) for sp in specs}) <= 1
+
+
+def _outer_axes(ax, r: int, c: int, x_each: bool = False, y_each: bool = False,
+                x_pad: float = 20.0) -> None:
+    """axes="outer": X tick labels across the top of the top row only, Y
+    tick labels down the first column only, no per-cell axis names (the
+    figure draws each once).  A grid at a common scale, as the browser's
+    grid view draws it (plan 1.3, 2026-11-11).  *x_each* / *y_each*: that
+    axis's tick labels on every cell, because the cells' differ."""
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    if r == 0 or x_each:
+        ax.xaxis.tick_top()
+        ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False,
+                       top=True, labeltop=True)
+    else:
+        ax.tick_params(axis="x", which="both", labelbottom=False, labeltop=False)
+    if c != 0 and not y_each:
+        ax.tick_params(axis="y", which="both", labelleft=False)
+    # the title clears the tick labels above the cell
+    if (r == 0 or x_each) and ax.get_title():
+        ax.title.set_y(1.0)
+        ax.set_title(ax.get_title(), color=ax.title.get_color(),
+                     fontsize=ax.title.get_fontsize(), pad=x_pad)
+
+
+def _draw_cell(ax, panel: Optional[RenderedPanel], theme: Theme,
+               extents: _ExtentIndex, legend_mode: str = "panel") -> None:
+    """Render one grid cell — with data, empty, failed, or absent."""
+    spec = panel.spec if panel is not None else None
+
+    # A drawable panel uses its own extent.  Anything else inherits, and
+    # must NOT fall back to its own spec ranges: VisibilityRaster's
+    # degenerate branch leaves those at (0.0, 1.0), which passes every
+    # "is this a valid range" test while being pure fiction.  Drawing
+    # 0.0000-1.0000 ticks on an empty cell is worse than drawing none,
+    # because they look like data.
+    if panel is not None and panel.image is not None:
+        extent, donor = panel.extent, spec
+    else:
+        extent, donor = extents.lookup(spec)
+
+    _style_axes(ax, theme, spec, extent, show_ticks=extent is not None,
+                tick_src=donor)
+
+    if spec is not None and spec.title:
+        # A panel legend occupies the band immediately above the axes, so
+        # the title has to clear it -- at the default pad the two were
+        # drawn on top of each other.
+        pad = 6.0
+        if legend_mode == "panel" and spec is not None and _wants_legend(spec):
+            # Part 4: scaled by row count, not just a flat add -- a
+            # categorical legend that wrapped to several rows (see
+            # _legend_rows) needs more clearance above the axes than
+            # the single-row per-layer legend this padding was
+            # originally sized for.
+            pad += _LEGEND_PT * _legend_rows(spec.bands, avail_pt=_axes_width_pt(ax),
+                                             mode="panel")
+        ax.set_title(spec.title, color=theme.text, fontsize=9.5, pad=pad)
+
+    if panel is None:
+        return
+
+    if panel.image is not None:
+        rgba = panel.rgba()
+        # origin="lower": Bokeh's image_rgba puts array row 0 at the
+        # bottom of the frame, and matplotlib defaults to the opposite.
+        # Getting this wrong mirrors every plot vertically, which on a
+        # time axis is very easy not to notice.
+        # aspect="auto": the axes are time vs channel, amplitude vs
+        # uvdist -- a 1:1 data aspect would be meaningless.
+        # interpolation="nearest": the array is already at final
+        # resolution; resampling would reintroduce the very question
+        # _resample_method exists to answer.
+        ax.imshow(rgba, extent=extent, origin="lower", aspect="auto",
+                  interpolation="nearest", zorder=2)
+        if legend_mode == "panel":
+            _draw_panel_legend(ax, spec, theme)
+        return
+
+    # Empty or failed.  "No rows selected" and "the shade raised" are
+    # different events and only the first is routine -- a pipeline
+    # emitting 43 PNGs must not swallow the second silently, so failures
+    # are colored and labelled as failures.
+    is_error = spec is not None and spec.status == "error"
+    msg = (spec.note if spec is not None and spec.note else
+           ("error" if is_error else "no data"))
+    if is_error:
+        msg = f"ERROR: {msg}"
+    ax.text(0.5, 0.5, _wrap(msg, 34), transform=ax.transAxes,
+            ha="center", va="center", fontsize=8,
+            color=theme.error if is_error else theme.muted,
+            style="normal" if is_error else "italic", zorder=3)
+
+
+def _wrap(text: str, width: int) -> str:
+    """Soft-wrap an annotation so a long skip-reason stays inside its cell."""
+    import textwrap
+    return "\n".join(textwrap.wrap(text, width)[:4])
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+def export_png(
+    panels: Sequence[Optional[RenderedPanel]],
+    path: str,
+    *,
+    nrows: int = 1,
+    ncols: int = 1,
+    footer: Optional[str] = None,
+    theme: Optional[str] = None,
+    dpi: int = 100,
+    cell_size: Optional[tuple[int, int]] = None,
+    row_heights: Optional[Sequence[int]] = None,
+    col_widths: Optional[Sequence[int]] = None,
+    legend: str = "auto",
+    colorbar: str = "auto",
+    colorbar_side: str = "right",
+    axes: str = "each",
+) -> str:
+    """Composite *panels* into a PNG at *path*; return the absolute path.
+
+    Parameters
+    ----------
+    panels : sequence of RenderedPanel or None
+        Row-major.  ``None`` means a grid position with no panel at all
+        (an M x N grid larger than the iteration range); a
+        ``RenderedPanel`` whose ``spec.status`` is not ``"ok"`` means a
+        panel that exists but has nothing to draw.  Both get a framed
+        cell; only the second gets a title and a note.
+    nrows, ncols : int
+        Grid shape.  Callers translate their own layout vocabulary before
+        calling — ``layout="side"`` is ``(1, 2)``, and grid mode passes
+        ``gridrows``/``gridcols``.
+    footer : str
+        Provenance line: dataset, selection, data column.  A PNG has no
+        status bar and no sidebar, so anything the reader needs six
+        months from now has to be drawn on.  Derive it from
+        ``VisibilityPlotter._status_text()`` so the two cannot diverge.
+    theme : {"light", "dark"} or None
+        Chrome colors.  ``None`` (default) adopts the theme the panels
+        were *shaded* for, via ``PanelSpec.theme`` -- see the note at the
+        defaulting site.  Pass a value explicitly only when you know the
+        pixels suit it; a light theme over dark-conditioned ramps is
+        legible but poor, which is what the fixed ``"light"`` default
+        used to produce.
+    dpi : int
+        Scales the chrome only.  Panel images stay 1:1 with output
+        pixels, so a panel's data area is exactly its own width and
+        height in device pixels at any dpi -- which is also why
+        byte-identity with the GUI holds only at matched canvas size.
+        Raising dpi makes labels crisper and the data area physically
+        smaller on the page, not softer.
+    cell_size : (int, int)
+        Override the per-cell data-area size in pixels.  Defaults to the
+        first drawable panel's image shape.  Overriding does NOT rescale
+        the image: it is drawn into whatever box is provided, so a size
+        other than the panel's own breaks 1:1.
+    row_heights, col_widths : sequence of int
+        Data-area height of each row and width of each column, in pixels,
+        when they differ (``row_height=[250, 400]``, 2026-10-13).  Each
+        defaults to the cell size; a short list repeats its last value.
+    legend : {"auto", "figure", "panel", "none"}
+        Where to put the band legend.  ``"auto"`` uses one shared figure
+        legend when every populated cell carries the same bands — the
+        normal case in grid mode, where one configuration iterated over
+        an axis would otherwise produce N identical legends — and falls
+        back to per-panel for a heterogeneous grid.  Legends are never
+        drawn over the data; space is reserved for them.
+    colorbar : {"auto", "shared", "each", "none"}
+        How many colorbars.  Deliberately separate from
+        ``colorbar_side``: count and placement are independent choices,
+        and fusing them into one enum makes some combinations
+        inexpressible (per-plot bars gathered at the figure edge) while
+        inventing meaningless ones.  ``"auto"`` gives raster panels one
+        shared bar when their mappings agree and one each when they do
+        not, and gives scatter panels none — see ``_resolve_colorbar``.
+    colorbar_side : {"right", "left", "bottom"}
+        Which edge.  For ``"shared"`` this is the figure edge; for
+        ``"each"`` it is each plot's own edge, and ``"bottom"`` puts a
+        horizontal bar under every cell.
+    axes : {"each", "outer"}
+        ``"each"`` (default): every cell its own tick labels and axis
+        names.  ``"outer"``: a grid at a common scale, drawn as the grid
+        view draws it -- X tick labels across the top of the top row, Y
+        tick labels down the first column, each axis name once (above the
+        grid, beside the first column), and narrow gaps between cells
+        (gridplot, 2026-11-11).  A single cell is drawn as ``"each"``.
+
+    Returns
+    -------
+    str
+        Absolute path written.
+    """
+    import matplotlib
+    matplotlib.use("Agg")            # headless; no display, no browser
+    import matplotlib.pyplot as plt
+
+    if nrows < 1 or ncols < 1:
+        raise ValueError(f"export_png: bad grid shape {nrows}x{ncols}")
+    cells = list(panels)
+    if len(cells) > nrows * ncols:
+        raise ValueError(
+            f"export_png: {len(cells)} panels exceeds {nrows}x{ncols} grid"
+        )
+    cells += [None] * (nrows * ncols - len(cells))
+
+    # Default to the theme the pixels were SHADED for, not to a fixed
+    # "light".  A palette is baked into the image before this module sees
+    # it, and ramps are conditioned against a specific background
+    # (palettes.condition), so drawing dark-conditioned pixels on white
+    # costs ~2.5x contrast.  Requiring the caller to pass the theme twice
+    # -- once to the plotter, once here -- made that mismatch the default
+    # outcome of the obvious headless usage.
+    if theme is None:
+        theme = next((c.spec.theme for c in cells
+                      if c is not None and c.spec is not None), "light")
+    th = THEMES.get(theme)
+    if th is None:
+        raise ValueError(f"export_png: unknown theme {theme!r}; "
+                         f"expected one of {sorted(THEMES)}")
+
+    # --- pass 1: geometry ------------------------------------------------
+    extents = _ExtentIndex(cells)
+
+    if cell_size is not None:
+        cw, ch = cell_size
+    else:
+        first = next((p for p in cells if p is not None and p.image is not None),
+                     None)
+        ch, cw = (first.image.shape if first is not None else (480, 640))
+    cw, ch = int(cw), int(ch)
+    # Per-row heights / per-column widths (2026-10-13); uniform unless given.
+    def _spread(vals, n, dflt):
+        vals = [int(v) for v in vals] if vals else [dflt]
+        return [vals[min(i, len(vals) - 1)] for i in range(n)]
+    rh = _spread(row_heights, nrows, ch)
+    cwl = _spread(col_widths, ncols, cw)
+    cw, ch = min(cwl), max(rh)        # for the few places that need one
+
+    px = dpi / 72.0                       # points -> device pixels
+    legend_mode = _resolve_legend(legend, cells)
+    wants_legend = any(
+        p is not None and p.spec is not None and _wants_legend(p.spec)
+        for p in cells
+    )
+    if not wants_legend:
+        legend_mode = "none"
+    if axes not in ("each", "outer"):
+        raise ValueError(f"axes must be 'each' or 'outer', not {axes!r}")
+    outer = axes == "outer" and nrows * ncols > 1
+    m_l   = _MARGIN_L_PT * px
+    m_r   = _MARGIN_R_PT * px
+    m_t   = _MARGIN_T_PT * px
+    if outer:
+        # room for the tick labels the page shows, measured from their
+        # text: the axis names go beyond them, once each
+        o_specs = [p.spec for p in cells
+                   if p is not None and p.spec is not None and p.image is not None] or \
+                  [p.spec for p in cells if p is not None and p.spec is not None]
+        x_each = not _same_ticks(o_specs, "x")
+        y_each = not _same_ticks(o_specs, "y")
+        x_lbl = _tick_label_pt(o_specs, "x") if o_specs else 16.0
+        y_lbl = _tick_label_pt(o_specs, "y") if o_specs else 40.0
+        m_t = (_MARGIN_T_PT + _OUTER_NAME_PT + x_lbl) * px
+        m_l = max(_MARGIN_L_PT, _OUTER_NAME_PT + y_lbl + 4.0) * px
+    # The footer wraps (HRS B2, 2026-10-11): it was one line, cut off at
+    # the right in a narrow (Over / Under) export.  Broken between its
+    # " | " fields, to the width of the grid of axes.
+    footer = _plain_text(footer) if footer else footer
+    footer_lines = (_wrap_footer(footer, sum(cwl) / px
+                                 + (ncols - 1) * _WSPACE_PT + _MARGIN_L_PT)
+                    if footer else [])
+    m_b   = (_MARGIN_B_PT + (_FOOTER_PT + _FOOTER_LINE_PT * (len(footer_lines) - 1)
+                             if footer_lines else 0.0)) * px
+    title = _CELL_TITLE_PT * px
+    # outer axes: no tick labels or names between cells, so the gaps
+    # shrink to a frame's breathing space (and the bottom margin to what
+    # the footer needs)
+    wsp   = ((_OUTER_SPACE_PT + (y_lbl if y_each else 0.0)) if outer else _WSPACE_PT) * px
+    hsp   = ((_OUTER_SPACE_PT + (x_lbl if x_each else 0.0)) if outer else _HSPACE_PT) * px \
+        + _CELL_TITLE_PT * px
+    if outer:
+        m_b -= (_MARGIN_B_PT - _OUTER_SPACE_PT) * px
+    # Legend space is *reserved*, not overlaid: a band above each axes for
+    # per-panel legends, or one band below the top margin for a shared
+    # figure legend.  Either way the data area stays cw x ch.
+    #
+    # legend_rows > 1 (Part 4): a categorical band's per-category legend
+    # can run to CATEGORY_CAP (20) entries, which _legend_ncol wraps into
+    # several rows rather than one absurdly wide row -- reserved space
+    # must grow with it or a multi-row legend gets clipped. A plain
+    # per-layer legend is always exactly 1 row (unchanged), so this is a
+    # no-op multiplier for every pre-Part-4 case.
+    legend_rows = 1
+    # Width the legend has to fit in, in points (Part 5d): a panel legend sits
+    # over one axes (cw wide); the shared figure legend spans the whole grid of
+    # axes.  Handed to _legend_rows here and to the draw helpers later, so the
+    # rows reserved and the columns drawn can never disagree.
+    legend_avail_pt = (cw / px if legend_mode == "panel"
+                       else (sum(cwl) + (ncols - 1) * wsp) / px)
+    if legend_mode in ("panel", "figure"):
+        legend_rows = max(
+            (_legend_rows(p.spec.bands, avail_pt=legend_avail_pt, mode=legend_mode)
+             for p in cells
+             if p is not None and p.spec is not None and _wants_legend(p.spec)),
+            default=1,
+        )
+    lg_panel = (_LEGEND_PT * px * (1.6 + 0.9 * (legend_rows - 1))
+                if legend_mode == "panel" else 0.0)
+    lg_fig   = (_LEGEND_PT * px * (1.4 + 0.9 * (legend_rows - 1))
+                if legend_mode == "figure" else 0.0)
+
+    # Colorbar space is reserved the same way legend space is.  Using
+    # make_axes_locatable instead would take the width out of the parent
+    # axes, shrinking the data area below cw x ch and forcing a resample
+    # of the Datashader image.
+    cbar_mode = _resolve_colorbar(colorbar, cells)
+    if colorbar_side not in ("right", "left", "bottom"):
+        raise ValueError(
+            f"export_png: unknown colorbar_side {colorbar_side!r}; "
+            f"expected 'right', 'left', or 'bottom'"
+        )
+    want_density = colorbar != "auto"
+    n_bars_each = max(
+        (len(_bar_bands(c.spec if c else None, cbar_mode, want_density))
+         for c in cells),
+        default=0,
+    )
+    bar_w   = _CBAR_W_PT * px
+    bar_pad = _CBAR_PAD_PT * px
+    bar_lbl = _CBAR_LBL_PT * px
+    horiz   = colorbar_side == "bottom"
+
+    if cbar_mode == "each" and n_bars_each:
+        if horiz:
+            cb_cell_w, cb_cell_h = 0.0, n_bars_each * (bar_pad + bar_w) + bar_lbl
+        else:
+            cb_cell_w, cb_cell_h = n_bars_each * (bar_pad + bar_w + bar_lbl), 0.0
+    else:
+        cb_cell_w = cb_cell_h = 0.0
+
+    if cbar_mode == "shared":
+        cb_fig_w = 0.0 if horiz else (bar_pad + bar_w + bar_lbl)
+        cb_fig_h = (bar_pad + bar_w + bar_lbl * 0.6) if horiz else 0.0
+    else:
+        cb_fig_w = cb_fig_h = 0.0
+
+    blocks = [lg_panel + h + cb_cell_h for h in rh]
+    # Rounded to whole pixels so the saved canvas size and the coordinate
+    # space the axes rects are computed against are the same number.
+    cell_ws = [w + cb_cell_w for w in cwl]
+    fig_w  = float(round(m_l + sum(cell_ws) + (ncols - 1) * wsp
+                         + m_r + cb_fig_w))
+    fig_h  = float(round(m_t + lg_fig + title
+                         + sum(blocks) + (nrows - 1) * hsp
+                         + m_b + cb_fig_h))
+
+    fig = plt.figure(figsize=(fig_w / dpi, fig_h / dpi), dpi=dpi,
+                     facecolor=th.figure)
+
+    # --- pass 2: draw ----------------------------------------------------
+    # Explicit per-cell rects rather than GridSpec: its wspace/hspace are
+    # ratios of the average axes width, which makes exact pixel control
+    # awkward, and exactness is the point -- the data area must be cw x ch
+    # device pixels so the Datashader image is placed, not resampled.
+    top_axes, left_axes = [], []
+    for i, panel in enumerate(cells):
+        r, c = divmod(i, ncols)
+        cw, ch = cwl[c], rh[r]
+        # Left-side bars sit between the margin and the plot, so the plot
+        # starts further right; right-side bars sit after it.
+        x_cell = m_l + sum(cell_ws[:c]) + c * wsp
+        x0 = x_cell + (cb_cell_w if colorbar_side == "left" else 0.0)
+        y0 = fig_h - (m_t + lg_fig + title
+                      + sum(blocks[:r]) + r * hsp + lg_panel + ch)
+        ax = fig.add_axes([x0 / fig_w, y0 / fig_h, cw / fig_w, ch / fig_h])
+        _draw_cell(ax, panel, th, extents, legend_mode)
+        if outer:
+            _outer_axes(ax, r, c, x_each, y_each, x_pad=x_lbl + 2.0)
+            if r == 0:
+                top_axes.append(ax)
+            if c == 0:
+                left_axes.append(ax)
+
+        for j, band in enumerate(_bar_bands(
+                panel.spec if panel else None, cbar_mode, want_density)):
+            if horiz:
+                by = y0 - bar_pad - (j + 1) * (bar_w + bar_pad)
+                rect = [x0 / fig_w, by / fig_h, cw / fig_w, bar_w / fig_h]
+            elif colorbar_side == "left":
+                bx = x_cell + j * (bar_pad + bar_w + bar_lbl) + bar_lbl
+                rect = [bx / fig_w, y0 / fig_h, bar_w / fig_w, ch / fig_h]
+            else:
+                bx = x0 + cw + bar_pad + j * (bar_pad + bar_w + bar_lbl)
+                rect = [bx / fig_w, y0 / fig_h, bar_w / fig_w, ch / fig_h]
+            _draw_colorbar(fig, rect, band, th, colorbar_side)
+
+    if cbar_mode == "shared":
+        pairs = _cbar_mappings(cells, include_density=want_density)
+        band = pairs[0][1]
+        if horiz:
+            rect = [m_l / fig_w, (m_b * 0.62) / fig_h,
+                    (sum(cell_ws) + (ncols - 1) * wsp) / fig_w,
+                    bar_w / fig_h]
+        else:
+            bx = fig_w - m_r - cb_fig_w + bar_pad
+            top = m_t + lg_fig + title
+            hgt = fig_h - top - m_b
+            rect = [bx / fig_w, m_b / fig_h, bar_w / fig_w, hgt / fig_h]
+        _draw_colorbar(fig, rect, band, th, colorbar_side)
+
+    if legend_mode == "figure":
+        shared = next((c.spec.bands for c in cells
+                       if c is not None and c.image is not None
+                       and _band_key(c.spec)), ())
+        _draw_figure_legend(fig, shared, th,
+                            1.0 - (m_t * 0.4) / fig_h, avail_pt=legend_avail_pt)
+
+    if footer_lines:
+        fig.text(m_l / fig_w, (_MARGIN_B_PT * 0.30 * px) / fig_h,
+                 "\n".join(footer_lines),
+                 color=th.muted, fontsize=7.5, ha="left", va="bottom",
+                 linespacing=1.3)
+
+    path = os.path.abspath(os.path.expanduser(path))
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if outer and top_axes and left_axes:
+        spec = next((p.spec for p in cells if p is not None and p.image is not None), None) \
+            or next((p.spec for p in cells if p is not None), None)
+        if spec is not None:
+            x_left = top_axes[0].get_position().x0
+            x_right = top_axes[-1].get_position().x1
+            fig.text((x_left + x_right) / 2, 1.0 - (_MARGIN_T_PT * 0.5 * px) / fig_h,
+                     spec.axis_label("x"), ha="center", va="top", fontsize=9.5,
+                     color=th.text)
+            y_top = left_axes[0].get_position().y1
+            y_bot = left_axes[-1].get_position().y0
+            fig.text((_OUTER_NAME_PT * 0.55 * px) / fig_w, (y_top + y_bot) / 2,
+                     spec.axis_label("y"), ha="center", va="center", rotation=90,
+                     fontsize=9.5, color=th.text)
+    fig.savefig(path, dpi=dpi, facecolor=th.figure)
+    plt.close(fig)
+    log.info("export_png: wrote %s (%dx%d px, %dx%d grid)",
+             path, fig_w, fig_h, nrows, ncols)
+    return path

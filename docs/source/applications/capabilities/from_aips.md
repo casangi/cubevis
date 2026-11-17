@@ -101,7 +101,7 @@ correlation reaches apply (see {ref}`cap-flagging-calc`).
 | TVTRANSF; LOAD LOG, SQRT, LOG2, LIN | color scaling | Same | Also histogram-equalized (the default), square, gamma or power, threshold | {ref}`Colormaps <cap-colormaps>` | |
 | ENTER AMP / PHS / RMS PIXRANGE | color range | Same | | {ref}`Colormaps <cap-colormaps>` | |
 | TVZOOM, AUTO Y ZOOM, ENTER BLC / TRC | zoom and pan | Same | Zoom re-samples the data already read | {ref}`Plots <cap-plots>` | |
-| LOAD NEXT / LAST PIECE | `timerange`, `scan` | Different | Narrow the selection; there is no piece-by-piece loading | {ref}`Selection <cap-selection>` | |
+| LOAD NEXT / LAST PIECE | `timerange`, `scan` | Different | Narrow the selection; there is no piece-by-piece loading. A raster over 2 million cells skips rows and columns until the selection is narrowed | {ref}`Plots <cap-plots-calc>` | |
 :::
 
 ## SPFLG

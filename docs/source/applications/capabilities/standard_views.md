@@ -31,6 +31,14 @@ corresponds to a display that AIPS or CASA users already know:
 
 ## How it behaves
 
+- **How each view's values are computed.** Each view is an ordinary
+  plot, so its values follow {ref}`cap-quantities-calc` and
+  {ref}`cap-averaging-calc`. In particular:
+  - the antenna matrix averages each baseline over the whole selection;
+  - the all-baseline waterfall combines baselines by maximum
+    (`baseline_combine="max"`);
+  - the spectrum and time series use scatter averaging.
+
 - **A suggested order for commissioning:**
   1. *Survey* with the antenna matrix, Z-Score, phase stability and
      amplitude views. In the antenna matrix, an antenna that is bad on

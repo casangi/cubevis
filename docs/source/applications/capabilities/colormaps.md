@@ -51,6 +51,39 @@ cells. Linear or logarithmic scaling is better for reading values.
 - In a grid of plots, the plots on a page share one color range by
   default (see [](plot_types.md)).
 
+(cap-colormaps-calc)=
+
+## How colors are assigned
+
+**Color range.** Values are first limited to the color range, $v_{min}$
+to $v_{max}$. By default that is the smallest and largest value in the
+whole raster, not just the region shown. A range set explicitly
+overrides it. Values are then scaled to $x$ in 0 to 1:
+$x = (v - v_{min})/(v_{max} - v_{min})$. The scaling turns $x$ into the
+position $y$ along the colormap:
+
+| Scaling | $y$ | Use |
+|---|---|---|
+| Linear | $x$ | reading values off the color bar |
+| Log | $\log(1 + a x)\,/\,\log(1 + a)$, with $a$ adjustable | a few very bright cells over a faint background |
+| Square root | $\sqrt{x}$ | a gentler version of log |
+| Square | $x^2$ | emphasising the brightest values |
+| Gamma | $x^{g}$, with $g$ adjustable | fine control between square root and square |
+| Power | $(a^{x} - 1)/(a - 1)$, with $a$ adjustable | the opposite of log: suppresses the noise floor |
+| Histogram equalized | each value's rank among all values in the raster | the default: spreads the colors over the values that actually occur |
+| Threshold | 1 if $v \ge$ the cutoff, else 0 | a two-color map, such as "Z-Score at least 5" |
+
+**Histogram equalization.** This scaling places each value by how many
+values lie below it, so equal steps of color hold roughly equal numbers
+of cells. Faint structure becomes visible next to a few very bright
+cells. The price is that color is no longer proportional to value: use
+linear or log scaling to compare values.
+
+**Phase** always uses a fixed −180° to 180° range on the cyclic
+colormap, so a given phase always has the same color.
+
+**Empty cells** (no unflagged samples) are transparent.
+
 ## From Python
 
 ```python

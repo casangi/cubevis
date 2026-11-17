@@ -29,7 +29,10 @@ Both are under review by the testers; corrections are welcome.
 
 The pages on quantities, averaging and flagging each have a *How it is
 calculated* section with the formulas, for comparing `visplot`'s numbers
-with those of other tools.
+with those of other tools. *How the picture is drawn* explains what
+happens on screen when there are more cells than pixels, or more than a
+raster's limit, and defines each axis; *How colors are assigned* gives
+the color scalings.
 
 ## Capabilities
 

@@ -250,6 +250,24 @@ Settle with Darrell before writing code:
 8. **Titles and legends** should name a receptor by
    `info().polarization` ("R", "L") when it is known, and by its
    position otherwise.
+9. **Finding the bad antenna: sort, badges, outlines** (plan 9.4 items
+   7 and 8; placed in G2 by 9.8, not built there, moved here
+   2026-11-17 when `gridplot` closed).  Antenna-based tables are where
+   they pay most:
+   * *Sort cells by a statistic* ("worst first"): order the iteration
+     values by phase RMS, flagged fraction, median SNR or a Z-Score
+     instead of antenna number, so page 1 shows the problems.  One
+     number per cell and a sort key.
+   * *Cell badges*: that number in a corner of each cell.
+   * *Outlier outlines*: a colored frame on cells far from the page's
+     (or the grid's) median of it.
+   Build them in the shared component (`toolbox/gridplot`: a statistic
+   per cell from the `GridSource`, the sort applied to its values, the
+   badge and outline drawn by `GridView`), so visplot's grid gets them
+   too.  Settle with Darrell: which statistics per cal type, and whether
+   sorting is a control in the Grid section -- for visplot that is a new
+   control, and visplot's rule is that controls land before its GUI
+   refactor (`hrs_visplot_plan.md` section 8).
 
 Then C2 (plan 3.6): FlagDB's list, undo and preview edit the reader's
 flags (`set_flags`), and `commit_flags` writes them.
@@ -286,5 +304,6 @@ flags (`set_flags`), and `commit_flags` writes them.
   text of 2026-11-09).  Check the code at each stage with `git fetch
   https://github.com/casangi/xradio.git refs/pull/578/head`, and ask
   for the page.
-* Carried from the gridplot handoff: retake the G0 to G3 timings on
-  TW Hya and the VLBA subset.
+* ~~Carried from the gridplot handoff: retake the G0 to G3 timings on
+  TW Hya and the VLBA subset.~~  Dropped as a task (2026-11-17,
+  `gridplot_notes.md` section 15 on `gridplot`): they come with use.

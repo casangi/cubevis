@@ -408,7 +408,7 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 | **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets. **Built 2026-11-11: sections 13, 14** (rasters; presets are the panel presets in Grid; TW Hya / VLBA to test) | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
 | **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only; scatter grids; "whole grid" color scope by default (kept at "this page" for now: section 16); the grid's own template panel (section 14). **The grid's own panel built 2026-11-13: section 15; read once, split: section 16; scatter grids: section 17; compound iteration and the `axes_override` hook: section 18. G3 done** | M | Page time inside the G0 target |
 | **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables. **The `casa-caltab` reader built 2026-11-15: section 19; the synthetic source and a table writer 2026-11-16: section 20; `commit_flags`: section 21; `CalTableReader`: section 22; the document and example: section 23.  C0 done 2026-11-16** | M | Round-trip of values and flags against casatools reads |
-| **C1** | calplot app: selection (antenna, SPW, field, pol, time), grid per antenna, overlay mode, flagged solutions shown, refant in titles, PNG pages; remote kernels via the existing setup | L | Gain, bandpass and fringe tables from a real VLA/VLBA reduction |
+| **C1** | calplot app: selection (antenna, SPW, field, pol, time), grid per antenna, overlay mode, flagged solutions shown, refant in titles, PNG pages; remote kernels via the existing setup; cell badges, outlier outlines and sort by a statistic in the shared grid (9.4 items 7–8, moved from G2) | L | Gain, bandpass and fringe tables from a real VLA/VLBA reduction |
 | **C2** | Solution flagging: box in drill-down panel, FlagDB list/undo, commit to `FLAG` with a backup copy | M | Flag, undo, commit, reopen in plotms and see the same flags |
 | G4 / C3 (optional) | Flag-in-cell with the shared tool (3.6 v2) | M | — |
 | C4 (when xradio merges) | xradio calset backend | S–M | Parity with the CASA backend on a converted table |
@@ -627,7 +627,10 @@ support it unchanged if that ever happens.
 - G1b: adds the playback view and client prefetch; first proves the three
   toolbar conditions (9.2); measures a 64-cell pool (9.3).
 - G2: adds the legibility floor and the 8×8 cap; cell badges, outliers and
-  sort-by-statistic (9.4 items 7–8).
+  sort-by-statistic (9.4 items 7–8).  *Moved to C1 (2026-11-17): not
+  built in G2 or G3; they go into the shared `GridView` when calplot
+  needs them, and visplot gets them then (calplot handoff, "Next: C1",
+  item 9).*
 - C0: abstract `CalTableReader`, CASA and synthetic backends, the xradio
   draft's dataset names; G, B, Fringe, K, Tsys; effective values for K.
 - C3 (new): two-table overlay, difference and ratio.

@@ -27,6 +27,10 @@ A test is a quick test because a suite names it, not because of where it is.  To
   kernel (also one started in another directory, and the notebook variant):
   needs casatasks and CASA's data, so it is skipped where they are not
   installed (the GitHub workflow today).
+* **visplot-grid** -- visplot's Grid layout without a browser
+  (`tests/manual/gridplot/test_vis_grid.py`, on a tiny MS it makes itself):
+  iteration, color scopes, the grid's panel, drill-down, `plotfile=` pages,
+  rows held in memory, scatter grids, flags added after the grid was drawn.
 * **tiny-ms**, **visplot-remote** -- a 3 MB MSv2 made by `make_tiny_ms.py`
   (xradio's generator, then given real times, UVWs, data and frequencies),
   and `tests/manual/visplot/remote_visplot_check.py` on it: visplot local

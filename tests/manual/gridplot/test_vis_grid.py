@@ -758,3 +758,77 @@ def test_axes_override_in_the_view(ms, tmp_path):
         p._grid().set_axes_override(lambda i, label, value: {"x_dim": "BASELINE"} if i else None)
         out = p(plotfile=str(tmp_path / "pf.png"))
         assert os.path.getsize(out) > 5000 and p._grid_source.own_scale(1)
+
+
+# --- flags added or committed after the grid was drawn (2026-11-17) ----------
+
+def _page_images(p, page):
+    out = p._grid_view.page({"page": page, "rows": 2, "cols": 2, "w": 140, "h": 100})
+    return out, [c["image"].tobytes() for c in out["cells"]]
+
+
+def test_grid_follows_flags_added_after_plot(ms):
+    """A flag added after Plot in Grid (in a cell drilled into, say) shows on
+    the grid's pages without another Plot: pages drawn before and pages not
+    yet drawn; the page's version changes, so the browser drops what it
+    holds; Back to Grid (``shown``) reports it and the status line."""
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    from cubevis.toolbox.visplot.flag_model import FlagDelta
+    with VisibilityPlotter(ms=ms, preset="waterfall") as p:
+        r = asyncio.run(p._handle_plot({"layout": "grid", "iterate_by": "baseline",
+                                        "grid_shape": [2, 2]}))
+        assert r["status"] == "ok", r
+        page0, before0 = _page_images(p, 0)
+        v0 = page0["version"]
+        # one panel drilled into: Plot in One, then a flag, as FlagDB adds it
+        assert asyncio.run(p._handle_plot({"layout": "one"}))["status"] == "ok"
+        t0, t1 = p._meta.time_range
+        p._flags.db.append(FlagDelta(time_range=(t0, t0 + (t1 - t0) / 2)))
+        p._flags.push_state()
+        shown = p._grid_view.shown(True)                      # Back to Grid
+        assert shown["version"] != v0
+        assert shown["status_text"].find("Grid by baseline") >= 0
+        page0, after0 = _page_images(p, 0)
+        assert page0["version"] == shown["version"]
+        assert after0 != before0
+        _, after2 = _page_images(p, 2)                          # never drawn before
+        assert len(after2) > 0
+        assert p._grid_view.shown(True)["version"] == shown["version"]   # nothing new
+        assert "One panel" in p._grid_view.shown(False)["status_text"]
+
+
+def test_grid_follows_a_commit(ms):
+    """A commit bumps the plotter's cache generation: the cells and the rows
+    held in memory are read again."""
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    with VisibilityPlotter(ms=ms, preset="waterfall") as p:
+        asyncio.run(p._handle_plot({"layout": "grid", "iterate_by": "spw"}))
+        src = p._grid_source
+        key0, v0 = src.preload_info.get("key"), src.version
+        p._flags._after_disk_change()
+        assert src.sync() and src.version != v0
+        assert src._selection.cache_generation == p._cache_generation
+        if key0 is not None:
+            assert src.preload_info.get("key") not in (None, key0)
+        assert not src.sync()
+
+
+def test_rows_held_count_in_the_frame_cache(ms):
+    """The rows a grid holds are reserved in the frame cache (2026-11-17):
+    frames and rows together stay within its size plus the overflow share;
+    closing the grid's plotter gives the room back."""
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    from cubevis.toolbox.visplot.data import reader as rd
+    cache = rd._global_frame_cache()
+    r0 = cache.stats()["reserved_bytes"]        # other plotters of this session's
+    with VisibilityPlotter(ms=ms, headless=True, layout="grid", preset="waterfall",
+                           iterate_by="baseline") as p:
+        src = p._grid()
+        assert src.preload_info.get("key")
+        st = cache.stats()
+        assert st["reserved_bytes"] > r0
+        assert st["bytes"] + st["reserved_bytes"] <= int(st["max_bytes"] * (1 + st["overflow"]))
+        src.render(list(range(len(src.labels()))), src.extent(), (160, 120))
+        st = cache.stats()
+        assert st["bytes"] + st["reserved_bytes"] <= int(st["max_bytes"] * (1 + st["overflow"]))
+    assert cache.stats()["reserved_bytes"] == r0

@@ -2496,6 +2496,8 @@ window.__cvGridLayout = function (on) {
     if (!on) {
         // playback is the grid's: it stops when the grid is left
         for (const k in (window.__cvGrid || {})) if (window.__cvGrid[k].stop) window.__cvGrid[k].stop();
+        for (const k in (window.__cvGrid || {}))
+            if (window.__cvGrid[k].shown) window.__cvGrid[k].shown(false);
         // Plots in Grid draw only the grid (gridplot G3): the panels are
         // drawn now, for the selection the grid was drawn with.
         if (window.__cvPanelsStale && window.__cvDoPlot) {
@@ -2504,8 +2506,15 @@ window.__cvGridLayout = function (on) {
         }
         return;
     }
-    // the grid's room is known now that it is shown: cells to fit it
-    setTimeout(() => { for (const k in (window.__cvGrid || {})) window.__cvGrid[k].refit(); }, 50);
+    // the grid's room is known now that it is shown: cells to fit it; then
+    // Python catches up with flags added or committed meanwhile (a cell
+    // drilled into) and the page is drawn again if it is out of date
+    setTimeout(() => {
+        for (const k in (window.__cvGrid || {})) {
+            window.__cvGrid[k].refit();
+            if (window.__cvGridDrawn && window.__cvGrid[k].shown) window.__cvGrid[k].shown(true);
+        }
+    }, 50);
     // Nothing drawn in the grid yet: plot, as pressing Plot in Grid would
     // (2026-11-11: Grid alone showed empty cells until Plot was pressed).
     if (!window.__cvGridDrawn && grid_plot) {
@@ -3036,7 +3045,10 @@ class VisibilityPlotter:
         half of what is free and 16 GiB, above; on a host with 48 GiB or
         more free (a compute node) 40 % of what is free, up to 64 GiB.  The
         budget chosen is logged (INFO).  Remote sessions apply it in the
-        worker, where the frames live.  Example: TW Hya with all fields
+        worker, where the frames live.  The Grid layout's rows held in
+        memory count in it: while they are held, frames and rows may take
+        it past the budget by ``CUBEVIS_VISPLOT_GRID_OVERFLOW`` percent
+        (default 25), no more.  Example: TW Hya with all fields
         (2 x 31 M samples, ~1.5 GiB per frame) needs about 3-4 GiB; on a 24
         GB Mac the old 2.4 GiB default evicted frames and a flag box took
         3.6 s instead of 0.5 s.
@@ -6811,6 +6823,9 @@ cvApplySelectionText(
             options=[("", "—")] + [(k, self._GRID_ITERATE_LABELS[k]) for k in ITERATE_BY])
         # filled in by _wire_grid, once doPlot exists
         self._grid_drill_js = CustomJS(code="")
+        # Back to Grid (or away from it) by the Layout buttons: the status
+        # line from Python (_grid_shown); filled in by _wire_grid
+        self._grid_shown_js = CustomJS(code="")
         # Play with every cell on one page steps the sidebar's stepper
         # (2026-11-13); filled in by _wire_grid, once the steppers exist
         self._grid_play_js = CustomJS(code="")
@@ -6829,6 +6844,7 @@ cvApplySelectionText(
             self._grid_source, self._comm_mgr, rows=rows, cols=cols, pool=pool,
             area=self.GRID_AREA, theme=self._theme, on_drill=self._grid_drill,
             drill_js=self._grid_drill_js, play_outer=self._grid_play_js, autoload=autoload,
+            on_shown=self._grid_shown, shown_js=self._grid_shown_js,
             app_context=self._app_context, embedded=True, color=self._grid_color,
             extra_tools=[self._grid_gear],
             idle_text="Press <b>Plot &#9654;</b> to draw the grid")
@@ -7008,6 +7024,10 @@ setTimeout(function () {
         args = dict(self._plot_js_args)
         self._grid_drill_js.args = args
         self._grid_drill_js.code = self._do_plot_js + _GRID_DRILL_JS
+        if getattr(self, "_status_div", None) is not None:
+            self._grid_shown_js.args = {"status_div": self._status_div}
+            self._grid_shown_js.code = (
+                "if (cb_obj && cb_obj.status_text) status_div.text = cb_obj.status_text;")
         self._grid_play_js.args = args
         self._grid_play_js.code = ("".join(self._iterate_js.values()) + self._do_plot_js
                                    + _GRID_PLAY_JS)
@@ -7019,6 +7039,19 @@ setTimeout(function () {
             "ant_src", "bl_src", "spw_src", "field_sel", "scan_inp", "corr_cbg", "ant_mode")}
         self._grid_restore_args["grid_plot"] = CustomJS(
             args=args, code=self._do_plot_js + "doPlot(false);")
+
+    def _grid_shown(self, on: bool) -> dict:
+        """The Layout buttons showed the grid (*on*) or left it, without a
+        Plot: what the status line says follows (2026-11-17; it said "One
+        panel" after Back to Grid until the next Plot).  ``GridView.shown``
+        has brought the cells up to the flags already."""
+        self._grid_on = bool(on)
+        try:
+            text = self._status_text()
+        except Exception:                                   # noqa: BLE001
+            log.debug("grid: status text failed", exc_info=True)
+            return {}
+        return {"status_text": text}
 
     def _grid_drill(self, index: int, label: str) -> dict:
         """A grid cell tapped: what the browser selects to show it in a

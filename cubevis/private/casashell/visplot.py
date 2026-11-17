@@ -518,7 +518,10 @@ class _visplot:
         half of what is free and 16 GiB, above; on a host with 48 GiB or
         more free (a compute node) 40 % of what is free, up to 64 GiB.  The
         budget chosen is logged (INFO).  Remote sessions apply it in the
-        worker, where the frames live.  Example: TW Hya with all fields
+        worker, where the frames live.  The Grid layout's rows held in
+        memory count in it: while they are held, frames and rows may take
+        it past the budget by ``CUBEVIS_VISPLOT_GRID_OVERFLOW`` percent
+        (default 25), no more.  Example: TW Hya with all fields
         (2 x 31 M samples, ~1.5 GiB per frame) needs about 3-4 GiB; on a 24
         GB Mac the old 2.4 GiB default evicted frames and a flag box took
         3.6 s instead of 0.5 s.

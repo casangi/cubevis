@@ -19,7 +19,8 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
     zoom common     a box zoom in one cell: every cell at that viewport
     drill-down      a tap: the cell in the full panel (One), the sidebar
                     set to its selection
-    back to grid    Layout Grid again: the grid, the sidebar as it was
+    back to grid    Layout Grid again: the grid, the sidebar as it was, the
+                    status line saying Grid (no Plot needed)
     theme           Light / Dark: the grid's chrome follows, the page is
                     drawn again in the new palette
     preset          a preset pressed in Grid: Grid stays, the grid repeats
@@ -348,7 +349,17 @@ def main() -> int:
                 && m.data.name && m.data.has_data && !m.data.ant1)
                 .map(s => Array.from(s.selected.indices))""")
             ok = grid_shown() and all(len(x) == 0 for x in after) and titles()[0] == tt[0]
-            check("back to grid", ok, f"selection restored {after}; page kept: {titles()[:2]}")
+            # the status line follows without a Plot (GridView.shown, 2026-11-17;
+            # it said "One panel" until the next Plot in Grid)
+            try:
+                pg.wait_for_function(f"""() => {MODELS}.filter(m => m.type === 'Div')
+                    .some(d => d.text.includes('Layout: Grid by'))""", timeout=20000)
+                st_ok = True
+            except Exception:                                   # noqa: BLE001
+                st_ok = False
+            check("back to grid", ok and st_ok,
+                  f"selection restored {after}; page kept: {titles()[:2]}; "
+                  f"status line says Grid: {st_ok}")
 
             set_marker()
             before = pg.evaluate(f"() => {model(GRIDPLOT)}.children[0][0].background_fill_color")
@@ -502,7 +513,16 @@ def main() -> int:
             back = status_line()
             back_cells = n_cells()
             back_shape = pg.evaluate(gst)
-            fits = (one_cells != 1 or one_shape[:2] == [1, 1]) and back_shape[:2] == back_shape[2:4]
+            def fitted(n, r, c):
+                # GridView's fitShape: fewer cells than a page shrink the grid
+                if 0 < n < r * c:
+                    r = -(-n // min(c, n))
+                    c = -(-n // r)
+                return [r, c]
+            # (2026-11-17: compared with the page's rows x cols before, which
+            # fails on data with fewer cells than a page, e.g. the tiny MS)
+            fits = ((one_cells != 1 or one_shape[:2] == [1, 1])
+                    and back_shape[:2] == fitted(back_cells, *back_shape[2:4]))
             check("fit to cells", fits and one_shape[4] > back_shape[4],
                   f"{one_cells} cell shown {one_shape[0]} x {one_shape[1]} "
                   f"({one_shape[4]} x {one_shape[5]} px) of {one_shape[2]} x {one_shape[3]}; "

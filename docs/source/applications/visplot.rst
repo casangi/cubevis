@@ -97,7 +97,9 @@ Toolbar
     (AIPS VPLOT): phase drifts and jumps, amplitude dropouts. Read one
     baseline at a time, as for *Spectrum*
 
-* Layout — *One*, *Side by Side*, *Over / Under*.  Each preset switches
+* Layout — *One*, *Side by Side*, *Over / Under*, *Grid* (the first
+  panel repeated for each baseline, antenna, SPW, field, scan or
+  correlation, page by page; ``layout="grid"``, ``iterate_by=``).  Each preset switches
   to the arrangement that suits it unless *Pin layout* (configuration
   panel, section *Panels*; ``pin_layout=True``) is ticked
 * Height — the height of each row of plots: *default* (the layout's),
@@ -444,6 +446,9 @@ Present and working:
   (``VisibilityPlotter(..., headless=True)(plotfile=...)``), and from
   the task (``visplot(..., plotfile="out.png")``)
 * Shared pan/zoom/reset, linked X range when applicable; dark and light
+* Grid layout: one plot repeated per baseline, antenna, SPW, field, scan
+  or correlation (or two of these), paged, with a shared or per-plot
+  colour range and PNG export of any pages
 
 Not yet available:
 
@@ -452,10 +457,14 @@ Not yet available:
   raster shows one correlation, or the parallel hands averaged, chosen
   in its gear tab and named in its title)
 * Flagging on the antenna × antenna matrix (refused, with the reason)
-* More than two panels
+* More than two independently configured panels (the Grid layout
+  repeats one plot)
 * Locate; on-the-fly calibration; plotting calibration tables
 * A ``flagdata`` command export (removed; JSON and writing to the MS
   replace it)
+
+See also :doc:`capabilities/index` for a capability-by-capability
+description of what ``visplot`` can do.
 
 Feedback
 ---------

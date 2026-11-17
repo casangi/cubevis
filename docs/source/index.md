@@ -32,6 +32,7 @@ applications/installing
 applications/remote_kernels
 applications/visplot_starting
 applications/visplot
+applications/capabilities/index
 applications/iclean_starting
 applications/iclean_parameters
 ```

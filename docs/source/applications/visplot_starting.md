@@ -81,20 +81,26 @@ with a message saying what is accepted.
 
 ## Choosing what is plotted
 
-The window holds one or two panels, each a raster or a scatter plot. A
-*preset* sets both panels at once to a view that is useful for one job;
-the same presets are buttons in the window's toolbar.
+The window holds one or two panels, each a raster or a scatter plot, or
+a grid of plots: one plot repeated for each baseline, antenna, spectral
+window, field, scan or correlation in the selection, page by page, as
+`plotms`'s `iteraxis` does. A *preset* sets both panels at once to a view
+that is useful for one job; the same presets are buttons in the window's
+toolbar.
 
 ```python
 visplot(vis="twhya_selfcal_contsub_ms", field="5", preset="radplot")
+visplot(vis="twhya_selfcal_contsub_ms", field="5", layout="grid",
+        iterate_by="baseline", gridrows=3, gridcols=4)
 ```
 
 ```{task-params} visplot
-:only: preset, layout, kind, panels, raster_y, raster_x, raster_qty, scatter_x, scatter_y, pin_layout, time_labels
+:only: preset, layout, kind, panels, raster_y, raster_x, raster_qty, scatter_x, scatter_y, iterate_by, gridrows, gridcols, gridcolor, grid_panel, pin_layout, time_labels
 ```
 
 What each view is for, and the order in which they are useful on a new
-observation, is described in [](visplot.rst).
+observation, is described in [](visplot.rst). A list of everything `visplot` can do,
+one capability per page, is in [](capabilities/index.md).
 
 ## Writing a plot to a file
 
@@ -107,7 +113,7 @@ path = visplot(vis="twhya_selfcal_contsub_ms", field="5",
 ```
 
 ```{task-params} visplot
-:only: plotfile, row_height, column_width, theme
+:only: plotfile, exprange, row_height, column_width, theme
 ```
 
 ## From the CASA shell

@@ -31,7 +31,10 @@ for a web window rather than for keyboard commands:
   - all correlations
 
   Reaches stay set until changed, and the window warns whenever any
-  reach is wider than the box. A single box can also be extended to the
+  reach is wider than the box. The baseline, spectral-window, scan and
+  field reaches apply to a raster box with the *All selected* filter.
+  With any other filter, or on a scatter plot, only the channel and
+  correlation reaches apply. A single box can also be extended to the
   full height or width of the plot without changing the reaches.
 - **Preview.** A box can be shown as a proposal first: how many samples
   it would flag, on which baselines, antennas, windows and scans, with
@@ -57,6 +60,52 @@ outliers out of a busy region.
   flags every sample behind what it encloses.
 - Flags are applied at the full time and frequency resolution of the
   data, whatever the averaging used to display it.
+
+(cap-flagging-calc)=
+
+## How the filters decide
+
+A filter is applied to the samples inside the box as drawn. What it
+takes is then limited to samples whose state the action can change:
+unflagged samples for a flag box, flagged ones for an unflag box. The
+channel and correlation reaches then extend each sample taken to all
+channels or all correlations. The baseline, spectral-window, scan and
+field reaches apply only to a raster box with *All selected*. Statistics are always taken from unflagged samples
+only, and the data weights are not used.
+
+| Filter | Takes a sample when | Default |
+|---|---|---|
+| All selected | always (AIPS-style immediate flagging) | |
+| Value range | the value of the quantity the panel shows (Amplitude, Phase, Real or Imaginary) is between Low and High; either bound may be left empty | |
+| Outlier from neighbours | the amplitude differs from the median of its neighbours by more than the cutoff times $\sigma$ (details below) | 5 σ, along time |
+| Z-Score | its {ref}`Z-Score <cap-zscore-calc>` is above the cutoff; or, matching per cell, the largest Z-Score in its raster cell is above the cell cutoff | 3.5 |
+| Amplitude outlier (MAD) | $\lvert A - \operatorname{median}(A)\rvert \,/\, (1.4826\,\mathrm{MAD}) >$ the cutoff | 5 |
+| Phase deviation | its phase is further than the limit from the reference's median direction, $\arg(\operatorname{median}\mathrm{Re} + i\,\operatorname{median}\mathrm{Im})$ | 45° |
+| Grow around flags | it is unflagged and within *width* samples (in time, channel, or both) of a flagged sample, on disk or pending | 1 sample, both |
+
+**Outlier from neighbours, in detail:**
+
+- **Comparison.** Each sample's amplitude is compared with the median of
+  its 9 neighbours along time (or along channel), *not including
+  itself*. Near the ends of a run, the 9-sample window is moved inward
+  rather than cut short.
+- **Runs.** Runs are cut at scan boundaries.
+- **Scatter.** $\sigma$ is $1.4826 \times$ the median absolute difference
+  from those running medians, for the baseline and correlation, in each
+  spectral window.
+- **Too few neighbours.** A sample with fewer than 3 unflagged
+  neighbours gets no verdict.
+- **Samples outside the box.** It needs them, so it is worked out on the
+  whole selection, and the box only says which of the results to take.
+  Grow around flags works the same way.
+
+**Reference populations.** Z-Score, Amplitude outlier and Phase
+deviation judge each sample against one baseline and one correlation:
+
+- on a scatter plot, over the whole current selection;
+- on a raster, in each spectral window separately.
+
+This matches what the panel shows.
 
 ## From Python
 

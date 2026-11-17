@@ -62,6 +62,62 @@ Averaging works at three levels:
   averaging. They set what a statistic is measured over, not what a cell
   covers, so they do not reduce the time resolution of the plot.
 
+(cap-averaging-calc)=
+
+## How it is calculated
+
+Only unflagged samples are averaged, and they are **not weighted**: the
+data weights are not used. The vector and scalar averages of one cell or
+one point are given in {ref}`cap-quantities-calc`.
+
+**Several baselines in one raster cell.** Each baseline's samples are
+first averaged on their own, by vector or scalar averaging. The
+baselines are then combined:
+
+| `baseline_combine` | Amplitude | Phase |
+|---|---|---|
+| `"mean"` | the mean of the baselines' amplitudes; each baseline counts once, however many samples it has | the mean direction of the baselines' phases, each baseline counted once |
+| `"median"` | the median of the baselines' amplitudes | as for `"mean"` |
+| `"max"` | the largest of the baselines' amplitudes | as for `"mean"` |
+| `"coherent"` | all samples of all baselines in one average, as for a single baseline | the same |
+
+The other quantities combine baselines as follows:
+
+- **Real and Imaginary** are the mean over all samples of all baselines.
+- **Amp V Diff and Phase Diff** are the mean over all samples. With
+  `"max"` or `"median"`, each baseline is averaged first and the
+  largest, or the median, baseline is shown.
+- **Z-Score** is always the largest value in the cell.
+- **Phase RMS and Coherence** are measured baseline by baseline and then
+  pooled (see {ref}`cap-phasestab-calc`).
+
+**Scatter averaging.** Points are averaged within groups of one
+baseline, one correlation, one spectral window, one time window and one
+channel window.
+
+- **Time windows:**
+  - `"scan"` gives one window per scan.
+  - A number of seconds gives consecutive windows of that length,
+    starting at the beginning of each scan. The last window of a scan
+    may be shorter.
+  - A window never spans two scans. Without scan information, a window
+    never spans a gap in time.
+- **Channel windows:**
+  - A number of channels gives blocks of that many channels, counted
+    from the first channel of the spectral window.
+  - `"all"` gives the whole spectral window.
+- **The averaged values:**
+  - Amplitude and Phase are averaged by vector or scalar averaging, as
+    for a raster cell.
+  - Real and Imaginary are means.
+  - Other Y quantities are not averaged.
+- **The point's X value** is the mean of its samples' X values: mean
+  time, mean frequency, mean UV distance.
+- **Other point information:** the scan, field and other details used
+  for coloring and the cursor readout are those of the window's first
+  sample. A window never mixes scans, so they are the same for all its
+  samples.
+
 ## From Python
 
 ```python

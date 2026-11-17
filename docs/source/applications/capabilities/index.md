@@ -27,6 +27,10 @@ describes it:
 
 Both are under review by the testers; corrections are welcome.
 
+The pages on quantities, averaging and flagging each have a *How it is
+calculated* section with the formulas, for comparing `visplot`'s numbers
+with those of other tools.
+
 ## Capabilities
 
 | Capability | Status | In short |
@@ -62,6 +66,8 @@ Both are under review by the testers; corrections are welcome.
 - Elevation, hour angle, azimuth and parallactic angle as axes.
 - On-the-fly calibration, and plotting calibration tables.
 - Flagging on the antenna × antenna matrix.
+- Weighted averages. The data weights are not used: every unflagged
+  sample counts equally.
 
 If a capability you need is missing, or works differently from the AIPS
 or CASA tool you are used to, please say so; see *Reporting a problem*

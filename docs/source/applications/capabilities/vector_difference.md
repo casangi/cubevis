@@ -49,6 +49,43 @@ the vector difference finds short excursions from the norm.
 - **Colors.** Phase Diff runs from 0 to 180° and does not wrap, so it
   uses the ordinary colormap, not the cyclic one used for Phase.
 
+(cap-vdiff-calc)=
+
+## How it is calculated
+
+For a sample $V_k$ in a time window holding $n$ unflagged samples (of
+one baseline, channel and correlation), the reference is the mean of the
+*other* samples:
+
+$$M_k = \frac{1}{n-1}\sum_{j \ne k} V_j$$
+
+$$\text{Amp V Diff} = \lvert V_k - M_k\rvert,
+\qquad
+\text{Phase Diff} = \lvert \arg(V_k\,M_k^{*})\rvert \ \text{(degrees, 0 to 180)}$$
+
+- **Blank values.** A window with fewer than two unflagged samples gives
+  no value. Phase Diff is also blank where $M_k = 0$, which has no
+  direction.
+- **Window.** It is a scan, or consecutive lengths of so many seconds
+  from the start of each scan (`stat_time_window`), and never spans
+  scans. Leaving the window off means a scan.
+- **Cells.** A raster cell shows the mean of its samples' values. How
+  several baselines in a cell are combined is in
+  {ref}`cap-averaging-calc`.
+- **Weights.** All samples count equally (the data weights are not
+  used), both in $M_k$ and in the cell mean.
+
+For example, in a window with amplitudes 1, 1, 1 and 5 (all at the same
+phase):
+
+- Each of the three 1s is compared with the mean of the other three
+  samples, 7/3, which gives 1.33.
+- The 5 is compared with the mean of the three 1s, which is 1, and
+  gives 4.
+
+If the sample were included in its own mean, the 5 would be compared
+with 2 and read 3.
+
 ## From Python
 
 ```python

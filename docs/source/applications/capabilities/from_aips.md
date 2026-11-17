@@ -43,9 +43,9 @@ welcome, especially for rows marked *Different*.
 | DISPLAY STOKES | `raster_corr` | Partial | One correlation, or the parallel hands averaged; no conversion to Stokes | {ref}`Plots <cap-plots>` | |
 | AMPLITUDE, PHASE | `raster_qty="AMPLITUDE"`, `"PHASE"` | Same | Vector averaged by default; scalar available | {ref}`Quantities <cap-quantities>` | |
 | RMS, RMS/MEAN (scalar amplitude) | | Not yet | Requested | {ref}`Phase stability <cap-phasestab-limits>` | |
-| VECT RMS, VRMS/VAVG | `PHASE_RMS`, `COHERENCE` | Different | `visplot` measures the steadiness of *phase*: the RMS of phase, and vector over scalar amplitude | {ref}`Phase stability <cap-phasestab>` | |
-| AMP V DIFF | `raster_qty="AMP_VDIFF"` | Different | Compared with the mean of the *other* samples in the window (the sample itself is left out); the windows are fixed blocks | {ref}`Difference <cap-vdiff>` | |
-| PHASE DIFF | `raster_qty="PHASE_DIFF"` | Different | As for AMP V DIFF | {ref}`Difference <cap-vdiff>` | |
+| VECT RMS, VRMS/VAVG | `PHASE_RMS`, `COHERENCE` | Different | `visplot` measures the steadiness of *phase*: the RMS of phase, and vector over scalar amplitude | {ref}`Phase stability <cap-phasestab-calc>` | |
+| AMP V DIFF | `raster_qty="AMP_VDIFF"` | Different | Compared with the mean of the *other* samples in the window (the sample itself is left out); the windows are fixed blocks | {ref}`Difference <cap-vdiff-calc>` | |
+| PHASE DIFF | `raster_qty="PHASE_DIFF"` | Different | As for AMP V DIFF | {ref}`Difference <cap-vdiff-calc>` | |
 | AMPL DIFF (scalar amplitude difference) | | Not yet | | {ref}`Difference <cap-vdiff-limits>` | |
 | DPARM(4): divide by the source's flux density | | Not yet | | | |
 :::
@@ -57,10 +57,16 @@ welcome, especially for rows marked *Different*.
 |---|---|---|---|---|---|
 | DPARM(6): master grid interval | | N/A | Rasters are drawn at the data's own integrations | {ref}`Averaging <cap-averaging>` | |
 | ENTER SMOOTH TIME (in multiples of DPARM(6)) | | Not yet | Requested: averaging by a number of integrations. Raster cells cannot yet be averaged in time | {ref}`Averaging <cap-averaging-limits>` | |
-| ENTER SCAN TIME (window for the DIFF displays) | `stat_time_window` | Different | A scan (the default) or a length in seconds, not in integrations | {ref}`Difference <cap-vdiff>` | |
+| Averages weighted by the data weights | | Different | `visplot` does not use the weights: every unflagged sample counts equally | {ref}`Averaging <cap-averaging-calc>` | |
+| ENTER SCAN TIME (window for the DIFF displays) | `stat_time_window` | Different | A scan (the default) or a length in seconds, not in integrations | {ref}`Difference <cap-vdiff-calc>` | |
 :::
 
 ## TVFLG: flagging
+
+The *reaches* widen a box the way TVFLG's flagging switches do. The
+baseline, spectral-window, scan and field reaches apply to a raster box
+with the *All selected* filter; with other filters only the channel and
+correlation reaches apply (see {ref}`cap-flagging-calc`).
 
 :::{container} crosswalk
 | AIPS | visplot | Status | Notes | See | Reviewed |
@@ -131,7 +137,7 @@ Everything above for TVFLG applies, with these differences:
 |---|---|---|---|---|---|
 | Baselines to one antenna against time | stepping through antennas, with a Baseline × Time raster or a time series | Different | | {ref}`Selection <cap-selection>` | |
 | Second data set, or second observable (DOTWO) | two panels | Partial | Two panels show two observables of the *same* data set | {ref}`Plots <cap-plots>` | |
-| SHOW COHERENCE | `COHERENCE` | Different | `visplot` gives vector over scalar amplitude, from 0 to 1 (1 is fully coherent) | {ref}`Phase stability <cap-phasestab>` | |
+| SHOW COHERENCE | `COHERENCE` | Different | `visplot` gives vector over scalar amplitude, from 0 to 1 (1 is fully coherent) | {ref}`Phase stability <cap-phasestab-calc>` | |
 :::
 
 ## Display tasks
@@ -156,7 +162,7 @@ Everything above for TVFLG applies, with these differences:
 :::{container} crosswalk
 | AIPS | visplot | Status | Notes | See | Reviewed |
 |---|---|---|---|---|---|
-| RFLAG (statistical flagging) | Z-Score; the *Z-Score*, *Outlier from neighbours* and *Amplitude outlier* flag filters | Different | Interactive: the filters act within a box that is drawn | {ref}`Z-Score <cap-zscore>` | |
+| RFLAG (statistical flagging) | Z-Score; the *Z-Score*, *Outlier from neighbours* and *Amplitude outlier* flag filters | Different | Interactive: the filters act within a box that is drawn | {ref}`Flagging <cap-flagging-calc>` | |
 | CLIP (by limits) | *Value range* flag filter | Partial | Within a box | {ref}`Flagging <cap-flagging>` | |
 | UVFLG (flags from a list) | | Not yet | Flags can be exported as JSON | {ref}`Flagging <cap-flagging>` | |
 :::

@@ -54,9 +54,10 @@ for rows marked *Different*.
 | `avgtime` | `scatter_avg_time` | Different | Seconds or `"scan"`, per plot. Never across a scan boundary. A raster cell instead averages what it covers | {ref}`Averaging <cap-averaging>` | |
 | `avgchannel` | `scatter_avg_chan` | Same | A number of channels, or `"all"` | {ref}`Averaging <cap-averaging>` | |
 | `avgscan`, `avgfield` | | Not yet | Time averaging never crosses scans or fields | {ref}`Averaging <cap-averaging-limits>` | |
-| `avgbaseline` | `baseline_combine` | Different | Rasters only: the baselines in a cell are combined as mean, median, maximum or coherent | {ref}`Averaging <cap-averaging>` | |
+| `avgbaseline` | `baseline_combine` | Different | Rasters only: the baselines in a cell are combined as mean, median, maximum or coherent | {ref}`Averaging <cap-averaging-calc>` | |
 | `avgantenna`, `avgspw` | | Not yet | | {ref}`Averaging <cap-averaging-limits>` | |
 | `scalar` | `averaging="scalar"` | Same | `"vector"` is the default, as in plotms | {ref}`Averaging <cap-averaging>` | |
+| averages weighted by the data weights | | Different | `visplot` does not use the weights: every unflagged sample counts equally | {ref}`Averaging <cap-averaging-calc>` | |
 :::
 
 ## Transformations
@@ -75,7 +76,7 @@ for rows marked *Different*.
 |---|---|---|---|---|---|
 | `extendflag`, `extcorr` | `flag_reach="correlations"` | Same | | {ref}`Flagging <cap-flagging>` | |
 | `extchannel` | `flag_reach="channels"` | Same | | {ref}`Flagging <cap-flagging>` | |
-| | `flag_reach`: baselines, spectral windows, scan, fields | (more) | Reaches plotms does not have | {ref}`Flagging <cap-flagging>` | |
+| | `flag_reach`: baselines, spectral windows, scan, fields | (more) | Reaches plotms does not have; for a raster box with the *All selected* filter | {ref}`Flagging <cap-flagging-calc>` | |
 :::
 
 ## Iteration and grids
@@ -111,7 +112,7 @@ for rows marked *Different*.
 | `interval`, `row`, `observation`, `intent`, `feed1`, `feed2`, `flagrow` | | Not yet | | | |
 | `azimuth`, `elevation`, `hourang`, `parang` | | Not yet | | {ref}`Plots <cap-plots-limits>` | |
 | antenna-based and calibration axes (`ant-azimuth`, `gainamp`, `delay`, `tsys`, ...) | | Not yet | | | |
-| | `PHASE_RMS`, `COHERENCE`, `AMP_VDIFF`, `PHASE_DIFF`, `Z_SCORE` | (more) | Quantities plotms does not have | {ref}`Quantities <cap-quantities>` | |
+| | `PHASE_RMS`, `COHERENCE`, `AMP_VDIFF`, `PHASE_DIFF`, `Z_SCORE` | (more) | Quantities plotms does not have | {ref}`Quantities <cap-quantities-calc>` | |
 :::
 
 ## Display

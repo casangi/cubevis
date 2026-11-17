@@ -36,7 +36,7 @@ extensions = [ 'sphinx.ext.todo',
 source_suffix = { '.rst': 'restructuredtext', '.md': 'markdown' }
 
 # MyST: ::: fences for admonitions, definition lists, and #anchors on headings
-myst_enable_extensions = [ 'colon_fence', 'deflist' ]
+myst_enable_extensions = [ 'colon_fence', 'deflist', 'dollarmath' ]
 myst_heading_anchors = 3
 
 # Where the "from the Python source" labels and slide "source" links point.

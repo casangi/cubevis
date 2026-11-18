@@ -2213,7 +2213,10 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
 
         scans = info.get("scan_names") or []
         if scans:
-            parts.append(f"<b>Scan:</b> {', '.join(scans)}")
+            # Sorted, ranges, at most five pieces (2026-11-18): see
+            # selection_text.format_scan_list.
+            from .selection_text import format_scan_list
+            parts.append(f"<b>Scan:</b> {format_scan_list(scans)}")
 
         pairs = info.get("antenna_pairs") or []
         if pairs:

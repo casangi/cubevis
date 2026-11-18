@@ -194,6 +194,62 @@ _RE_DAYN = re.compile(r"(\d{1,3})/" + _TOD + r"$")
 _RE_TOD = re.compile(_TOD + r"$")
 
 
+def _scan_sort_key(name):
+    """Numeric scans in numeric order ("2" before "10"), then any
+    non-numeric scan names, alphabetically."""
+    t = str(name).strip()
+    return (0, int(t), "") if t.isdigit() else (1, 0, t)
+
+
+def format_scan_list(scans: Sequence, limit: Optional[int] = 5) -> str:
+    """A list of scans as a short, sorted text for a readout.
+
+    Pre-preview feedback (2026-11-18): the cursor readout listed every
+    scan behind a cell, in the order the partitions reported them
+    ("10, 11, ..., 19, 2, 20, ...") and at any length.  Now:
+
+    * sorted numerically, duplicates dropped;
+    * runs of consecutive numbers written as ranges in the Scan box's own
+      syntax, ``a~b`` -- ``"2~45"`` -- so nothing is lost and the list
+      (the text before any "(N scans)") can be typed back into the box.  A range is used only
+      where every scan in it is present: ``min~max`` alone would hide
+      gaps;
+    * when more than *limit* pieces (single scans or ranges) remain, the
+      first ones are kept and the count of all scans is given:
+      ``"2~10, 12, 15, 17, 20, ... (42 scans)"``.  ``limit=None`` never
+      shortens (a summary table, where completeness matters more than
+      width).
+
+    The count is added whenever a range or a cut hides how many scans
+    there are.
+    """
+    names = sorted({str(s).strip() for s in scans if str(s).strip()},
+                   key=_scan_sort_key)
+    if not names:
+        return ""
+    pieces: list[str] = []
+    i = 0
+    while i < len(names):
+        j = i
+        if names[i].isdigit():
+            while (j + 1 < len(names) and names[j + 1].isdigit()
+                   and int(names[j + 1]) == int(names[j]) + 1):
+                j += 1
+        # Two in a row read better as "4, 5" than as "4~5".
+        if j - i >= 2:
+            pieces.append(f"{names[i]}~{names[j]}")
+        else:
+            pieces.extend(names[i:j + 1])
+        i = j + 1
+    shortened = limit is not None and len(pieces) > limit
+    text = ", ".join(pieces[:limit] if shortened else pieces)
+    if shortened:
+        text += ", \u2026"
+    if shortened or len(pieces) != len(names):
+        text += f" ({len(names)} scan{'s' if len(names) != 1 else ''})"
+    return text
+
+
 def _tod_seconds(h, m, s) -> float:
     h, m = int(h), int(m)
     s = float(s) if s else 0.0

@@ -44,11 +44,13 @@ from bokeh.models import ColumnDataSource
 
 import dataclasses
 from .visibility_plot import _composite_flag_mask
+from .visibility_plot import _CV_SET_BUSY_JS
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
 )
 from ..gridplot.panel_spec import ColorBand, PanelSpec
 from ..gridplot import colormap_scaling as _cms
+from . import colormap_sync as _csync
 from .data.reader import (
     CHANNEL_AXIS_ATTR, CHANNEL_REF_ATTR,
     _agg_value, _cell_bounds, channel_range_to_freq,
@@ -1029,6 +1031,18 @@ class VisibilityRaster(VisibilityPlot):
         counts, edges = np.histogram(finite, bins=bins)
         return counts, edges
 
+    def colormap_state(self) -> dict:
+        """What the color-scaling controls should show now: this
+        raster's histogram and scaling settings (``colormap_sync``).
+        Sent with every Plot response and live scaling reply, so the
+        controls follow the picture rather than what was drawn when the
+        sidebar was built."""
+        counts, edges = self.histogram()
+        return _csync.colormap_state(
+            counts, edges, scaling=self._scaling,
+            alpha=self._scaling_alpha, gamma=self._scaling_gamma,
+            vmin=self._scaling_vmin, vmax=self._scaling_vmax)
+
     def colormap_controls(self):
         """Return a Bokeh widget column for scaling / range controls.
 
@@ -1243,6 +1257,13 @@ class VisibilityRaster(VisibilityPlot):
         # rendered.
         reset_button_col = column(Spacer(height=19), reset_button)
 
+        # Threshold uses only the lower cutoff (2026-11-18): one line
+        # and one field, titled "cutoff" -- see colormap_sync.
+        if self._scaling == "threshold":
+            max_span.visible = False
+            max_input.visible = False
+            min_input.title = "cutoff"
+
         controls = column(
             scaling_select,
             equation,
@@ -1250,6 +1271,21 @@ class VisibilityRaster(VisibilityPlot):
             hist_fig,
             row(reset_button_col, min_input, max_input),
         )
+
+        # Sync source (colormap_sync, 2026-11-18): the Plot response and
+        # the live scaling replies write this raster's colormap_state()
+        # here, and every control above follows.
+        cmap_sync = _csync.sync_source()
+        self._cmap_sync = [cmap_sync]
+        cmap_sync.js_on_change("data", CustomJS(
+            args={"hist_source": hist_source, "min_span": min_span,
+                  "max_span": max_span, "min_input": min_input,
+                  "max_input": max_input, "scaling_select": scaling_select,
+                  "alpha_input": alpha_input, "gamma_input": gamma_input,
+                  "equation": equation,
+                  "equations": {k: _cms.scaling_equation_label(k)
+                                for k in _cms.ALL_SCALINGS}},
+            code=_csync.APPLY_JS))
 
         if self._comm is None:
             # No comm channel (e.g. static/offline construction) --
@@ -1295,24 +1331,35 @@ class VisibilityRaster(VisibilityPlot):
     } else {
         console.warn('[visplot colormap] response had no image:', resp);
     }
-"""
+""" + _csync.APPLY_REPLY_JS
 
         scaling_js = CustomJS(
             args={
                 "comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                 "equation": equation, "alpha_input": alpha_input,
                 "gamma_input": gamma_input, "equations": equations,
+                "cmap_sync": cmap_sync, "min_span": min_span,
+                "max_span": max_span, "min_input": min_input,
+                "max_input": max_input,
             },
             code=f"""
 const s = cb_obj.value;
 alpha_input.visible = (s === 'log' || s === 'power');
 gamma_input.visible = (s === 'gamma');
 equation.text = equations[s] || s;
+{_csync.THRESHOLD_JS}
 // Set by the plotter when it only shows a scaling that Plot applies
-// (a drill-down from the grid, gridplot G3): nothing to send.
+// (a drill-down from the grid, gridplot G3), and by colormap_sync when a
+// reply only shows the display's own scaling: nothing to send.
+{_csync.QUIET_GUARD_JS}
 if (window.__cvQuietScaling) return;
 console.log('[visplot colormap] sending:', {{scaling: s}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{scaling: s}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1325,12 +1372,18 @@ comm.send('{msg_update_scaling}', {{scaling: s}}, function(resp) {{
             Non-numeric input is silently ignored (matches the old
             Python callbacks' try/except ValueError: pass behaviour)."""
             return CustomJS(
-                args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div},
+                args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
+                      "cmap_sync": cmap_sync},
                 code=f"""
 const v = parseFloat(cb_obj.value);
 if (isNaN(v)) return;
 console.log('[visplot colormap] sending:', {{{field_key}: v}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1355,7 +1408,7 @@ comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
                 args={"paired_input": paired_input},
                 code="""
 if (cb_obj.location == null || isNaN(cb_obj.location)) return;
-paired_input.value = cb_obj.location.toFixed(6);
+paired_input.value = String(parseFloat(Number(cb_obj.location).toPrecision(6)));
 """,
             )
 
@@ -1376,14 +1429,19 @@ paired_input.value = cb_obj.location.toFixed(6);
             `location` above."""
             return CustomJS(
                 args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
-                      "paired_input": paired_input},
+                      "paired_input": paired_input, "cmap_sync": cmap_sync},
                 code=f"""
 if (cb_obj.dragging) return;  // only act when the drag just ENDED
 const v = cb_obj.location;
 if (v == null || isNaN(v)) return;
-paired_input.value = v.toFixed(6);
+paired_input.value = String(parseFloat(Number(v).toPrecision(6)));
 console.log('[visplot colormap] sending (span release):', {{{field_key}: v}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1396,13 +1454,18 @@ comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
             is a standard widget event, already confirmed reachable."""
             return CustomJS(
                 args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
-                      "paired_span": paired_span},
+                      "paired_span": paired_span, "cmap_sync": cmap_sync},
                 code=f"""
 const v = parseFloat(cb_obj.value);
 if (isNaN(v)) return;
 paired_span.location = v;
 console.log('[visplot colormap] sending (field submit):', {{{field_key}: v}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1424,14 +1487,16 @@ comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
             args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                   "min_span": min_span, "max_span": max_span,
                   "min_input": min_input, "max_input": max_input,
-                  "hist_lo": hist_lo, "hist_hi": hist_hi},
+                  "hist_source": hist_source, "cmap_sync": cmap_sync},
             code=f"""
-min_span.location = hist_lo;
-max_span.location = hist_hi;
-min_input.value = hist_lo.toFixed(6);
-max_input.value = hist_hi.toFixed(6);
+{_csync.RESET_EDGES_JS}
 console.log('[visplot colormap] sending (reset):', {{reset_range: true}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -2623,6 +2688,10 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             "scaling_gamma": self._scaling_gamma,
             "scaling_vmin":  self._scaling_vmin,
             "scaling_vmax":  self._scaling_vmax,
+            # The controls follow from this (colormap_sync): a Reset on
+            # a Z-Score threshold, say, comes back with the automatic
+            # cutoff rather than the histogram's edge.
+            "cmap":          self.colormap_state(),
             "image":         src["image"][0],
             "x0":            src["x"][0],
             "x1":            src["x"][0] + src["dw"][0],

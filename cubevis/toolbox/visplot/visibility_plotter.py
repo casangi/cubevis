@@ -113,6 +113,7 @@ from ..gridplot.raster_grid import normalize_baseline_order
 from .data._raster_stats import normalize_chan_window, normalize_time_window
 from .data._scatter_average import normalize_avg_chan, normalize_avg_time
 from . import antenna_baseline_select as _abs
+from . import colormap_sync as _cms_sync
 from .antenna_baseline_select import SELECTION_PAYLOAD_JS as _SELECTION_PAYLOAD_JS
 from .data_format import MSV2 as _MSV2, detect_data_format, resolve_data_args
 from .selection_text import (SelectionTextError, parse_scan_text, parse_field_text,
@@ -157,6 +158,12 @@ _PANEL_HEIGHT_OVER = 280    # each panel height in over/under mode
 
 _SECTION_DARK      = "#cdd6f4"
 _SECTION_LIGHT     = "#1e293b"
+
+# Muted text in the color-scaling controls (the equation label).  Dark
+# keeps the tone the label always had; light is a mid-dark grey that
+# reads as secondary on the light sidebar.
+_CMAP_TEXT_DARK    = "#a6adc8"
+_CMAP_TEXT_LIGHT   = "#4c4f69"
 """Sidebar section-heading colors.
 
 Previously hardcoded inline at construction with nothing able to change
@@ -210,7 +217,7 @@ _STATIC_HINTS = {
     "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: one cell per baseline over time and channels, mirrored, so a bad antenna is a whole row and column (the Ant\u00d7Ant preset); the two Antenna axes only go together  | Y and X must differ  | Which correlation is shown: <b>Correlation shown</b>, below",
     "r_qty": "<b>Raster quantity</b> \u2014 what the color shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
     "scaling": "<b>Color scaling</b> \u2014 how values are spread over the colors; changes the picture, never the data  | <b>eq_hist</b> uses every color equally and shows faint structure, but distances between colors mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
-    "bcombine": "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Median</b>: the middle baseline at each cell: what most baselines share, unmoved by a few bad ones. A feature that shows in Maximum but not in Median is on a few baselines (find and flag those); one in both is on most of them  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Coherent</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low  | Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline",
+    "bcombine": "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Median</b>: the middle baseline at each cell: what most baselines share, unmoved by a few bad ones. A feature that shows in Maximum but not in Median is on a few baselines (find and flag those); one in both is on most of them  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Vector (coherent)</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low. Offered only with Vector averaging  | Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline",
     "border": "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out; the baselines that have data are drawn side by side either way  | <b>By number</b>: in the order of the Baseline table; baselines to one antenna sit together  | <b>By length</b>: shortest first, and the ticks read the length. Trouble that grows along the axis is then about distance (atmosphere, a source that is resolved); trouble in scattered columns is about particular antennas  | The cursor readout names the baseline and its length in both",
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
     # ---- scatter gear tab
@@ -355,6 +362,21 @@ def _NO_DATA_FORMATTER():
     return HTMLTemplateFormatter(template=(
         "<% if (has_data === 0) { %><span style=\"opacity:0.45\">"
         "<%- value %> (no data)</span><% } else { %><%- value %><% } %>"))
+
+
+#: "Baselines combined" choices (value, label).  "coherent" keeps its
+#: value (config, constructor, presets) under the clearer label.
+_BCOMBINE_OPTIONS = [("mean", "Mean"), ("median", "Median"),
+                     ("max", "Maximum"), ("coherent", "Vector (coherent)")]
+
+# Averaging changed (cb_obj, the Averaging Select): "Vector (coherent)" is
+# offered only with Vector averaging; a coherent choice falls back to Mean.
+_BCOMBINE_SCALAR_JS = """
+const scalar = (cb_obj.value === 'scalar');
+const opts = scalar ? all_opts.filter(o => o[0] !== 'coherent') : all_opts;
+if (scalar && rm_sel.value === 'coherent') rm_sel.value = 'mean';
+rm_sel.options = opts.map(o => [o[0], o[1]]);
+"""
 
 
 #: The Y axes of the two panels of a _PAIR_PRESETS view, slot A then B.
@@ -2202,6 +2224,87 @@ if (window.__cvConnPoll == null) {
 """
 
 
+# Orphaned-twin guard for text inputs (2026-11-18).  Adding a gear tab
+# makes Bokeh build two views of each widget in it; one is never
+# rendered (see the 2026-09 tabs-orphan notes at gear_click_js, and the
+# Select / RadioButtonGroup / CheckboxGroup / DataTable guards in
+# __cvInstallSelectViewGuard).  TextInput had no guard.  Its view's
+# connect_signals() (Bokeh 3.10, TextLikeInputView) installs
+# `() => this.input_el.value = this.model.value`, and input_el is only
+# made in render() -- so on the orphan, ANY write to a gear-tab text
+# field's value threw "Cannot set properties of undefined (setting
+# 'value')" and ended the CustomJS that wrote it.  Seen on TW Hya
+# (Bokeh 3.10): dragging a colormap line moved the line and sent the new
+# bound, but its min/max field never changed, and every reply that sets
+# the fields (colormap_sync) threw the same way.
+#
+# Same remedy as the CheckboxGroup guard: wrap connect_signals() so a
+# view with no input_el yet gets a detached placeholder <input> before
+# the handlers exist.  render() -> _render_input() assigns the real one,
+# so only the never-rendered view keeps the placeholder.  Patched on
+# TextLikeInputView's prototype (found through the model registry, so no
+# rendered instance is needed): TextInput, TextAreaInput, PasswordInput
+# and AutocompleteInput all inherit it.
+_TEXT_INPUT_VIEW_GUARD_JS = """
+if (!window.__cvTextInputViewGuarded) {
+    try {
+        const V = Bokeh.Models.get('TextInput').prototype.default_view;
+        const P = Object.getPrototypeOf(V.prototype);   // TextLikeInputView
+        const orig = P.connect_signals;
+        if (typeof orig === 'function') {
+            P.connect_signals = function() {
+                if (this.input_el == null) this.input_el = document.createElement('input');
+                return orig.apply(this, arguments);
+            };
+            window.__cvTextInputViewGuarded = true;
+        }
+    } catch (e) {
+        console.warn('[visplot] TextInput view guard not installed:', e);
+    }
+}
+"""
+
+
+# Once per page: any text input the pointer moves over or the keyboard
+# focus reaches gets autocomplete="off" (_install_no_autofill).  The
+# event's composedPath() starts at the <input> inside Bokeh's (open)
+# shadow roots.
+_NO_AUTOFILL_PAGE_JS = """
+if (!window.__cvNoAutofillPage) {
+    window.__cvNoAutofillPage = true;
+    const TEXTUAL = ['', 'text', 'number', 'search'];
+    const fix = (el) => {
+        if (el && el.tagName === 'INPUT'
+                && TEXTUAL.indexOf((el.getAttribute('type') || '').toLowerCase()) >= 0
+                && el.getAttribute('autocomplete') !== 'off') {
+            el.setAttribute('autocomplete', 'off');
+        }
+    };
+    const mark = (e) => {
+        try {
+            // The pointer usually enters the widget's own container (a
+            // DIV in its FIELDSET) rather than the <input>: look inside
+            // the first few elements of the path too, where a container
+            // holds only its one widget's inputs.
+            const path = e.composedPath ? e.composedPath() : [e.target];
+            for (const el of path.slice(0, 4)) {
+                if (!el || !el.tagName) continue;
+                if (el.tagName === 'INPUT') { fix(el); continue; }
+                const inner = el.querySelectorAll ? el.querySelectorAll('input') : [];
+                if (inner.length && inner.length <= 3) inner.forEach(fix);
+            }
+        } catch (_) { /* a missing nicety, never an error */ }
+    };
+    // pointerdown: the press that would open the browser's list (it
+    // reaches the <input> itself, before focus); mouseover and focusin
+    // mark earlier where they can (hover, keyboard Tab).
+    document.addEventListener('pointerdown', mark, true);
+    document.addEventListener('mouseover', mark, true);
+    document.addEventListener('focusin', mark, true);
+}
+"""
+
+
 _THEME_RESTYLE_JS = """
 // Each block below is wrapped by _step() so that one failure cannot
 // silently abort the rest.  This body has grown by accretion -- figures,
@@ -2225,6 +2328,18 @@ _step('section headings', () => {
     for (const d of section_divs) {
         if (!d || !d.text) continue;
         d.text = d.text.replace(/color:#[0-9a-fA-F]{3,8}/, 'color:' + _sc);
+    }
+});
+
+// --- color-scaling equation labels (2026-11-18) ----------------------
+// Colored through Div.styles (not inline markup in .text, which the
+// scaling dropdown rewrites): see _style_cmap_column.
+_step('cmap equation labels', () => {
+    if (typeof cmap_text_divs === 'undefined' || !cmap_text_divs) return;
+    const _c = light ? cmap_text_light : cmap_text_dark;
+    for (const d of cmap_text_divs) {
+        if (!d) continue;
+        d.styles = Object.assign({}, d.styles || {}, {color: _c});
     }
 });
 
@@ -2586,10 +2701,9 @@ if (sel) {
     const _col = cb_obj.color;
     if (_col && _col.scaling) {
         window.__cvDrillColor = {id: [panel0_id, panel1_id][_pi], color: _col};
-        try {
-            window.__cvQuietScaling = true;
-            if (_pw.cm_scale) _pw.cm_scale.value = _col.scaling;
-        } catch (e) {} finally { window.__cvQuietScaling = false; }
+        // Quietly (colormap_sync.quiet_set_js): a flag cleared in
+        // `finally` is already clear when the asynchronous CustomJS runs.
+        try { """ + _cms_sync.quiet_set_js("_pw.cm_scale", "_col.scaling") + """ } catch (e) {}
         const _fmt = v => (v == null || !isFinite(v)) ? null : String(parseFloat(Number(v).toPrecision(6)));
         for (const [k, v] of [['cm_alpha', _col.alpha], ['cm_gamma', _col.gamma],
                               ['cm_min', _col.vmin], ['cm_max', _col.vmax]]) {
@@ -4509,6 +4623,40 @@ class VisibilityPlotter:
         except Exception as exc:                      # noqa: BLE001 -- a missing nicety
             log.debug("connection status in the busy chip not installed: %s", exc)
 
+    def _install_text_input_view_guard(self) -> None:
+        """Guard text-input views that Bokeh builds but never renders
+        (``_TEXT_INPUT_VIEW_GUARD_JS``), once per page, at load -- before
+        any gear tab is added, which is when such views are made.
+        Non-fatal if unavailable."""
+        try:
+            from bokeh.events import DocumentReady
+            from bokeh.io import curdoc
+            from bokeh.models import CustomJS
+            curdoc().js_on_event(DocumentReady, CustomJS(code=_TEXT_INPUT_VIEW_GUARD_JS))
+        except Exception as exc:                      # noqa: BLE001
+            log.debug("text input view guard not installed: %s", exc)
+
+    def _install_no_autofill(self) -> None:
+        """Stop the browser offering its form history ("80", "90", ...) in
+        every text field of the page (pre-preview feedback, 2026-11-18).
+
+        Bokeh's ``TextInput`` has no property for the ``<input>``'s
+        ``autocomplete`` attribute, and the inputs live in shadow roots
+        built when each widget is first shown (gear tabs add theirs
+        later), so per-widget wiring at construction cannot reach them
+        all; ``antenna_baseline_select.NO_AUTOFILL_JS`` did it for the
+        three selection text boxes only.  This installs, once per page,
+        two capturing listeners (``_NO_AUTOFILL_PAGE_JS``) that mark any
+        text input the pointer or the keyboard focus reaches, before the
+        browser decides to show its list.  Non-fatal if unavailable."""
+        try:
+            from bokeh.events import DocumentReady
+            from bokeh.io import curdoc
+            from bokeh.models import CustomJS
+            curdoc().js_on_event(DocumentReady, CustomJS(code=_NO_AUTOFILL_PAGE_JS))
+        except Exception as exc:                      # noqa: BLE001 -- a missing nicety
+            log.debug("page-wide autocomplete=off not installed: %s", exc)
+
     def _apply_startup_theme(self, layout) -> None:
         """Run the theme restyle once at document load, if starting light.
 
@@ -4627,6 +4775,8 @@ for (const dt of other.tools) {
         # Last, so every model the restyle touches already exists.
         self._apply_startup_theme(inner_layout)
         self._install_connection_status()
+        self._install_no_autofill()
+        self._install_text_input_view_guard()
 
     # ====================================================================== #
     # Stage 1b.5 — slot lookup + Stage 1b compatibility properties           #
@@ -6075,6 +6225,10 @@ for (const dt of other.tools) {
                                if axes_changed else None,
                     "title":   panel._effective_title() if axes_changed else None,
                     "state":   panel._state_data()      if axes_changed else None,
+                    # The color-scaling controls follow the picture
+                    # (colormap_sync, 2026-11-18): always sent, since the
+                    # histogram changes with the data, not only the axes.
+                    "cmap":    self._cmap_states(panel),
                 }
 
             else:  # kind == "scatter"
@@ -6285,6 +6439,9 @@ for (const dt of other.tools) {
                     # the gear tab's selectors (info_panel.py).
                     "legend_html":   panel._legend_content.text,
                     "colorbar_html": panel._update_colorbar(),
+                    # One entry per layer (colormap_sync): see the raster
+                    # branch.
+                    "cmap":          self._cmap_states(panel),
                 }
 
         # Part 5d: a categorical layer whose every value is unchecked draws
@@ -7261,6 +7418,20 @@ html, body { height: 100%; margin: 0; }
                       self._flag_preview_box,
                       sizing_mode="stretch_both")
 
+    @staticmethod
+    def _cmap_states(panel) -> list:
+        """*panel*'s color-scaling control states for a Plot response
+        (``colormap_sync``): a list, one per set of controls -- one for a
+        raster, one per layer for a scatter.  Never raises: a failure
+        here must not cost the plot, only the controls' refresh."""
+        try:
+            if hasattr(panel, "colormap_states"):
+                return panel.colormap_states()
+            return [panel.colormap_state()]
+        except Exception:                                   # noqa: BLE001
+            log.debug("colormap state failed", exc_info=True)
+            return []
+
     def _style_cmap_column(self, cmap_col, dark_stylesheet) -> tuple:
         """Apply dark styling to every themeable element in a colormap column.
 
@@ -7368,11 +7539,25 @@ html, body { height: 100%; margin: 0; }
                 # re-wrapped in an outer span each time this method
                 # runs (styling is reapplied on every dark/light toggle
                 # and every rebuild, not just once at construction).
+                #
+                # 2026-11-18 (pre-preview feedback): plain-text Divs (the
+                # equation label) are colored through the Div's own
+                # ``styles`` rather than an inline <span> in ``.text``.
+                # The scaling dropdown's CustomJS rewrites
+                # ``equation.text`` with the bare equation string on every
+                # change, which dropped the span -- and its color -- so
+                # the label fell back to the page's default black on the
+                # dark sidebar.  ``styles`` sits on the host element and
+                # survives any ``.text`` assignment; the theme restyle
+                # updates it (``cmap_text_divs``).
                 if node.text and not node.text.startswith(("<span", "<div", "<i")):
-                    node.text = (
-                        f"<span style='color:#a6adc8;font-size:11px'>"
-                        f"{node.text}</span>"
-                    )
+                    node.styles = {**dict(node.styles or {}),
+                                   "color": _CMAP_TEXT_DARK,
+                                   "font-size": "11px"}
+                    if not hasattr(self, "_cmap_text_divs"):
+                        self._cmap_text_divs = []
+                    if node not in self._cmap_text_divs:
+                        self._cmap_text_divs.append(node)
             # Walk children of layout containers
             children = getattr(node, "children", None)
             if children:
@@ -7458,12 +7643,26 @@ html, body { height: 100%; margin: 0; }
         # Baselines combined (HRS H4, 2026-10-07): what a cell does
         # with several baselines when Baseline is not a plot axis.  Per
         # slot, read at Plot-press time.
+        #
+        # "Vector (coherent)" (2026-11-18, pre-preview feedback): named
+        # for what it is -- the samples of every baseline averaged
+        # together by the Averaging rule.  That is a coherent sum only
+        # with Vector averaging; with Scalar it is a plain mean of
+        # amplitudes, so the choice is withdrawn while Averaging is
+        # Scalar (_BCOMBINE_SCALAR_JS).  The data layer still accepts
+        # the combination from Python (test_baseline_combine pins what
+        # it computes); only the GUI stops offering it.
+        _rm_opts = list(_BCOMBINE_OPTIONS)
+        if slot.raster.averaging == "scalar" and slot.raster.baseline_combine != "coherent":
+            _rm_opts = [o for o in _rm_opts if o[0] != "coherent"]
         rm_sel = Select(
             title="Baselines combined", value=slot.raster.baseline_combine,
-            options=[("mean", "Mean"), ("median", "Median"),
-                     ("max", "Maximum"), ("coherent", "Coherent")],
+            options=_rm_opts,
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        ra_sel.js_on_change("value", CustomJS(
+            args={"rm_sel": rm_sel, "all_opts": [list(o) for o in _BCOMBINE_OPTIONS]},
+            code=_BCOMBINE_SCALAR_JS))
         # Slope removal (HRS H2, 2026-10) for Phase RMS / Coherence:
         # take out the residual delay / rate before measuring scatter,
         # or leave it in to see it.  Same arrangement as ra_sel: per
@@ -10129,6 +10328,22 @@ function doPlot(reload) {
         if (p0 && p0.state != null) { p0_state.data = p0.state; }
         if (p1 && p1.state != null) { p1_state.data = p1.state; }
 
+        // Color-scaling controls (colormap_sync, 2026-11-18): the
+        // histogram, min/max lines and fields and the scaling dropdown
+        // follow what was just drawn.  Each set of controls has its own
+        // sync source; writing it runs colormap_sync.APPLY_JS.
+        try {
+            const _cm = [[p0, p0_kind, panel0_raster_cmap_sync, panel0_scatter_cmap_sync],
+                         [p1, p1_kind, panel1_raster_cmap_sync, panel1_scatter_cmap_sync]];
+            for (const [p, k, rs, ss] of _cm) {
+                if (!p || !Array.isArray(p.cmap)) continue;
+                const srcs = (k === 'raster') ? rs : ss;
+                for (let i = 0; i < p.cmap.length && i < (srcs || []).length; i++) {
+                    if (srcs[i] && p.cmap[i]) srcs[i].data = {state: [p.cmap[i]]};
+                }
+            }
+        } catch (e) { console.warn('[visplot] color controls refresh failed:', e); }
+
         // An axis drawn in whole positions (a raster's Baseline axis:
         // the state's x_cat / y_cat hold its tick texts) has labels
         // only at whole numbers, so keep its ticks there once zoomed
@@ -10717,6 +10932,13 @@ function doPlot(reload) {
             "panel1_scatter_img_src": self._slots[1].scatter._image_source,
             "panel1_scatter_state":   self._slots[1].scatter._state_source,
             "panel1_scatter_layout":  self._slots[1].scatter.layout,
+            # Color-scaling control sync sources (colormap_sync,
+            # 2026-11-18): one per set of controls, filled from each
+            # panel's resp.panels[id].cmap.
+            "panel0_raster_cmap_sync":  [m for m in getattr(self._slots[0].raster, "_cmap_sync", None) or [] if m is not None],
+            "panel0_scatter_cmap_sync": list(getattr(self._slots[0].scatter, "_cmap_sync", None) or []),
+            "panel1_raster_cmap_sync":  [m for m in getattr(self._slots[1].raster, "_cmap_sync", None) or [] if m is not None],
+            "panel1_scatter_cmap_sync": list(getattr(self._slots[1].scatter, "_cmap_sync", None) or []),
         }
 
         plot_js = CustomJS(
@@ -11549,6 +11771,12 @@ doPlot();
                 # disabled on light; the table stayed light-on-white on
                 # dark).
                 "section_divs":   self._section_divs,
+                # Equation labels in the color-scaling controls
+                # (2026-11-18): colored through Div.styles, see
+                # _style_cmap_column.
+                "cmap_text_divs":  list(getattr(self, "_cmap_text_divs", [])),
+                "cmap_text_dark":  _CMAP_TEXT_DARK,
+                "cmap_text_light": _CMAP_TEXT_LIGHT,
                 "section_dark":   _SECTION_DARK,
                 "section_light":  _SECTION_LIGHT,
                 "spw_table":       self._spw_table,
@@ -11849,12 +12077,6 @@ if (x != null && !isNaN(x)) {
             } else if (sy_label && sy_label === p_y_label && y != null && !isNaN(y)) {
                 p.hspan.location = y;
             }
-
-            console.log('[visplot cursor-span]', p.id,
-                        'p_x_label:', p_x_label, 'p_y_label:', p_y_label,
-                        'sx_label:', sx_label, 'sy_label:', sy_label,
-                        'vspan.location:', p.vspan.location,
-                        'hspan.location:', p.hspan.location);
         }
     }
 }
@@ -11985,7 +12207,7 @@ if (x != null && !isNaN(x)) {
         # what each one does and when to use it.  Fixed text, so filled
         # here; attached to the controls by _hover().
         self._hint_rcorr      = _hint("<b>Correlation shown</b> \u2014 a raster shows one correlation at a time  | <b>First ticked</b>: the first one ticked in the Data section, named in the title  | <b>Parallel hands</b>: the mean of the two parallel hands, (XX+YY)/2 or (RR+LL)/2, the Stokes I-like view AIPS editors start from; a sample counts only where both hands are unflagged, and a flag box here flags both  | A product: that one, whether ticked or not  | Two panels on RR and LL show a problem in one hand only")
-        self._hint_averaging  = _hint("<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities, then take amplitude / phase. Amplitude drops where samples do not line up (noise, uncalibrated phase, a delay across the averaged channels). What AIPS and plotms do  | <b>Scalar</b>: average the amplitudes themselves; shows signal plus noise level, no loss from decorrelation  | Vector next to Scalar on two panels shows where coherence is lost")
+        self._hint_averaging  = _hint("<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities, then take amplitude / phase. Amplitude drops where samples do not line up (noise, uncalibrated phase, a delay across the averaged channels). The default in AIPS and plotms, which both offer scalar averaging too  | <b>Scalar</b>: average the amplitudes themselves; shows signal plus noise level, no loss from decorrelation  | Vector next to Scalar on two panels shows where coherence is lost")
         self._hint_detrend    = _hint("<b>Phase slope</b> \u2014 for Phase RMS and Coherence  | <b>Remove</b>: take out a linear phase slope (a delay across frequency, a rate in time) before measuring the scatter, wherever the data clearly show one. Use for data that are not yet fringe-fitted  | <b>Keep</b>: measure the data as they are; a delay or rate then shows up as large scatter and low coherence  | On noise-dominated or already calibrated data the two give the same picture")
         self._hint_twin       = _hint("<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, one scan where it is not  | <b>Off</b>: no windows  | <b>Scan</b> or a length: each scan, or pieces of that length; never across a gap  | For <b>Amp V Diff / Phase Diff</b> it is the stretch the reference mean is taken over (Auto and Off mean one scan)  | Longer windows are steadier but blur changes in time; on the plot they show as blocks")
         self._hint_cwin       = _hint("<b>Channel window</b> \u2014 how many channels each Phase RMS / Coherence value is measured within  | <b>Off</b>: the whole band where frequency is not a plot axis, single channels where it is  | A number: blocks of that many channels  | Needed, with a time window or alone, to see these quantities on a Time \u00d7 Channel waterfall")

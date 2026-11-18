@@ -544,7 +544,10 @@ class TestRealPlotter:
         hint = plotter._hint_bcombine
         text = hint.text
         assert text.startswith("<b>Baselines combined</b>")
-        for word in ("<b>Mean</b>", "<b>Median</b>", "<b>Maximum</b>", "<b>Coherent</b>",
+        # "Vector (coherent)": renamed from "Coherent" (2026-11-18,
+        # pre-preview feedback) and offered only with Vector averaging.
+        for word in ("<b>Mean</b>", "<b>Median</b>", "<b>Maximum</b>",
+                     "<b>Vector (coherent)</b>", "Offered only with Vector averaging",
                      "every selected baseline"):
             assert word in text
         assert hint in plotter._hint_divs()

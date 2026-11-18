@@ -20,6 +20,25 @@ visplot(vis="twhya_selfcal_contsub_ms", field="5", spw="0")
 Each tool can do its work on the data on another computer, with only its
 window on yours.
 
+To open this documentation, for the version of `cubevis` you have
+installed, from Python or CASA:
+
+```python
+import cubevis
+
+cubevis.docs()               # or a page: cubevis.docs('visplot')
+```
+
+The pages it knows by name are `'install'`, `'visplot'`, `'iclean'` and
+`'remote'`. `docs()` opens the documentation of your `cubevis` release
+(1.2.x opens the 1.2 documentation) when it is published, and this, the
+latest documentation, otherwise. It uses the browser named by the
+`BROWSER` environment variable, or your system's. In a Jupyter notebook it
+opens no browser, since the notebook's Python may be running on another
+computer; it shows the address as a link instead. It always returns the
+address, and `cubevis.docs(launch=False)` returns it without opening
+anything.
+
 ## User guide
 
 For astronomers using the tools.

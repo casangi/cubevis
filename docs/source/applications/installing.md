@@ -34,3 +34,5 @@ from cubevis import visplot      # or: from cubevis import iclean
 
 The applications are loaded on first use, so an import error for a missing
 package appears here and names the package.
+
+`cubevis.docs()` then opens the documentation for the version installed.

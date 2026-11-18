@@ -61,13 +61,15 @@ else:
 # ``python -m cubevis.setup`` and other light tools do not need
 # (2026-10-19).  ``from cubevis import visplot`` and ``cubevis.iclean`` work
 # as before.
-_LAZY_APPS = ("iclean", "visplot")
+# ``cubevis.docs()`` (cubevis/_docs.py) is imported the same way, by name, so
+# the kernel fingerprint's import closure does not include it (2026-11-17).
+_LAZY_APPS = {"iclean": ".private.apps", "visplot": ".private.apps", "docs": "._docs"}
 
 
 def __getattr__(name):
     if name in _LAZY_APPS:
         import importlib
-        mod = importlib.import_module(".private.apps", __name__)
+        mod = importlib.import_module(_LAZY_APPS[name], __name__)
         value = getattr(mod, name)
         globals()[name] = value
         return value

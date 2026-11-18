@@ -1,0 +1,9 @@
+{#- Previews of docs-* branches are not for search engines (conf.py sets
+    docs_noindex); every copy names the latest page as canonical. -#}
+{% extends "!base.html" %}
+{%- block extrahead -%}
+{{ super() }}
+{%- if docs_noindex %}
+    <meta name="robots" content="noindex, nofollow">
+{%- endif %}
+{%- endblock -%}

@@ -129,7 +129,7 @@ Instructions for the `inp` / `go` interface will be added here.
 ## All other parameters
 
 The remaining parameters set the initial state of controls that are in
-the window: how raster cells are averaged, the statistics windows, colour
+the window: how raster cells are averaged, the statistics windows, color
 maps and flagging. They are listed here for reference; most sessions do
 not need them.
 

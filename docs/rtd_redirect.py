@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write redirect pages for Read the Docs (see docs/readthedocs-redirect.yaml).
+"""Write redirect pages for Read the Docs (see .readthedocs.yaml).
 
     python docs/rtd_redirect.py OUTDIR [SITE]
 
@@ -7,7 +7,9 @@ For every page of the documentation (each .md or .rst under docs/source
 that Sphinx builds) this writes OUTDIR/<page>.html, a page that forwards
 to SITE/<page>.html.  SITE defaults to https://casangi.github.io/cubevis.
 Pages that Read the Docs published before the documentation was
-reorganised are listed in MOVED, so their links keep working too.
+reorganised are listed in MOVED, so their links keep working too, and
+OUTDIR/404.html (which Read the Docs serves for any other address)
+forwards to the front page.
 
 Standard library only.
 """
@@ -36,7 +38,9 @@ PAGE = """<!doctype html>
 <meta http-equiv="refresh" content="0; url={url}">
 <script>location.replace("{url}" + location.hash);</script>
 </head><body>
-<p>The cubevis documentation has moved to <a href="{url}">{url}</a>.</p>
+<p>The cubevis documentation has moved to <a href="{url}">{url}</a>.
+The casagui package that it once described is no longer developed;
+cubevis replaces it.</p>
 </body></html>
 """
 
@@ -60,7 +64,8 @@ def main(argv):
         dest.parent.mkdir(parents=True, exist_ok=True)
         url = f"{site}/" if target == "index" else f"{site}/{target}.html"
         dest.write_text(PAGE.format(url=url), encoding="utf-8")
-    print(f"{len(targets)} redirect pages written to {out}")
+    (out / "404.html").write_text(PAGE.format(url=f"{site}/"), encoding="utf-8")
+    print(f"{len(targets)} redirect pages and 404.html written to {out}")
 
 
 if __name__ == "__main__":

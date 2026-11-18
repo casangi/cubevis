@@ -125,10 +125,29 @@ documentation, the slides, `scripts/sync_layers` or a documented source
 file changes. When a task from another source file is documented, add
 that file to the two `paths` lists in the workflow.
 
-- On `main`, and on branches named `docs-*`, the result is published to
-  <https://casangi.github.io/cubevis/>.
-- On a pull request the site is built and attached to the workflow run as
-  an artifact, and is not published.
+Several copies of the documentation are published side by side, all
+reachable from the *Version* menu under the sidebar title:
 
-There is one published site per repository, so a `docs-*` branch replaces
-what `main` published until `main` is built again.
+| Copy | Address | Made by |
+|---|---|---|
+| latest | <https://casangi.github.io/cubevis/> | every documentation change on `main` |
+| a release | `https://casangi.github.io/cubevis/v1.2/` | the first `v1.2.x` tag; later `v1.2.x` tags replace it |
+| a preview | `https://casangi.github.io/cubevis/dev/docs-<name>/` | creating or pushing to a `docs-<name>` branch |
+
+Releases are kept per major and minor version only: `v1.2.0`, `v1.2.1`, ...
+all publish to `v1.2/`, so the 1.2 documentation is that of the newest
+1.2 release (set `CUBEVIS_DOCS_PATCH_UPDATES` to `"0"` in the workflow to
+keep the copy the first 1.2 tag made instead). Releases and previews show a
+banner pointing to the latest copy; previews are hidden from search
+engines.
+
+To show documentation changes to other people before they are merged,
+work on a branch named `docs-<something>`. Its preview appears under
+`dev/` a minute or two after the branch is pushed, is rebuilt on each
+push, and is removed when the branch is deleted. On a pull request the
+site is also built and attached to the workflow run as the `docs-site`
+artifact.
+
+The published site lives on the `gh-pages` branch, which
+`docs/publish_site.py` rewrites as a single commit each time; it is never
+edited by hand.

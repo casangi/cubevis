@@ -17,7 +17,10 @@ $ make html                      # result: build/html/index.html
 | `source/extensions/pydoc_include.py` | the `task-doc`, `task-params` and `slide-decks` directives |
 | `source/conf.py` | Sphinx configuration |
 | `requirements.txt` | what the build needs |
-| `readthedocs-redirect.yaml`, `rtd_redirect.py` | for switching Read the Docs over to redirects (see the comments in each) |
+| `publish_site.py` | places a build into the published site (latest, releases, `docs-*` previews); used by the workflow |
+| `rtd_redirect.py` | what Read the Docs publishes: a page for each old page forwarding to the same page here |
 
 Publishing is done by `.github/workflows/docs.yml`; the slide decks in
-`devel/slides` are published with it. See `source/contributing.md`.
+`devel/slides` are published with it. See *Publishing* in
+`source/contributing.md` for the published copies (latest, releases and
+`docs-*` branch previews).

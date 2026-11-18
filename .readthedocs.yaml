@@ -1,20 +1,16 @@
 # Read the Docs configuration: https://docs.readthedocs.io/en/stable/config-file/v2.html
 #
-# Read the Docs builds the same Sphinx source as GitHub Pages
-# (.github/workflows/docs.yml).  When https://casangi.github.io/cubevis/ is
-# ready to be the only copy, replace this file with
-# docs/readthedocs-redirect.yaml: every page here then forwards to the same
-# page there.
+# The cubevis documentation is published on GitHub Pages
+# (.github/workflows/docs.yml).  https://cubevis.readthedocs.io/ only
+# forwards there: Read the Docs runs docs/rtd_redirect.py instead of Sphinx,
+# which writes one small page for every page of the documentation, each
+# forwarding to the same page on https://casangi.github.io/cubevis/, so
+# existing links and bookmarks keep working.
 version: 2
-
-sphinx:
-   configuration: docs/source/conf.py
 
 build:
   os: ubuntu-24.04
   tools:
     python: "3.12"
-
-python:
-   install:
-   - requirements: docs/requirements.txt
+  commands:
+    - python docs/rtd_redirect.py "$READTHEDOCS_OUTPUT/html"

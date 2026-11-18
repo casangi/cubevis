@@ -1,24 +1,27 @@
 # Builds the documentation (docs/, Sphinx) together with the slide decks
-# (devel/slides/) and publishes the result to GitHub Pages:
+# (devel/slides/) and publishes it to GitHub Pages from the gh-pages branch.
+# Several copies are published side by side (docs/publish_site.py):
 #
-#   https://casangi.github.io/cubevis/                      the documentation
-#   https://casangi.github.io/cubevis/<name>/slides.html    devel/slides/<name>/
+#   https://casangi.github.io/cubevis/                 latest: main
+#   https://casangi.github.io/cubevis/v<X.Y>/          each major.minor release
+#   https://casangi.github.io/cubevis/dev/<branch>/    each docs-* branch
+#   https://casangi.github.io/cubevis/<name>/slides.html   devel/slides/<name>/
+#                                                      (in every copy)
 #
-# Sphinx copies the slide decks into the site (html_extra_path in
-# docs/source/conf.py), so there is nothing slide-specific here.
+#   push to main                   rebuild latest
+#   tag vX.Y.Z                     make (or, for a patch tag, refresh) vX.Y
+#   create / push a docs-* branch  build its preview under dev/
+#   delete a docs-* branch         remove its preview
+#   pull request                   build only; the site is attached to the run
+#                                  as the "docs-site" artifact
+#   Run workflow (Actions tab)     as for a push to the chosen branch or tag
 #
-#   push to main or to a docs-* branch   build and publish
-#   pull request                         build only; the site is attached to
-#                                        the run as the "github-pages" artifact
+# Every copy has a version menu under the sidebar title; releases and
+# previews have a banner pointing at the latest copy.
 #
-# One-time setup:
-#   Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
-#   To publish from docs-* branches as well: Settings -> Environments ->
-#   github-pages -> Deployment branches and tags -> add "docs-*".
-#
-# There is one published site per repository: a docs-* branch replaces what
-# main published until main is built again (Actions -> Publish documentation
-# -> Run workflow, on main).
+# One-time setup, after the first run has created the gh-pages branch:
+#   Settings -> Pages -> Build and deployment -> Source: "Deploy from a
+#   branch", Branch: gh-pages, folder: / (root).
 name: Publish documentation
 
 on:
@@ -38,23 +41,56 @@ on:
       - "docs/**"
       - "devel/slides/**"
       - "scripts/sync_layers/**"
-      # sources whose docstrings the documentation includes
-      # (scripts/sync_layers/project_layers.yaml: sources[].file, documentation[].file)
       - "cubevis/toolbox/visplot/visibility_plotter.py"
       - "cubevis/private/casatasks/iclean.py"
       - ".github/workflows/docs.yml"
+  create:           # release tags, and a new docs-* branch at once (whatever it changes)
+  delete:           # a docs-* branch removed (runs the workflow on main)
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
-  cancel-in-progress: true
-
 jobs:
-  build:
+  target:
     runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.t.outputs.kind }}
+      name: ${{ steps.t.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: docs/publish_site.py
+          sparse-checkout-cone-mode: false
+      - id: t
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.event.ref_type || github.ref_type }}
+          REF_NAME: ${{ github.event.ref || github.ref_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            printf 'kind=pr\nname=%s\n' "$GITHUB_HEAD_REF" | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # create/delete give the bare name in github.event.ref
+          REF_NAME="${REF_NAME#refs/heads/}"; REF_NAME="${REF_NAME#refs/tags/}"
+          python3 docs/publish_site.py target "$REF_TYPE" "$REF_NAME" > target.txt
+          if [ "$EVENT" = delete ]; then
+            # only previews are removed; a deleted tag leaves its release
+            grep -q '^kind=dev$' target.txt && sed -i 's/^kind=dev$/kind=remove/' target.txt \
+              || printf 'kind=none\nname=\n' > target.txt
+          elif [ "$EVENT" = create ] && grep -q '^kind=latest$' target.txt; then
+            printf 'kind=none\nname=\n' > target.txt   # main is never "created"
+          fi
+          tee -a "$GITHUB_OUTPUT" < target.txt
+
+  build:
+    needs: target
+    if: contains(fromJSON('["latest","release","dev","pr"]'), needs.target.outputs.kind)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: docs-build-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -64,21 +100,74 @@ jobs:
           cache-dependency-path: docs/requirements.txt
       - run: pip install -r docs/requirements.txt
       - name: Build
-        run: python -m sphinx -b html --keep-going docs/source _site
-      - uses: actions/upload-pages-artifact@v3
+        env:
+          CUBEVIS_DOCS_KIND: ${{ needs.target.outputs.kind != 'pr' && needs.target.outputs.kind || '' }}
+          CUBEVIS_DOCS_NAME: ${{ needs.target.outputs.name }}
+        run: python -m sphinx -b html --keep-going -d _doctrees docs/source _site
+      - uses: actions/upload-artifact@v4
         with:
+          name: docs-site
           path: _site
+          retention-days: 7
 
-  deploy:
-    if: github.event_name != 'pull_request'
-    needs: build
+  publish:
+    needs: [target, build]
+    # a removal has no build; always() lets it through, the kind check keeps
+    # failed builds and pull requests out
+    if: >-
+      always() && needs.target.result == 'success' &&
+      ( (contains(fromJSON('["latest","release","dev"]'), needs.target.outputs.kind) && needs.build.result == 'success')
+        || needs.target.outputs.kind == 'remove' )
     runs-on: ubuntu-latest
     permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: write
     steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: docs/publish_site.py
+          sparse-checkout-cone-mode: false
+          path: src
+      - if: needs.target.outputs.kind != 'remove'
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-site
+          path: build
+      - name: Update gh-pages
+        env:
+          # "1": a patch tag (v1.2.4) replaces the v1.2 copy with its own
+          # documentation; "0": v1.2 stays as the first 1.2 tag made it
+          CUBEVIS_DOCS_PATCH_UPDATES: "1"
+          KIND: ${{ needs.target.outputs.kind }}
+          NAME: ${{ needs.target.outputs.name }}
+          REPO: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+        run: |
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # gh-pages keeps one commit (the site as it is now), so it stays
+          # small.  Other runs may publish at the same time: fetch, place this
+          # build, push only if gh-pages has not moved meanwhile, else retry.
+          for attempt in 1 2 3 4 5 6; do
+            rm -rf site; mkdir site
+            base=$(git ls-remote "$REPO" refs/heads/gh-pages | cut -f1)
+            if [ -n "$base" ]; then          # else this first run makes gh-pages
+              git -C site init -q
+              git -C site fetch -q --depth 1 "$REPO" "$base"
+              git -C site checkout -q FETCH_HEAD
+              rm -rf site/.git                 # the files are what is kept
+            fi
+            git -C site init -q -b publish
+            if [ "$KIND" = remove ]; then
+              python3 src/docs/publish_site.py remove site dev "$NAME"
+            else
+              python3 src/docs/publish_site.py add site build "$KIND" "$NAME" "$GITHUB_SHA"
+            fi
+            cd site
+            git add -A
+            git commit -q -m "Publish $KIND $NAME ($GITHUB_SHA)"
+            if git push -q --force-with-lease="refs/heads/gh-pages:$base" "$REPO" HEAD:refs/heads/gh-pages; then
+              echo "published"; exit 0
+            fi
+            cd ..
+            echo "gh-pages moved; retrying ($attempt)"; sleep $((attempt * 5))
+          done
+          exit 1

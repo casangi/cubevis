@@ -69,3 +69,25 @@ div.crosswalk table.docutils th:nth-child(4) { width: 30%; }
 div.crosswalk table.docutils th:nth-child(5) { width: 10%; }
 div.crosswalk table.docutils th:nth-child(6) { width: 10%; }
 div.crosswalk table.docutils td { overflow-wrap: anywhere; vertical-align: top; }
+
+/* The version menu under the sidebar title (_static/js/versions.js). */
+.cubevis-versions {
+    padding: 0 var(--sidebar-item-spacing-horizontal, 1rem) 0.6rem;
+}
+.cubevis-versions label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: var(--sidebar-item-font-size, 0.9rem);
+    color: var(--color-foreground-secondary);
+}
+.cubevis-versions select {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    color: var(--color-foreground-primary);
+    background: var(--color-background-secondary);
+    border: 1px solid var(--color-background-border);
+    border-radius: 4px;
+    padding: 0.15rem 0.3rem;
+}

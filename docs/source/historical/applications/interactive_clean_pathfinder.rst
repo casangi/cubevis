@@ -1,8 +1,14 @@
 
-Interactive Clean
-======================
+Interactive clean as a pathfinder
+=================================
 
-.. currentmodule:: applications
+.. note::
+
+   **Historical reference.**  This page describes the design and
+   implementation of the ``casagui`` package, as it stood after the
+   visualization trade study.  ``cubevis`` grew out of that work.  The page
+   is kept for reference and is not maintained; names, figures and plans in
+   it may no longer match ``cubevis``.  See :doc:`../index`.
 
 The visualization infrastructure of CASA will be built out by completing pathfinder
 applications. These applications will build team knowledge and expand our codebase
@@ -10,20 +16,6 @@ as we encounter new opportunities and challenges. Interactive clean is the first
 pathfinder application for the :ref:`terminal usage setting <design-terminal-usage>`.
 This is an important use case because it pushes the boundaries of what is possible
 in this usage setting.
-
-Running on the data's computer
-------------------------------
-
-Interactive clean can run :code:`tclean` and the image access in a Jupyter
-kernel on the computer that holds the data, with the window on your own
-computer (which then needs no CASA)::
-
-   from cubevis import iclean
-   iclean(vis="twhya.ms", imagename="twhya", ..., kernel_name="cvpost106-iclean")
-
-``iclean.notebook(..., kernel_name=...)`` does the same in a notebook.
-Setting up such a kernel, and what to know when using one, is described in
-:doc:`remote_kernels`.
 
 Infrastructure
 ----------------------
@@ -50,7 +42,7 @@ While we are only in the prototyping phase of the interactive clean application,
 prototyped a GUI that will go beyond what is currently possible with current
 implementations of interactive clean, as show in this figure:
 
-.. image:: _static/iclean_prototype_gui.png
+.. image:: ../_static/iclean_prototype_gui.png
            :width: 800px
 
 The interactive clean application has three main panel groups: control group, configuration group,

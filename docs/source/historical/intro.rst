@@ -3,6 +3,14 @@
 System Design
 ====================
 
+.. note::
+
+   **Historical reference.**  This page describes the design and
+   implementation of the ``casagui`` package, as it stood after the
+   visualization trade study.  ``cubevis`` grew out of that work.  The page
+   is kept for reference and is not maintained; names, figures and plans in
+   it may no longer match ``cubevis``.  See :doc:`index`.
+
 .. currentmodule:: design
 
 This design document describes the history, motivation and design of the cubevis
@@ -138,9 +146,9 @@ of specific tools and applications.
    :maxdepth: 3
    :caption: Applications:
 
+   applications/interactive_clean_pathfinder
    applications/interactive_clean
    boundary
-   ../python/cubevis
 
 .. toctree::
    :maxdepth: 3

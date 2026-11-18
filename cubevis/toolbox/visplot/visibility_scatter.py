@@ -70,8 +70,8 @@ from .visibility_plot import _composite_flag_mask
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
 )
-from .panel_spec import ColorBand, PanelSpec, CATEGORY_PRIORITY_CAPTIONS
-from . import colormap_scaling as _cms
+from ..gridplot.panel_spec import ColorBand, PanelSpec, CATEGORY_PRIORITY_CAPTIONS
+from ..gridplot import colormap_scaling as _cms
 from .data.reader import (ScatterLayerSpec, ScatterLayerReference, CATEGORY_PRIORITIES,
                           DEFAULT_CATEGORY_PRIORITY, EXCLUDED_DISPLAYS,
                           DEFAULT_EXCLUDED_DISPLAY,
@@ -147,7 +147,7 @@ _MIN_ALPHA = 90
 Datashader defaults to 40, which makes a single-point pixel nearly
 invisible against either background -- the low-end complaint that
 ``palettes.condition`` could only half-address, because conditioning
-moves the *colour* while alpha decides how much of it survives.
+moves the *color* while alpha decides how much of it survives.
 
 Measured against the dark ground with the conditioned ``polar[0]`` ramp,
 distance from background at the sparse end:
@@ -227,8 +227,8 @@ SPARSE_MIN_PX = 3.0
 def spread_sparse(img32: np.ndarray, px_per_bin: float) -> bool:
     """Grow the points of a sparse ARGB *img32* in place (see SPARSE_FILL).
 
-    An empty pixel takes the colour of a non-empty neighbour (edge
-    neighbours before corner ones); drawn pixels keep their own colour.
+    An empty pixel takes the color of a non-empty neighbour (edge
+    neighbours before corner ones); drawn pixels keep their own color.
     Returns True if the image was changed.
     """
     if img32 is None or img32.ndim != 2 or img32.size == 0:
@@ -989,7 +989,7 @@ class VisibilityScatter(VisibilityPlot):
             self._layer_continuous_cmap_backup[layer_index] = (
                 self._cmap_for_layer(layer_index, "continuous")
                 if lyr.coloring == "statistical" else lyr.cmap)
-            from . import palettes
+            from ..gridplot import palettes
             new_cmap = tuple(palettes.categorical_cmap(theme=self._theme_hint()))
         elif new_coloring in ("continuous", "statistical") and lyr.coloring == "categorical":
             # Restores the backed-up gradient cmap for EITHER mode a
@@ -1533,7 +1533,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         return wrap_title(title)
 
     def _panel_spec(self) -> PanelSpec:
-        """Describe this scatter: one colour band per ScatterLayer.
+        """Describe this scatter: one color band per ScatterLayer.
 
         One band per layer regardless of visibility, so band indices stay
         stable — the same invariant the probe envelope's ``layers`` list
@@ -3195,8 +3195,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
 
         A viewport (Level-2) query already returns everything the full one
         would refresh -- the full-data extent (``ScatterRenderResult.
-        x_range/y_range`` are resolved over ALL data), the global colour
-        scaling and colour-bar inputs (computed from all frames in
+        x_range/y_range`` are resolved over ALL data), the global color
+        scaling and color-bar inputs (computed from all frames in
         ``color_mode="global"``) -- plus the zoomed image and a reference
         for it.  The full-extent image and reference would be replaced at
         once.  So: refresh axis info, drop the stale references (forcing
@@ -4251,7 +4251,7 @@ for (const name in checklist_by_axis) {
         for i, lyr in enumerate(layers):
             if lyr.cmap is None:
                 if lyr.coloring == "categorical":
-                    from . import palettes
+                    from ..gridplot import palettes
                     cmap = tuple(palettes.categorical_cmap(theme=self._theme_hint()))
                 else:
                     cmap = self._cmap_for_layer(i, lyr.coloring)

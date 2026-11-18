@@ -274,8 +274,8 @@ def undo_redo():
         raise AssertionError(f"counts {b}")
 
 
-@step("display: show in colour (pending overlay on both panels)")
-def colour():
+@step("display: show in color (pending overlay on both panels)")
+def color():
     def co(vp):
         run(vp.flags.handle_action({"action": "config", "display": "color"}))
         shapes = []
@@ -284,7 +284,7 @@ def colour():
         run(vp.flags.handle_action({"action": "config", "display": "hide"}))
         return shapes
     a, b = both(co)
-    same(a, b, "colour-mode images")
+    same(a, b, "color-mode images")
 
 
 @step("user-supplied filter is refused cleanly on remote data")
@@ -446,7 +446,7 @@ def main():
         return summarize(t0)
     open_local()
     for fn in (metadata, first_render, pan_zoom, hover, infotool, axes, flag_raster,
-               flag_scatter, flag_zscore, rerender_pending, undo_redo, colour,
+               flag_scatter, flag_zscore, rerender_pending, undo_redo, color,
                user_filter, export, version_check, selection_fields, rows_refresh,
                summary, time_labels):
         fn()

@@ -163,7 +163,7 @@ def _coord_text(value, is_time: bool, unit: str = "") -> str:
         return str(value)
     if is_time:
         return _utc(v) + " UTC"
-    from .tick_format import si_scale
+    from ..gridplot.tick_format import si_scale
     s, u = si_scale(v, unit)
     return f"{s:.6g}" + (f" {u}" if u else "")
 
@@ -267,9 +267,20 @@ def reproducing_call(plotter) -> str:
     if getattr(plotter, "_autocorr", "exclude") != "exclude":
         args.append(("autocorr", plotter._autocorr))
     args.append(("datacolumn", getattr(plotter, "_datacolumn", "DATA").lower()))
-    args.append(("layout", getattr(plotter, "_layout", "side")))
+    if getattr(plotter, "_grid_on", False):
+        # the Grid layout (gridplot G2): what it iterates over, its page
+        args.append(("layout", "grid"))
+        if plotter._iterate_by != "baseline":
+            args.append(("iterate_by", plotter._iterate_by))
+        if tuple(plotter._grid_shape) != (3, 3):
+            args.append(("gridrows", plotter._grid_shape[0]))
+            args.append(("gridcols", plotter._grid_shape[1]))
+        if getattr(plotter, "_grid_color", "page") != "page":
+            args.append(("gridcolor", plotter._grid_color))
+    else:
+        args.append(("layout", getattr(plotter, "_layout", "side")))
     # Sizes only when not the layout's default (2026-10-13).
-    from .panel_sizes import size_value
+    from ..gridplot.panel_sizes import size_value
     for name, attr in (("row_height", "_row_height"), ("column_width", "_column_width")):
         v = size_value(getattr(plotter, attr, None))
         if v is not None:
@@ -307,8 +318,29 @@ def reproducing_call(plotter) -> str:
         rows.append(cur.rstrip())
         lines.extend(rows)
     lines.append("    ],")
+    if getattr(plotter, "_grid_on", False) and getattr(plotter, "_grid_slot", None) is not None:
+        # the grid's own panel (gridplot G3): what every cell repeats
+        lines.extend(_dict_lines("    grid_panel=dict(",
+                                 plotter.grid_panel_settings(), lit))
     lines.append(")")
     return "\n".join(lines)
+
+
+def _dict_lines(head: str, d: dict, lit) -> list:
+    """``head`` + ``k=v, ...`` + ``"),"``, wrapped at ~78 columns with the
+    continuation lines under the first key."""
+    items = [f"{k}={lit(v)}" for k, v in d.items()]
+    cur, rows, indent = head, [], " " * len(head)
+    for i, it in enumerate(items):
+        piece = it + ("," if i < len(items) - 1 else "),")
+        if len(cur) + len(piece) + 1 > 78 and not cur.endswith("("):
+            rows.append(cur.rstrip())
+            cur = indent
+        cur += piece + " "
+    if not items:
+        cur += "),"
+    rows.append(cur.rstrip())
+    return rows
 
 
 # ----------------------------------------------------------------------
@@ -424,11 +456,11 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
             ("Phase slope removed", "yes" if r.detrend else "no"),
             ("Statistic time window", str(r.stat_time_window)),
             ("Statistic channel window", str(r.stat_chan_window)),
-            ("Colour map", getattr(plotter, "_raster_cmap_name", "—")),
-            ("Colour scaling", str(getattr(r, "_scaling", "—"))),
-            ("Colour range", "automatic" if (r._scaling_vmin is None and r._scaling_vmax is None)
+            ("Color map", getattr(plotter, "_raster_cmap_name", "—")),
+            ("Color scaling", str(getattr(r, "_scaling", "—"))),
+            ("Color range", "automatic" if (r._scaling_vmin is None and r._scaling_vmax is None)
              else f"{r._scaling_vmin} – {r._scaling_vmax}"),
-            ("Colour mode", getattr(r, "_color_mode", "—")),
+            ("Color mode", getattr(r, "_color_mode", "—")),
         ]
         agg = getattr(r, "_agg", None)
         if agg is not None:
@@ -447,7 +479,7 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
             ("Averaging (vector / scalar)", s._averaging or plotter._averaging),
             ("Phase slope removed", "as the plotter" if s._detrend is None
              else ("yes" if s._detrend else "no")),
-            ("Colour map", getattr(plotter, "_scatter_cmap_name", "—")),
+            ("Color map", getattr(plotter, "_scatter_cmap_name", "—")),
         ]
     if spec is not None:
         rows.append(("Y extent (data)",
@@ -468,7 +500,7 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
     rows.append(("Time labels", getattr(plotter, "_time_labels", "utc")))
     rows.append(("Theme", getattr(plotter, "_theme", "dark")))
     # row_height / column_width (2026-10-13)
-    from .panel_sizes import size_text
+    from ..gridplot.panel_sizes import size_text
     rows.append(("Layout", {"one": "One panel", "side": "Side by Side",
                             "over": "Over / Under"}.get(getattr(plotter, "_layout", ""),
                                                         getattr(plotter, "_layout", ""))))
@@ -499,7 +531,7 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
     not_in_call = [
         "the zoom / pan shown (see Plot, above)",
         "pending flags (export them as JSON from the Flagging section)",
-        "scatter layer colour scaling and colourize settings",
+        "scatter layer color scaling and colorize settings",
         "the theme and panel sizes",
     ]
     return {

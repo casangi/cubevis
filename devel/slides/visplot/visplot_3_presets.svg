@@ -39,7 +39,7 @@
 <rect x="40" y="390" width="1520" height="53" rx="0" fill="#F3F5F8" stroke="none" stroke-width="1.5" />
 <rect x="52" y="402" width="85" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
 <text x="94.5" y="423" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Z-Score</text>
-<text x="204" y="412.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Raster Baseline × Time coloured by Z-Score ·</text>
+<text x="204" y="412.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Raster Baseline × Time colored by Z-Score ·</text>
 <text x="204" y="432.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Amplitude vs Time</text>
 <text x="674" y="422.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Samples unusual for their own baseline</text>
 <text x="1129" y="422.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>

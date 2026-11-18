@@ -66,7 +66,7 @@ of these. Two-panel states (Spectrum: Amplitude over Phase; any panel B
 different from the defaults) can only be reached by a `preset`, not
 written as arguments. Consequences: the plot summary cannot print "the
 `visplot(...)` call that reproduces this", and hardcopy cannot describe
-what to draw. Colour scaling limits, colormaps per layer, colouring
+what to draw. Color scaling limits, colormaps per layer, coloring
 mode and panel order are not arguments either.
 
 **F3. Headless export works for every preset.** On TW Hya 3c279,
@@ -155,7 +155,7 @@ hover help, constructor / task arguments, tests, notes.
 | # | Item | Size | Why before testing |
 |---|---|---|---|
 | A1 | **Scan / Time range / UV range selection made real** (F1): parse the CASA-style text (scan list and ranges, `t0~t1` in the format the help shows, `0~50klambda`, `100~300m`, `>200m`) into `SelectionSpec`; UV filter in both backends; applied by Plot like the other Data controls; bad text reported in the status area, not ignored | M | Testers will use them on the first day; today they silently do nothing |
-| A2 | **Per-panel arguments** (F2; decision 2): `panel_a` / `panel_b` in the constructor and task, through `sync_layers`; presets expressed through the same path; colour scaling limits and colormap per panel included | M | Prerequisite for A3's reproducing call and for B3; changes the task signature testers learn |
+| A2 | **Per-panel arguments** (F2; decision 2): `panel_a` / `panel_b` in the constructor and task, through `sync_layers`; presets expressed through the same path; color scaling limits and colormap per panel included | M | Prerequisite for A3's reproducing call and for B3; changes the task signature testers learn |
 | A3 | **Plot summary** (plan H8; decisions 3 and 4): per-panel toolbar action; a tab listing dataset (path, column, backend, local / remote), selection in full, axes and quantity, averaging and the H2 window settings, baselines combined, colormap and scaling limits, decimation, displayed range, rows / baselines drawn, pending flags count, cubevis version and git commit, and the `visplot(...)` call (from A2) that reproduces it; a Copy button for the call; settings with no argument listed as such | M | It is what testers attach to a report; it needs a toolbar slot before the refactor |
 | A4 | **Remove what does not work** (F5): Correlation from the raster axis lists; check every Select / argument for other "not implemented" answers | S | A tester should not find dead options |
 | A5 | **Tester essentials**: correct the guide's status and scope sections (F4); a "Reporting a problem" section (attach the summary); a commissioning workflow section (survey with Z-Score / Phase RMS / Ant×Ant, confirm on the waterfall, flag with reach, commit) written around what each view is for, so it survives the refactor; the control-by-control tour waits for the refactor | S-M | Testers need to know what to try and how to report |
@@ -308,19 +308,19 @@ Both ends, ◀ ▶ (+ text); Baseline table, ◀ ▶ (+ text); Time range
 
 **Sidebar, Flagging.** Filter (curated, with its settings); Preview each
 proposal; Flag reaches (baselines, channels, correlations, SPWs, scan,
-field); Reason; Pending flags display (hide / colour, colour); Show
-flagged data (colour); Undo / Redo / Clear; Describe pending flags;
+field); Reason; Pending flags display (hide / color, color); Show
+flagged data (color); Undo / Redo / Clear; Describe pending flags;
 Export / commit (JSON, write to MS, backups list).
 
 **Sidebar, Panels.** Pin layout; the gear tabs.
 
 **Gear tab, each panel.** Pin, ✕; Raster | Scatter; Swap. Raster: Y,
 X, quantity, Averaging, Baselines combined, Baseline order, Phase slope,
-Time window, Channel window, Colour scaling (histogram with draggable
-limits, min / max, reset), Info display (All, cursor tracking, colour
+Time window, Channel window, Color scaling (histogram with draggable
+limits, min / max, reset), Info display (All, cursor tracking, color
 bar). Scatter: X, Y, Average over time, over channels, Averaging, Phase
-slope, Time window, Channel window, Layer, Colour scaling per layer,
-Colourize (Continuous / Categorical / Statistical and their settings),
+slope, Time window, Channel window, Layer, Color scaling per layer,
+Colorize (Continuous / Categorical / Statistical and their settings),
 Info display.
 
 **Each figure's toolbar.** Pan, box zoom, wheel zoom (off by default),

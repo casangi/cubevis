@@ -26,7 +26,7 @@ everything (AIPS TVFLG style) and remains the default.
 | **Grow around flags** (new) | unflagged samples next to flagged ones (on disk or pending) | Grow along (time / channel / both), Samples | the weak edges of interference a cutoff misses; CASA `extend` |
 
 - **Value range** works on the panel's quantity, so the numbers typed
-  are those of the colour bar or axis: Amplitude, Phase (degrees), Real
+  are those of the color bar or axis: Amplitude, Phase (degrees), Real
   or Imaginary. On a panel showing anything else (Phase RMS, Z-Score,
   ...) it refuses with a message. On a scatter panel the layers must
   show one quantity. It replaces "Amplitude range" in the list;
@@ -34,7 +34,7 @@ everything (AIPS TVFLG style) and remains the default.
   saved before) but is not listed.
 - **Reference population** is no longer a control: "auto" (per
   spectral window on a raster, the whole selection on a scatter, as the
-  Z-Score colouring does) is always used.
+  Z-Score coloring does) is always used.
 
 ## How the neighbour filters work
 

@@ -47,20 +47,20 @@ from .visibility_plot import _composite_flag_mask
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
 )
-from .panel_spec import ColorBand, PanelSpec
-from . import colormap_scaling as _cms
+from ..gridplot.panel_spec import ColorBand, PanelSpec
+from ..gridplot import colormap_scaling as _cms
 from .data.reader import (
     CHANNEL_AXIS_ATTR, CHANNEL_REF_ATTR,
     _agg_value, _cell_bounds, channel_range_to_freq,
 )
-from . import raster_grid as _rg
-from .raster_grid import BaselineAxis, normalize_baseline_order
+from ..gridplot import raster_grid as _rg
+from ..gridplot.raster_grid import BaselineAxis, normalize_baseline_order
 from .axes import Axis
 from .data._antenna_matrix import ANTENNA_DIMS as _ANT_DIM_MAP
 
 #: Raster dimensions of the antenna x antenna matrix (HRS H7).
 _ANT_DIMS = tuple(_ANT_DIM_MAP.values())
-from . import palettes as _palettes
+from ..gridplot import palettes as _palettes
 from .selection import normalize_averaging, normalize_baseline_combine
 from .data._raster_average import combines_baselines
 from .data._raster_diff import DIFF_QUANTITIES, describe_diff_window
@@ -176,8 +176,8 @@ class _Detail:
     ``VisibilityRaster._agg`` always holds the aggregate of the whole
     selection.  When that had to be decimated and the user zooms in past
     its resolution, the zoomed region is queried again and kept here.
-    The full aggregate is never replaced, so zooming back out, colour
-    scaling, the colour bar, the axis ranges and the time origin all go
+    The full aggregate is never replaced, so zooming back out, color
+    scaling, the color bar, the axis ranges and the time origin all go
     on working from the whole selection.  See ``_ensure_detail``.
     """
     agg:          object            # DataArray, in the full raster's coordinates
@@ -1308,6 +1308,9 @@ const s = cb_obj.value;
 alpha_input.visible = (s === 'log' || s === 'power');
 gamma_input.visible = (s === 'gamma');
 equation.text = equations[s] || s;
+// Set by the plotter when it only shows a scaling that Plot applies
+// (a drill-down from the grid, gridplot G3): nothing to send.
+if (window.__cvQuietScaling) return;
 console.log('[visplot colormap] sending:', {{scaling: s}});
 comm.send('{msg_update_scaling}', {{scaling: s}}, function(resp) {{
 {_apply_image_js}
@@ -1438,7 +1441,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         return controls
 
     def _panel_spec(self) -> PanelSpec:
-        """Describe this raster: one colour band, the quantity.
+        """Describe this raster: one color band, the quantity.
 
         ``status`` is ``"empty"`` whenever ``_render()`` took its
         degenerate branch — a deferred panel, a sub-2-cell agg, an
@@ -1541,18 +1544,20 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         ``color_mode`` decides the reference exactly as in ``_shade_agg``:
         ``"global"`` anchors to ``self._agg`` (the full cached
-        aggregation) so colours stay put under zoom; ``"local"`` anchors
+        aggregation) so colors stay put under zoom; ``"local"`` anchors
         to the viewport crop.  A manual ``vmin``/``vmax`` override wins
         over both, again matching the shade.
         """
         from dataclasses import replace
-        from .colormap_scaling import ScalarMapping
+        from ..gridplot.colormap_scaling import ScalarMapping
 
         if self._agg is None or not spec.bands:
             return spec.bands
         crop = self._crop_agg(viewport) if viewport is not None else self._agg
         values = np.asarray((crop if crop is not None else self._agg).values)
-        reference = (np.asarray(self._agg.values)
+        shared = self._shared_reference
+        reference = (shared if shared is not None and shared.size
+                     else np.asarray(self._agg.values)
                      if self._color_mode == "global" else None)
         m = ScalarMapping.from_values(
             values, self._scaling,
@@ -1576,6 +1581,13 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             return None
 
     _QUERY_PATH = "raster"
+
+    _shared_reference: "Optional[np.ndarray]" = None
+    """Values this panel's colors are scaled against with others', or
+    ``None`` (its own).  Set by a grid (``VisGridSource``) whose cells
+    share a color range: the range, and for ``eq_hist`` the curve, come
+    from it -- a common scale needs common normalisation, not only a
+    common vmin/vmax.  A manual vmin/vmax still wins."""
 
     _degenerate_reason: "Optional[str]" = None
     """Why the last render produced a blank image, or ``None``.
@@ -1685,7 +1697,10 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             # change (neither touches either). Skipped under `defer`
             # since there's nothing to warm for a panel that isn't
             # even shown yet.
-            self._ensure_identity_tables(polarization=self._polarization)
+            # (Not for a grid's color sample, gridplot G3: it is never
+            # shown or probed, only its values are pooled.)
+            if not getattr(self, "_values_only", False):
+                self._ensure_identity_tables(polarization=self._polarization)
             # Elapsed-time labels count from the first cell's centre.
             self._x_origin, self._y_origin = float(x_range[0]), float(y_range[0])
             # Baselines side by side in this panel's order, then ranges
@@ -2289,7 +2304,12 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         Returns the raw Datashader ``Image`` (not yet converted to
         ``uint32``) — callers apply ``_img_to_uint32`` themselves.
         """
-        if self._color_mode == "global" and self._agg is not None:
+        shared = self._shared_reference
+        if shared is not None and shared.size:
+            # a grid's shared color range: the values of the cells
+            # colored together (finite already), whatever color_mode says
+            vmin, vmax = float(shared.min()), float(shared.max())
+        elif self._color_mode == "global" and self._agg is not None:
             finite = self._agg.values[np.isfinite(self._agg.values)]
             vmin = float(finite.min()) if finite.size else None
             vmax = float(finite.max()) if finite.size else None
@@ -2316,7 +2336,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         if self._scaling == "eq_hist":
             reference = (
-                self._agg.values
+                shared if shared is not None and shared.size
+                else self._agg.values
                 if self._color_mode == "global" and self._agg is not None
                 else None
             )
@@ -2407,7 +2428,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
     ) -> np.ndarray:
         """Draw a viewport from what is held: the detail aggregate when
         it covers the viewport and is fine enough for it, otherwise the
-        full one.  Colours are anchored to the full aggregate either
+        full one.  Colors are anchored to the full aggregate either
         way (``_shade_agg``), so they do not shift between the two."""
         x0, x1 = x_range
         y0, y1 = y_range

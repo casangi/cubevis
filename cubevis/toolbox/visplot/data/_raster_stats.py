@@ -813,7 +813,7 @@ def paint_phase_stat(vis: xr.DataArray, flag: xr.DataArray, quantity: Axis,
 
     Every sample carries the statistic of the window it belongs to
     (*spec*), taken separately for each baseline -- so the existing
-    per-sample scatter machinery (binning, hover, flags, colouring by
+    per-sample scatter machinery (binning, hover, flags, coloring by
     axis) plots it without knowing it is an aggregate.  Samples that
     share a window share a value and land on the same point (or, along
     an x axis that varies within the window, the same horizontal run).

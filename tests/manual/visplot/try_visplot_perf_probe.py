@@ -73,7 +73,7 @@ def main():
     sel = SelectionSpec(scan=a.scan.split(",") if a.scan else None)
     xa = Axis[a.x]; yaxes = [(Axis.AMPLITUDE, a.pol)]; n = a.repeat
 
-    print("== 1. _query_columns_raw (paid on EVERY call: plot, pan, zoom, recolour, export)")
+    print("== 1. _query_columns_raw (paid on EVERY call: plot, pan, zoom, recolor, export)")
     def raw():
         d = be._query_columns_raw(xa, yaxes, sel); r = list(d[yaxes[0]].columns); return d, r
     t, (d, cols) = best(raw, n); df = d[yaxes[0]]; rows = len(df); del d

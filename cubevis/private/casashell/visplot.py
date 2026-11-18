@@ -81,9 +81,15 @@ def _visplot_t(
         kind: Optional[str] = None,
         preset: Optional[str] = None,
         pin_layout: bool = False,
+        iterate_by: str = 'baseline',
+        gridrows: int = 3,
+        gridcols: int = 3,
+        gridcolor: str = 'page',
+        exprange: str = 'current',
         time_labels: str = 'utc',
         autocorr: str = 'exclude',
         panels: Optional[list] = None,
+        grid_panel: Optional[dict] = None,
         raster_y: Optional[str] = None,
         raster_x: Optional[str] = None,
         raster_qty: Optional[str] = None,
@@ -137,9 +143,15 @@ def _visplot_t(
         kind = kind,
         preset = preset,
         pin_layout = pin_layout,
+        iterate_by = iterate_by,
+        gridrows = gridrows,
+        gridcols = gridcols,
+        gridcolor = gridcolor,
+        exprange = exprange,
         time_labels = time_labels,
         autocorr = autocorr,
         panels = panels,
+        grid_panel = grid_panel,
         raster_y = raster_y,
         raster_x = raster_x,
         raster_qty = raster_qty,
@@ -313,14 +325,17 @@ class _visplot:
         ``scatter_avg_time``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
-        panels, side by side), or ``"over"`` (both panels, one above
-        the other). Default ``"side"``. ``"raster"``/``"scatter"`` are
+        panels, side by side), ``"over"`` (both panels, one above
+        the other), or ``"grid"`` (the first panel repeated once per
+        baseline, antenna, SPW, field, scan or correlation -- see
+        ``iterate_by``; a raster or a scatter). Default ``"side"``.
+        ``"raster"``/``"scatter"`` are
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
         an explicit, conflicting ``kind=`` raises ``ValueError``.
     row_height : int, str or list
         Height of each row of plots, in pixels: the plot with its axes,
-        not the readout and colour bars below it.  ``None`` (default):
+        not the readout and color bars below it.  ``None`` (default):
         550 for One and Side by Side, 280 for Over / Under.  ``"fit"``:
         the rows share the window's height (never less than 250 px).  A
         list gives one height per row (Over / Under has two).  The GUI's
@@ -355,6 +370,31 @@ class _visplot:
         Start with "Pin layout" ticked: presets (this ``preset`` and the
         toolbar buttons) keep the current layout -- ``layout`` -- instead
         of switching to their own.  Default ``False``.
+    iterate_by : str
+        What the Grid layout makes one plot of each: ``"baseline"``
+        (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
+        ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
+        selection, as plotms's ``iteraxis``.  Two axes, outer first,
+        make one plot of each pair: ``"antenna,spw"`` is each antenna's
+        SPWs in turn (not both baseline and antenna).  Every plot is drawn
+        as the grid's own panel is (``grid_panel``).
+    gridrows : int
+        Rows of plots on a page of the Grid layout (1-8, default 3).
+    gridcols : int
+        Columns of plots on a page of the Grid layout (1-8, default 3).
+    gridcolor : str
+        The Grid layout's color range: ``"page"`` (default), one range
+        for the plots on a page; ``"grid"``, one for every plot in the
+        grid, so that pages compare (found cell by cell in the
+        background; until then a page is colored by its own range);
+        ``"cell"``, each plot its own.  With ``eq_hist`` the plots that
+        share a range share its curve too.
+    exprange : str
+        Which pages of the Grid layout ``plotfile=`` writes: ``"current"``
+        (default: the first page, as plotms), ``"all"``, or page numbers
+        such as ``"2"`` or ``"1-3,5"``.  Several pages are written to
+        ``plotfile`` with ``_page01``, ``_page02``, ... before the
+        extension, unless the name contains ``{page}``.
     panels : list[dict] | None
         Each panel's configuration, in screen order: ``[{...}, {...}]``,
         one dict per panel, so that a two-panel view can be written as
@@ -366,7 +406,7 @@ class _visplot:
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
         ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
         ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
-        and ``vmax`` (its colour scale).  A key left out takes the value
+        and ``vmax`` (its color scale).  A key left out takes the value
         the flat argument (or ``preset``) gives that panel, so the flat
         arguments still describe the first panel; an unknown key raises.
         At most two panels for now.  ``layout`` still decides how many are
@@ -377,6 +417,19 @@ class _visplot:
                     dict(kind="scatter", scatter_x="FREQUENCY",
                          scatter_y="PHASE", scatter_avg_time="scan")],
             layout="over"
+    grid_panel : dict | None
+        The Grid layout's own panel: what every plot of the grid is
+        drawn as, apart from the panels -- so ``layout="grid"`` can start
+        with both the grid and the panels set up.  The keys of one
+        ``panels`` entry; a key left out takes the first panel's value.
+        Without it the grid starts as a copy of the first panel, made
+        the first time Grid is shown.  In the GUI it is "Grid panel" in
+        the Grid section; a tapped plot is shown in the first panel set up
+        as this one.  A raster or a scatter.  Example::
+
+            layout="grid", iterate_by="antenna",
+            grid_panel=dict(raster_y="TIME", raster_x="BASELINE",
+                            raster_qty="PHASE")
     autocorr : str
         Autocorrelations (baselines from an antenna to itself):
         ``"exclude"`` (default; cross-correlations only), ``"include"``
@@ -435,7 +488,7 @@ class _visplot:
         How pending flags are shown: ``"hide"`` (flagged points disappear,
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
-        Colour for pending flags when ``flag_display="color"``.
+        Color for pending flags when ``flag_display="color"``.
     flag_reach : str
         How far a flag box reaches beyond what is drawn, as the "Flag
         reaches" controls start: a comma-separated list of
@@ -454,18 +507,24 @@ class _visplot:
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
         default; toggled in the Flagging controls.
     flag_flagged_color : str
-        Colour for flagged data when ``flag_show_flagged`` is on.
+        Color for flagged data when ``flag_show_flagged`` is on.
     frame_cache_mb : float | None
         Budget (MiB) of the cache of scatter frames -- the decoded samples a
         scatter panel draws, flags and probes.  When a selection's frames do
         not fit, every redraw and flag operation re-reads them from the data
         (an INFO/WARNING line says so).  ``None`` (default): the
         ``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` environment variable if set, else
-        a tenth of physical memory, clamped to 256 MiB .. 4 GiB.  Remote
-        sessions apply it in the worker, where the frames live.  Example:
-        TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
-        about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
-        and a flag box took 3.6 s instead of 0.5 s.
+        by the host: a tenth of memory below 12 GiB; a quarter, at most
+        half of what is free and 16 GiB, above; on a host with 48 GiB or
+        more free (a compute node) 40 % of what is free, up to 64 GiB.  The
+        budget chosen is logged (INFO).  Remote sessions apply it in the
+        worker, where the frames live.  The Grid layout's rows held in
+        memory count in it: while they are held, frames and rows may take
+        it past the budget by ``CUBEVIS_VISPLOT_GRID_OVERFLOW`` percent
+        (default 25), no more.  Example: TW Hya with all fields
+        (2 x 31 M samples, ~1.5 GiB per frame) needs about 3-4 GiB; on a 24
+        GB Mac the old 2.4 GiB default evicted frames and a flag box took
+        3.6 s instead of 0.5 s.
     plotfile : str | None
         Write a PNG of the plot to this path instead of opening the GUI
         (the ``visplot`` task then returns the path).  Implies
@@ -529,13 +588,19 @@ class _visplot:
         'stat_chan_window': 'Channel window for the same statistic: ``"off"`` (default) or a number of channels.',
         'scatter_avg_time': 'Scatter points averaged over time, per baseline and correlation: ``"off"`` (default, every sample a point), ``"scan"``, or a number of seconds (windows from the start of each scan, never across a scan boundary).',
         'scatter_avg_chan': 'Scatter points averaged over channels: ``"off"`` (default), a number of channels, or ``"all"`` (one point per spectral window).',
-        'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
+        'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), ``"over"`` (both panels, one above the other), or ``"grid"`` (the first panel repeated once per baseline, antenna, SPW, field, scan or correlation -- see ``iterate_by``; a raster or a scatter).',
         'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
         'pin_layout': 'Start with "Pin layout" ticked: presets (this ``preset`` and the toolbar buttons) keep the current layout -- ``layout`` -- instead of switching to their own.',
+        'iterate_by': 'What the Grid layout makes one plot of each: ``"baseline"`` (default), ``"antenna"`` (each antenna\'s baselines), ``"spw"``, ``"field"``, ``"scan"`` or ``"correlation"`` -- within the selection, as plotms\'s ``iteraxis``.',
+        'gridrows': 'Rows of plots on a page of the Grid layout (1-8, default 3).',
+        'gridcols': 'Columns of plots on a page of the Grid layout (1-8, default 3).',
+        'gridcolor': 'The Grid layout\'s color range: ``"page"`` (default), one range for the plots on a page; ``"grid"``, one for every plot in the grid, so that pages compare (found cell by cell in the background; until then a page is colored by its own range); ``"cell"``, each plot its own.',
+        'exprange': 'Which pages of the Grid layout ``plotfile=`` writes: ``"current"`` (default: the first page, as plotms), ``"all"``, or page numbers such as ``"2"`` or ``"1-3,5"``.',
         'time_labels': 'How time axes and the cursor readout give time: ``"utc"`` (default; time of day, the date in the axis label, AIPS-style ``d/hh:mm:ss`` when the data cross a UTC midnight) or ``"elapsed"`` (minutes and seconds from the first sample).',
         'autocorr': 'Autocorrelations (baselines from an antenna to itself): ``"exclude"`` (default; cross-correlations only), ``"include"`` or ``"only"``.',
         'panels': "Each panel's configuration, in screen order: ``[{...}, {...}]``, one dict per panel, so that a two-panel view can be written as arguments (and the plot summary can print the call that reproduces what is on screen).",
+        'grid_panel': 'The Grid layout\'s own panel: what every plot of the grid is drawn as, apart from the panels -- so ``layout="grid"`` can start with both the grid and the panels set up.',
         'raster_y': '',
         'raster_x': '',
         'raster_qty': 'Explicit raster quantity (color axis), e.g.',
@@ -545,7 +610,7 @@ class _visplot:
         'freq_range': '``(start, end)`` in Hz.',
         'uvdist_range': '``(min, max)`` UV distance in metres, the programmatic form of ``uvrange``; shown in the UV range box as text.',
         'compact_toolbar': "Whether each figure's toolbar auto-hides until the mouse is over that plot.",
-        'row_height': 'Height of each row of plots, in pixels: the plot with its axes, not the readout and colour bars below it.',
+        'row_height': 'Height of each row of plots, in pixels: the plot with its axes, not the readout and color bars below it.',
         'column_width': 'Width of each column of plots, in pixels.',
         'theme': '',
         'raster_cmap': '',
@@ -554,9 +619,9 @@ class _visplot:
         'flag_filters': 'Extra flag filters, ``{name: callable | FlagFilter}``; each callable is ``func(ds, **params) -> bool mask`` (see ``flag_filters.py``).',
         'flag_preview': 'Review each flag proposal (counts, breakdown, highlighted samples) before it is added to the pending flags.',
         'flag_display': 'How pending flags are shown: ``"hide"`` (flagged points disappear, the default) or ``"color"`` (drawn in ``flag_color``).',
-        'flag_color': 'Colour for pending flags when ``flag_display="color"``.',
+        'flag_color': 'Color for pending flags when ``flag_display="color"``.',
         'flag_show_flagged': 'Also draw data that are currently flagged (on disk or pending) in ``flag_flagged_color``, so an Unflag box can select them.',
-        'flag_flagged_color': 'Colour for flagged data when ``flag_show_flagged`` is on.',
+        'flag_flagged_color': 'Color for flagged data when ``flag_show_flagged`` is on.',
         'flag_reach': 'How far a flag box reaches beyond what is drawn, as the "Flag reaches" controls start: a comma-separated list of ``shared-antenna`` (all baselines to the antenna the drawn baselines share), ``antennas`` (all baselines to every antenna of the drawn baselines), ``all-baselines``, ``channels``, ``spw`` (all selected spectral windows), ``scan`` (the whole scan), ``fields``, ``correlations``.',
         'flag_reason': 'Text stored with each flag made from now on (why it was flagged); shown in the report, saved in the JSON, written as ``reason=`` in exported flagdata commands.',
         'frame_cache_mb': 'Budget (MiB) of the cache of scatter frames -- the decoded samples a scatter panel draws, flags and probes.',
@@ -590,9 +655,15 @@ class _visplot:
         'kind': None,
         'preset': None,
         'pin_layout': False,
+        'iterate_by': 'baseline',
+        'gridrows': 3,
+        'gridcols': 3,
+        'gridcolor': 'page',
+        'exprange': 'current',
         'time_labels': 'utc',
         'autocorr': 'exclude',
         'panels': None,
+        'grid_panel': None,
         'raster_y': None,
         'raster_x': None,
         'raster_qty': None,
@@ -682,9 +753,15 @@ class _visplot:
             'kind': 'Optional[str]',
             'preset': 'Optional[str]',
             'pin_layout': 'bool',
+            'iterate_by': 'str',
+            'gridrows': 'int',
+            'gridcols': 'int',
+            'gridcolor': 'str',
+            'exprange': 'str',
             'time_labels': 'str',
             'autocorr': 'str',
             'panels': 'Optional[list]',
+            'grid_panel': 'Optional[dict]',
             'raster_y': 'Optional[str]',
             'raster_x': 'Optional[str]',
             'raster_qty': 'Optional[str]',
@@ -1190,6 +1267,81 @@ class _visplot:
             desc, fmt,
         )
 
+    def __iterate_by_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('iterate_by', self._arg_default['iterate_by'])
+        default = self._arg_default['iterate_by']
+        desc    = self._arg_description.get('iterate_by', '')
+        if self.__validate_('iterate_by', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('iterate_by', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __gridrows_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('gridrows', self._arg_default['gridrows'])
+        default = self._arg_default['gridrows']
+        desc    = self._arg_description.get('gridrows', '')
+        if self.__validate_('gridrows', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('gridrows', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __gridcols_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('gridcols', self._arg_default['gridcols'])
+        default = self._arg_default['gridcols']
+        desc    = self._arg_description.get('gridcols', '')
+        if self.__validate_('gridcols', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('gridcols', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __gridcolor_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('gridcolor', self._arg_default['gridcolor'])
+        default = self._arg_default['gridcolor']
+        desc    = self._arg_description.get('gridcolor', '')
+        if self.__validate_('gridcolor', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('gridcolor', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __exprange_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('exprange', self._arg_default['exprange'])
+        default = self._arg_default['exprange']
+        desc    = self._arg_description.get('exprange', '')
+        if self.__validate_('exprange', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('exprange', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     def __time_labels_inp(self):
         glb     = self.__globals_()
         value   = glb.get('time_labels', self._arg_default['time_labels'])
@@ -1232,6 +1384,21 @@ class _visplot:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
             '%-23.23s = %s%-23s%s' % ('panels', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __grid_panel_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('grid_panel', self._arg_default['grid_panel'])
+        default = self._arg_default['grid_panel']
+        desc    = self._arg_description.get('grid_panel', '')
+        if self.__validate_('grid_panel', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('grid_panel', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
@@ -1626,9 +1793,15 @@ class _visplot:
         if 'kind' in glb: del glb['kind']
         if 'preset' in glb: del glb['preset']
         if 'pin_layout' in glb: del glb['pin_layout']
+        if 'iterate_by' in glb: del glb['iterate_by']
+        if 'gridrows' in glb: del glb['gridrows']
+        if 'gridcols' in glb: del glb['gridcols']
+        if 'gridcolor' in glb: del glb['gridcolor']
+        if 'exprange' in glb: del glb['exprange']
         if 'time_labels' in glb: del glb['time_labels']
         if 'autocorr' in glb: del glb['autocorr']
         if 'panels' in glb: del glb['panels']
+        if 'grid_panel' in glb: del glb['grid_panel']
         if 'raster_y' in glb: del glb['raster_y']
         if 'raster_x' in glb: del glb['raster_x']
         if 'raster_qty' in glb: del glb['raster_qty']
@@ -1683,9 +1856,15 @@ class _visplot:
         self.__kind_inp()
         self.__preset_inp()
         self.__pin_layout_inp()
+        self.__iterate_by_inp()
+        self.__gridrows_inp()
+        self.__gridcols_inp()
+        self.__gridcolor_inp()
+        self.__exprange_inp()
         self.__time_labels_inp()
         self.__autocorr_inp()
         self.__panels_inp()
+        self.__grid_panel_inp()
         self.__raster_y_inp()
         self.__raster_x_inp()
         self.__raster_qty_inp()
@@ -1764,9 +1943,15 @@ class _visplot:
         _invocation_parameters['kind'] = glb.get('kind', self._arg_default['kind'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
         _invocation_parameters['pin_layout'] = glb.get('pin_layout', self._arg_default['pin_layout'])
+        _invocation_parameters['iterate_by'] = glb.get('iterate_by', self._arg_default['iterate_by'])
+        _invocation_parameters['gridrows'] = glb.get('gridrows', self._arg_default['gridrows'])
+        _invocation_parameters['gridcols'] = glb.get('gridcols', self._arg_default['gridcols'])
+        _invocation_parameters['gridcolor'] = glb.get('gridcolor', self._arg_default['gridcolor'])
+        _invocation_parameters['exprange'] = glb.get('exprange', self._arg_default['exprange'])
         _invocation_parameters['time_labels'] = glb.get('time_labels', self._arg_default['time_labels'])
         _invocation_parameters['autocorr'] = glb.get('autocorr', self._arg_default['autocorr'])
         _invocation_parameters['panels'] = glb.get('panels', self._arg_default['panels'])
+        _invocation_parameters['grid_panel'] = glb.get('grid_panel', self._arg_default['grid_panel'])
         _invocation_parameters['raster_y'] = glb.get('raster_y', self._arg_default['raster_y'])
         _invocation_parameters['raster_x'] = glb.get('raster_x', self._arg_default['raster_x'])
         _invocation_parameters['raster_qty'] = glb.get('raster_qty', self._arg_default['raster_qty'])
@@ -1837,9 +2022,15 @@ class _visplot:
             kind = _UNSET,
             preset = _UNSET,
             pin_layout = _UNSET,
+            iterate_by = _UNSET,
+            gridrows = _UNSET,
+            gridcols = _UNSET,
+            gridcolor = _UNSET,
+            exprange = _UNSET,
             time_labels = _UNSET,
             autocorr = _UNSET,
             panels = _UNSET,
+            grid_panel = _UNSET,
             raster_y = _UNSET,
             raster_x = _UNSET,
             raster_qty = _UNSET,
@@ -1903,9 +2094,15 @@ class _visplot:
             kind,
             preset,
             pin_layout,
+            iterate_by,
+            gridrows,
+            gridcols,
+            gridcolor,
+            exprange,
             time_labels,
             autocorr,
             panels,
+            grid_panel,
             raster_y,
             raster_x,
             raster_qty,
@@ -2014,6 +2211,21 @@ class _visplot:
             _invocation_parameters['pin_layout'] = \
                 pin_layout if pin_layout is not _UNSET \
                 else glb.get('pin_layout', self._arg_default['pin_layout'])
+            _invocation_parameters['iterate_by'] = \
+                iterate_by if iterate_by is not _UNSET \
+                else glb.get('iterate_by', self._arg_default['iterate_by'])
+            _invocation_parameters['gridrows'] = \
+                gridrows if gridrows is not _UNSET \
+                else glb.get('gridrows', self._arg_default['gridrows'])
+            _invocation_parameters['gridcols'] = \
+                gridcols if gridcols is not _UNSET \
+                else glb.get('gridcols', self._arg_default['gridcols'])
+            _invocation_parameters['gridcolor'] = \
+                gridcolor if gridcolor is not _UNSET \
+                else glb.get('gridcolor', self._arg_default['gridcolor'])
+            _invocation_parameters['exprange'] = \
+                exprange if exprange is not _UNSET \
+                else glb.get('exprange', self._arg_default['exprange'])
             _invocation_parameters['time_labels'] = \
                 time_labels if time_labels is not _UNSET \
                 else glb.get('time_labels', self._arg_default['time_labels'])
@@ -2023,6 +2235,9 @@ class _visplot:
             _invocation_parameters['panels'] = \
                 panels if panels is not _UNSET \
                 else glb.get('panels', self._arg_default['panels'])
+            _invocation_parameters['grid_panel'] = \
+                grid_panel if grid_panel is not _UNSET \
+                else glb.get('grid_panel', self._arg_default['grid_panel'])
             _invocation_parameters['raster_y'] = \
                 raster_y if raster_y is not _UNSET \
                 else glb.get('raster_y', self._arg_default['raster_y'])
@@ -2149,12 +2364,24 @@ class _visplot:
                 glb.get('preset', self._arg_default['preset'])
             _invocation_parameters['pin_layout'] = \
                 glb.get('pin_layout', self._arg_default['pin_layout'])
+            _invocation_parameters['iterate_by'] = \
+                glb.get('iterate_by', self._arg_default['iterate_by'])
+            _invocation_parameters['gridrows'] = \
+                glb.get('gridrows', self._arg_default['gridrows'])
+            _invocation_parameters['gridcols'] = \
+                glb.get('gridcols', self._arg_default['gridcols'])
+            _invocation_parameters['gridcolor'] = \
+                glb.get('gridcolor', self._arg_default['gridcolor'])
+            _invocation_parameters['exprange'] = \
+                glb.get('exprange', self._arg_default['exprange'])
             _invocation_parameters['time_labels'] = \
                 glb.get('time_labels', self._arg_default['time_labels'])
             _invocation_parameters['autocorr'] = \
                 glb.get('autocorr', self._arg_default['autocorr'])
             _invocation_parameters['panels'] = \
                 glb.get('panels', self._arg_default['panels'])
+            _invocation_parameters['grid_panel'] = \
+                glb.get('grid_panel', self._arg_default['grid_panel'])
             _invocation_parameters['raster_y'] = \
                 glb.get('raster_y', self._arg_default['raster_y'])
             _invocation_parameters['raster_x'] = \
@@ -2249,9 +2476,15 @@ class _visplot:
                     'kind=' + repr(_invocation_parameters['kind']),
                     'preset=' + repr(_invocation_parameters['preset']),
                     'pin_layout=' + repr(_invocation_parameters['pin_layout']),
+                    'iterate_by=' + repr(_invocation_parameters['iterate_by']),
+                    'gridrows=' + repr(_invocation_parameters['gridrows']),
+                    'gridcols=' + repr(_invocation_parameters['gridcols']),
+                    'gridcolor=' + repr(_invocation_parameters['gridcolor']),
+                    'exprange=' + repr(_invocation_parameters['exprange']),
                     'time_labels=' + repr(_invocation_parameters['time_labels']),
                     'autocorr=' + repr(_invocation_parameters['autocorr']),
                     'panels=' + repr(_invocation_parameters['panels']),
+                    'grid_panel=' + repr(_invocation_parameters['grid_panel']),
                     'raster_y=' + repr(_invocation_parameters['raster_y']),
                     'raster_x=' + repr(_invocation_parameters['raster_x']),
                     'raster_qty=' + repr(_invocation_parameters['raster_qty']),
@@ -2305,9 +2538,15 @@ class _visplot:
                 kind = _invocation_parameters['kind'],
                 preset = _invocation_parameters['preset'],
                 pin_layout = _invocation_parameters['pin_layout'],
+                iterate_by = _invocation_parameters['iterate_by'],
+                gridrows = _invocation_parameters['gridrows'],
+                gridcols = _invocation_parameters['gridcols'],
+                gridcolor = _invocation_parameters['gridcolor'],
+                exprange = _invocation_parameters['exprange'],
                 time_labels = _invocation_parameters['time_labels'],
                 autocorr = _invocation_parameters['autocorr'],
                 panels = _invocation_parameters['panels'],
+                grid_panel = _invocation_parameters['grid_panel'],
                 raster_y = _invocation_parameters['raster_y'],
                 raster_x = _invocation_parameters['raster_x'],
                 raster_qty = _invocation_parameters['raster_qty'],

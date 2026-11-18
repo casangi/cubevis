@@ -78,6 +78,19 @@ requires = ["casatasks", "casatools", "jupyter_client", "ipykernel"]
 optional = true     # skipped without them, even under --strict (the workflow has no CASA)
 
 [[suite]]
+name = "visplot-grid"
+# visplot's Grid layout without a browser (gridplot, cubevis issue 9): the
+# iteration values, compound iteration, color scopes, the grid's own panel,
+# drill-down, plotfile= pages, rows held in memory (and counted in the frame
+# cache) drawing the same pixels as cells read alone, scatter grids, and the
+# grid following flags added or committed after it was drawn.  Makes its own
+# tiny MS (make_tiny_ms.py).  The browser half: tests/manual/gridplot/
+# visplot_grid_check.py (Playwright, not run here)
+pytest = ["tests/manual/gridplot/test_vis_grid.py"]
+args = ["-q"]
+requires = ["xradio", "arcae", "xarray_ms"]
+
+[[suite]]
 name = "tiny-ms"
 # a 3 MB MSv2 for the next suite
 command = ["{python}", "tests/ci/make_tiny_ms.py", "{tmp}/ci.ms"]

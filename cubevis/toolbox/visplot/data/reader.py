@@ -892,7 +892,7 @@ def _cell_bounds(coords: np.ndarray, idx: int,
     its fixed half-width.  Handles the single-element case (zero width
     unless *half* is given).
     """
-    from ..raster_grid import cell_edges
+    from ...gridplot.raster_grid import cell_edges
     n = len(coords)
     if n == 0:
         raise IndexError("empty coordinate array")
@@ -1403,16 +1403,52 @@ FRAME_CACHE_ENV = "CUBEVIS_VISPLOT_FRAME_CACHE_MB"
 """Environment override for the cache budget, in MiB.  ``0`` disables the
 cache entirely (every call re-reads, exactly as before this feature)."""
 
-# Default budget = a tenth of physical memory, clamped.  Deliberately small:
-# a read's transient memory peaks at ~4x the final frame (measured: 1.7 GB RSS
-# for a 0.44 GB frame), and the cache keeps OTHER frames alive during it.  A
-# first draft used a quarter of RAM and, on a 4 GB machine, made a combined
-# test run swap and fail a 10 s timing test that passes alone in 4.2 s; capping
-# the budget at 256 MiB made the same run pass in half the time.
-_FRAME_CACHE_FRACTION = 0.10
+# Default budget, by the size of the host (2026-11-11, Darrell: "a larger
+# cache really does make a difference"; TW Hya's two frames, ~1.5 GiB each,
+# did not fit the old 2.4 GiB on a 24 GB Mac, so every redraw re-read one).
+#
+# * a small machine (under 12 GiB): a tenth of memory, as before.  A read's
+#   transient memory peaks at ~4x the final frame (measured: 1.7 GB RSS for a
+#   0.44 GB frame) and the cache keeps OTHER frames alive during it; a quarter
+#   of RAM on a 4 GB machine made a combined test run swap and fail a timing
+#   test that passes alone.
+# * otherwise: a quarter of memory, but no more than half of what is free
+#   when the cache is made (what else the machine is doing), up to 16 GiB.
+# * a large host with much free -- a compute node, the usual remote kernel's
+#   host, not a shared interactive one: 40 % of what is free, up to 64 GiB.
+#   What is free tells the two apart better than any setting would.
+_FRAME_CACHE_FRACTION = 0.10           # small machines
+_FRAME_CACHE_SMALL_HOST = 12 << 30
+_FRAME_CACHE_FRACTION_LARGE = 0.25     # of physical memory
+_FRAME_CACHE_FREE_SHARE = 0.5          # at most this share of what is free
+_FRAME_CACHE_MAX_DEFAULT = 16 << 30
+_FRAME_CACHE_NODE_FREE = 48 << 30      # this much free: a compute node
+_FRAME_CACHE_NODE_SHARE = 0.4
+_FRAME_CACHE_NODE_MAX = 64 << 30
 _FRAME_CACHE_MIN_BYTES = 256 << 20
-_FRAME_CACHE_MAX_DEFAULT = 4 << 30
 _FRAME_CACHE_FALLBACK = 512 << 20
+
+GRID_OVERFLOW_ENV = "CUBEVIS_VISPLOT_GRID_OVERFLOW"
+"""How far, in percent of the frame cache's size, the rows a grid holds in
+memory (``XArrayReader.preload``) may take the cache past its size.  The
+rows count in the cache: while they are held, frames are evicted so that
+frames and rows together stay within the size plus this share.  ``0``: the
+rows must fit within the cache's size."""
+
+_GRID_OVERFLOW_DEFAULT = 0.25     # Darrell, 2026-11-17: the cache plus a share
+
+
+def _grid_overflow_share() -> float:
+    """``$CUBEVIS_VISPLOT_GRID_OVERFLOW`` (percent) as a fraction; 25 % by
+    default."""
+    env = os.environ.get(GRID_OVERFLOW_ENV)
+    if env is not None and env.strip():
+        try:
+            return max(0.0, float(env) / 100.0)
+        except ValueError:
+            log.warning("%s=%r is not a number; using %.0f %%", GRID_OVERFLOW_ENV, env,
+                        100 * _GRID_OVERFLOW_DEFAULT)
+    return _GRID_OVERFLOW_DEFAULT
 
 
 def _physical_memory_bytes() -> Optional[int]:
@@ -1438,9 +1474,11 @@ def _physical_memory_bytes() -> Optional[int]:
 
 
 def _default_frame_cache_bytes() -> int:
-    """The cache budget: ``$CUBEVIS_VISPLOT_FRAME_CACHE_MB`` if set, else a
-    tenth of physical memory clamped to [256 MiB, 4 GiB] (512 MiB when the
-    memory size is unknown)."""
+    """The cache budget: ``$CUBEVIS_VISPLOT_FRAME_CACHE_MB`` if set, else by
+    the host (see the constants above): a tenth of memory under 12 GiB; a
+    quarter, at most half of what is free and 16 GiB, above; 40 % of what is
+    free, up to 64 GiB, on a host with 48 GiB or more free.  Never under
+    256 MiB; 512 MiB when the memory size is unknown."""
     env = os.environ.get(FRAME_CACHE_ENV)
     if env is not None and env.strip():
         try:
@@ -1448,11 +1486,31 @@ def _default_frame_cache_bytes() -> int:
         except ValueError:
             log.warning("%s=%r is not a number; using the default budget",
                         FRAME_CACHE_ENV, env)
-    phys = _physical_memory_bytes()
+    b, why = _frame_cache_budget(_physical_memory_bytes(), _available_memory_bytes())
+    log.info("visplot frame cache: %.1f GiB (%s; %s=<MiB> to set it)",
+             b / 2 ** 30, why, FRAME_CACHE_ENV)
+    return b
+
+
+def _frame_cache_budget(phys: Optional[int], avail: Optional[int]) -> tuple:
+    """``(bytes, reason)`` for a host with *phys* bytes of memory, *avail*
+    of them free now (either may be ``None``: unknown)."""
+    g = 2 ** 30
     if not phys:
-        return _FRAME_CACHE_FALLBACK
-    return int(min(_FRAME_CACHE_MAX_DEFAULT,
-                   max(_FRAME_CACHE_MIN_BYTES, _FRAME_CACHE_FRACTION * phys)))
+        return _FRAME_CACHE_FALLBACK, "memory size unknown"
+    if phys < _FRAME_CACHE_SMALL_HOST:
+        b = _FRAME_CACHE_FRACTION * phys
+        why = f"a tenth of {phys / g:.0f} GiB"
+    elif avail is not None and avail >= _FRAME_CACHE_NODE_FREE:
+        b = min(_FRAME_CACHE_NODE_MAX, _FRAME_CACHE_NODE_SHARE * avail)
+        why = f"40 % of the {avail / g:.0f} GiB free on a large host"
+    else:
+        b = min(_FRAME_CACHE_MAX_DEFAULT, _FRAME_CACHE_FRACTION_LARGE * phys)
+        why = f"a quarter of {phys / g:.0f} GiB"
+        if avail is not None and _FRAME_CACHE_FREE_SHARE * avail < b:
+            b = _FRAME_CACHE_FREE_SHARE * avail
+            why = f"half of the {avail / g:.1f} GiB free"
+    return int(max(_FRAME_CACHE_MIN_BYTES, b)), why
 
 
 # --------------------------------------------------------------------------
@@ -1677,6 +1735,32 @@ def _selection_fingerprint(selection) -> Optional[tuple]:
         return None
 
 
+def _rows_of(df: "pd.DataFrame", sel) -> "pd.DataFrame":
+    """The rows of a raw frame that *sel*'s baselines, antennas, fields and
+    scans select -- the same rules as the backends' ``_apply_selection``
+    (a baseline in its data orientation; an antenna at either end)."""
+    if len(df) == 0:
+        return df.copy()
+    keep = np.ones(len(df), dtype=bool)
+    a1 = df["baseline_antenna1_name"] if "baseline_antenna1_name" in df.columns else None
+    a2 = df["baseline_antenna2_name"] if "baseline_antenna2_name" in df.columns else None
+    if sel.baselines is not None and a1 is not None:
+        m = np.zeros(len(df), dtype=bool)
+        for p, q in sel.baselines:
+            m |= ((a1 == p) & (a2 == q)).to_numpy()
+        keep &= m
+    elif sel.antenna_names is not None and a1 is not None:
+        want = list(sel.antenna_names)
+        keep &= (a1.isin(want) | a2.isin(want)).to_numpy()
+    if sel.field_names is not None and "field_name" in df.columns:
+        keep &= df["field_name"].isin(list(sel.field_names)).to_numpy()
+    if sel.scan is not None and "scan_name" in df.columns:
+        keep &= df["scan_name"].isin([str(x) for x in sel.scan]).to_numpy()
+    out = df.loc[keep].reset_index(drop=True)
+    out.attrs = dict(df.attrs)
+    return out
+
+
 def _frame_nbytes(df: pd.DataFrame) -> int:
     """Approximate in-memory size of *df*.  Shallow on purpose: ``deep=True``
     walks every element of an ``object`` column (seconds at 4M rows), and
@@ -1712,11 +1796,20 @@ class _FrameCache:
     across a get-or-build.
     """
 
-    def __init__(self, max_bytes: int) -> None:
+    def __init__(self, max_bytes: int, overflow: Optional[float] = None) -> None:
         self.max_bytes = int(max_bytes)
+        #: how far past ``max_bytes`` reserved memory may take the cache
+        #: (a share of ``max_bytes``; ``GRID_OVERFLOW_ENV``)
+        self.overflow = _grid_overflow_share() if overflow is None else max(0.0, float(overflow))
         self.lock = threading.RLock()
         self._d: "collections.OrderedDict" = collections.OrderedDict()
         self.bytes = 0
+        #: memory held outside the frames but counted in the cache: a grid's
+        #: rows in memory (``XArrayReader.preload``), by owner (backend token)
+        self._reserved: dict = {}
+        #: owners collected while the lock was busy (``try_drop_token``):
+        #: their reservations go at the next locked call
+        self._gone: set = set()
         self.hits = 0
         self.misses = 0
         self.evictions = 0
@@ -1736,10 +1829,81 @@ class _FrameCache:
             self.hits += 1
             return frame
 
+    # -- memory reserved in the cache (a grid's rows, gridplot 2026-11-17) --
+    def _purge_gone(self) -> None:
+        """(lock held) Reservations of owners collected meanwhile."""
+        while self._gone:
+            self._reserved.pop(self._gone.pop(), None)
+
+    @property
+    def reserved_bytes(self) -> int:
+        with self.lock:
+            self._purge_gone()
+            return sum(self._reserved.values())
+
+    def _ceiling(self) -> int:
+        """Frames and reservations together never exceed this."""
+        return int(self.max_bytes * (1.0 + self.overflow))
+
+    def frame_budget(self) -> int:
+        """What frames may take now: ``max_bytes`` with nothing reserved;
+        otherwise what the reservations leave of ``max_bytes`` plus the
+        overflow share (never more than ``max_bytes``)."""
+        with self.lock:
+            self._purge_gone()
+            r = sum(self._reserved.values())
+            if r <= 0:
+                return self.max_bytes
+            return max(0, min(self.max_bytes, self._ceiling() - r))
+
+    def reserve_limit(self, owner) -> int:
+        """The most *owner* may reserve: the cache's size plus the overflow
+        share, less what the others have reserved."""
+        with self.lock:
+            others = sum(b for o, b in self._reserved.items() if o != owner)
+            return max(0, self._ceiling() - others)
+
+    def reserve(self, owner, nbytes: int) -> bool:
+        """Count *nbytes* held by *owner* in the cache (replacing what it
+        held), evicting frames to make room; False, and nothing reserved,
+        if it is over ``reserve_limit``."""
+        with self.lock:
+            nbytes = int(nbytes)
+            if self.max_bytes <= 0 or nbytes > self.reserve_limit(owner):
+                return False
+            self._reserved[owner] = nbytes
+            self._shrink("rows held for a grid")
+            return True
+
+    def release(self, owner, blocking: bool = True) -> None:
+        """*owner*'s reservation ends (non-blocking from a finalizer: left
+        to the next ``reserve``/``release`` then)."""
+        if not self.lock.acquire(blocking=blocking):
+            self._gone.add(owner)
+            return
+        try:
+            self._reserved.pop(owner, None)
+        finally:
+            self.lock.release()
+
+    def _shrink(self, why: str = FRAME_CACHE_ENV) -> None:
+        budget = self.frame_budget()
+        while self.bytes > budget and self._d:
+            old_key, (_g, old_bytes, _f) = self._d.popitem(last=False)
+            self.bytes -= old_bytes
+            log.info("visplot frame cache: evicted a %.0f MiB frame to stay within "
+                     "%.0f MiB (%s)", old_bytes / 2**20, budget / 2**20, why)
+            self.evictions += 1
+
     def put(self, key, generation: int, frame: pd.DataFrame) -> bool:
         with self.lock:
             self._drop(key)
             nbytes = _frame_nbytes(frame)
+            if self.max_bytes > 0 and self.max_bytes >= nbytes > self.frame_budget():
+                log.info("visplot frame cache: a %.0f MiB frame is not cached while a "
+                         "grid holds %.0f MiB of rows in the cache", nbytes / 2**20,
+                         self.reserved_bytes / 2**20)
+                return False
             if self.max_bytes <= 0 or nbytes > self.max_bytes:
                 if self.max_bytes > 0:
                     # A frame larger than the whole budget is re-read from
@@ -1751,13 +1915,7 @@ class _FrameCache:
                 return False
             self._d[key] = (generation, nbytes, frame)
             self.bytes += nbytes
-            while self.bytes > self.max_bytes and self._d:
-                old_key, (_g, old_bytes, _f) = self._d.popitem(last=False)
-                self.bytes -= old_bytes
-                log.info("visplot frame cache: evicted a %.0f MiB frame to stay within "
-                         "%.0f MiB (%s)", old_bytes / 2**20, self.max_bytes / 2**20,
-                         FRAME_CACHE_ENV)
-                self.evictions += 1
+            self._shrink()
             return key in self._d
 
     def _drop(self, key) -> None:
@@ -1793,8 +1951,10 @@ class _FrameCache:
         -- there is no count to report since nothing was inspected.
         """
         if not self.lock.acquire(blocking=False):
+            self._gone.add(token)          # its reservation, at the next locked call
             return 0
         try:
+            self._reserved.pop(token, None)
             keys = [k for k in self._d if k[0] == token]
             for k in keys:
                 self._drop(k)
@@ -1814,7 +1974,9 @@ class _FrameCache:
     def stats(self) -> dict:
         with self.lock:
             return {"entries": len(self._d), "bytes": self.bytes,
-                    "max_bytes": self.max_bytes, "hits": self.hits,
+                    "max_bytes": self.max_bytes, "reserved_bytes": sum(self._reserved.values()),
+                    "frame_budget": self.frame_budget(), "overflow": self.overflow,
+                    "hits": self.hits,
                     "misses": self.misses, "evictions": self.evictions}
 
 
@@ -2866,6 +3028,191 @@ class XArrayReader(abc.ABC):
 
     _frame_extent = staticmethod(_frame_extent)
 
+    # ------------------------------------------------------------------ #
+    # Read once, split (gridplot G3, 2026-11-13)                           #
+    # ------------------------------------------------------------------ #
+    #
+    # A grid draws one small plot per baseline, antenna, SPW, ... of a
+    # selection.  Each cell's query on its own costs a lazy read and a dask
+    # graph of its own (G0: 0.37 s a raster cell, 0.58 s of a scatter
+    # cell's 0.79 s on the VLBA-sized test MS) although every cell reads a
+    # slice of the same rows.  ``preload`` reads the cells' union ONCE into
+    # memory -- the union's time rows and baselines of each partition, every
+    # channel and correlation, the data column, FLAG, WEIGHT and UVW -- and
+    # a query whose selection carries the returned key (``SelectionSpec.
+    # preload``) and asks for rows within that union is served from it:
+    # ``_iter_visibility_partitions`` yields the in-memory partitions, and
+    # the query applies its own selection to them exactly as it would to
+    # the lazy ones.  Channels, correlations, UV range and autocorrelations
+    # are not narrowed in the copy, so any choice of those is served too;
+    # what decides "within" is the rows: partitions (SPW), time (field,
+    # scan, time range) and baselines.
+    #
+    # Opt-in by key, never automatic: flagging, commits and the panels
+    # read the data as before, and the frames read from the copy are kept
+    # apart by the key in their cache fingerprint.  One copy per reader;
+    # a commit, a Reload (cache generation) or close drops it.
+    #
+    # The copy counts in the frame cache (2026-11-17, Darrell): it is
+    # reserved there, frames are evicted to make room, and the two together
+    # may run past the cache's size by ``GRID_OVERFLOW_ENV``'s share (25 %),
+    # no more.  Before, the copy was sized against the cache but held beside
+    # it, so the two could reach twice the budget.
+
+    #: the fields that narrow rows within the copy's partitions
+    _PRELOAD_ROW_FIELDS = ("spw", "field_names", "scan", "time_range",
+                           "baselines", "antenna_names")
+
+    def preload(self, selection, budget_mb: Optional[float] = None) -> dict:
+        """Hold *selection*'s rows in memory for the grid's cells; returns
+        ``{"key": str | None, "mb": float, "reason": str}`` (``key`` None:
+        nothing held -- too big, or nothing to hold; the cells then read as
+        before).  Replaces any copy held before."""
+        import uuid
+        from ..selection import SelectionSpec
+        self.drop_preload()
+        base = SelectionSpec(
+            spw=selection.spw, field_names=selection.field_names, scan=selection.scan,
+            time_range=selection.time_range, baselines=selection.baselines,
+            antenna_names=selection.antenna_names, autocorr="include",
+            data_column=selection.data_column,
+            cache_generation=int(getattr(selection, "cache_generation", 0) or 0))
+        cache = self._frame_cache_obj()
+        owner = self._frame_token()
+        # the cache's size plus its overflow share, less what other grids hold
+        budget = float(cache.reserve_limit(owner))
+        if budget_mb is not None:
+            budget = min(budget, float(budget_mb) * 2**20)
+        parts, all_pairs, nbytes = [], set(), 0
+        for raw in self._iter_visibility_partitions(base):
+            if ("baseline_antenna1_name" in raw.coords
+                    and "baseline_antenna2_name" in raw.coords):
+                all_pairs.update(zip(raw.coords["baseline_antenna1_name"].values.tolist(),
+                                     raw.coords["baseline_antenna2_name"].values.tolist()))
+            ds = self._apply_selection(raw, base)
+            if ds.sizes.get("time", 0) == 0 or ds.sizes.get("baseline_id", 1) == 0:
+                continue
+            try:
+                vis = _resolve_vis_variable(ds, base.data_column or "DATA")
+            except KeyError:
+                vis = None
+            heavy = [v for v in (vis, "FLAG", "WEIGHT", "UVW") if v and v in ds.data_vars]
+            nbytes += sum(int(ds[v].nbytes) for v in heavy)
+            if nbytes > budget:
+                why = (f"the selection is {nbytes / 2**20:.0f} MiB or more, over the "
+                       f"{budget / 2**20:.0f} MiB the frame cache allows (its size plus "
+                       f"{100 * cache.overflow:.0f} %; {FRAME_CACHE_ENV}, "
+                       f"{GRID_OVERFLOW_ENV}): the cells read one by one")
+                log.info("visplot grid: not held in memory (%s)", why)
+                return {"key": None, "mb": round(nbytes / 2**20, 1), "reason": why}
+            parts.append((ds, heavy))
+        if not parts:
+            return {"key": None, "mb": 0.0, "reason": "no rows"}
+        if not cache.reserve(owner, nbytes):            # another grid took the room
+            why = (f"{nbytes / 2**20:.0f} MiB does not fit beside what other grids hold "
+                   f"in the frame cache: the cells read one by one")
+            log.info("visplot grid: not held in memory (%s)", why)
+            return {"key": None, "mb": round(nbytes / 2**20, 1), "reason": why}
+        t0 = __import__("time").perf_counter()
+        held = []
+        for ds, heavy in parts:
+            ds = ds.copy()
+            for v in heavy:
+                ds[v] = ds[v].load()
+            held.append(ds)
+        key = uuid.uuid4().hex[:12]
+        self._cv_preload = {"key": key, "base": base, "parts": held,
+                            "all_pairs": all_pairs, "nbytes": nbytes}
+        log.info("visplot grid: %.0f MiB held in memory for the cells (%.2f s)",
+                 nbytes / 2**20, __import__("time").perf_counter() - t0)
+        return {"key": key, "mb": round(nbytes / 2**20, 1), "reason": ""}
+
+    def drop_preload(self, key: Optional[str] = None) -> None:
+        """Release the in-memory copy (*key*: only if it is that one)."""
+        pre = getattr(self, "_cv_preload", None)
+        if pre is not None and (key is None or pre["key"] == key):
+            self._cv_preload = None
+            self._frame_cache_obj().release(self._frame_token())
+
+    def _preloaded_partitions(self, selection) -> Optional[list]:
+        """The in-memory partitions for *selection*, if it carries the
+        copy's key and its rows are within the copy's; else ``None``."""
+        pre = getattr(self, "_cv_preload", None)
+        key = getattr(selection, "preload", None) if selection is not None else None
+        if pre is None or key is None or key != pre["key"]:
+            return None
+        base = pre["base"]
+        if int(getattr(selection, "cache_generation", 0) or 0) != base.cache_generation:
+            return None
+        if not self._preload_covers(selection, base, pre["all_pairs"]):
+            log.debug("visplot grid: a query outside the held rows reads as usual")
+            return None
+        return pre["parts"]
+
+    #: what a cell's raw frame is cut from the union's by (the frame's own
+    #: identity columns); SPW cells already skip whole partitions
+    _SPLIT_FIELDS = ("baselines", "antenna_names", "field_names", "scan")
+
+    def _split_from_union(self, xaxis, keys, selection, cache) -> Optional[dict]:
+        """Raw frames for a grid cell's *selection*, cut from the frames of
+        the grid's union (``preload``'s rows with the cell's other
+        settings), which are read once and cached; ``None`` when this is
+        not a cell within the held union, or is the union itself."""
+        pre = getattr(self, "_cv_preload", None)
+        if pre is None or getattr(selection, "preload", None) != pre["key"]:
+            return None
+        base = pre["base"]
+        if not self._preload_covers(selection, base, pre["all_pairs"]):
+            return None
+        if pre.get("no_split"):
+            return None
+        parent = dataclasses.replace(selection, **{f: getattr(base, f)
+                                                   for f in self._SPLIT_FIELDS})
+        if _selection_fingerprint(parent) == _selection_fingerprint(selection):
+            return None
+        frames = self._raw_frames(xaxis, keys, parent, cache=cache)
+        if not frames:
+            return None
+        # The union's frames must stay cached for the cells to be cut from
+        # them; when they take more than half the cache (vector averaging
+        # needs Amplitude, Real and Imaginary for each correlation), they
+        # would push each other out and be read again for every cell --
+        # worse than no split.  Then the cells read on their own, from the
+        # held rows (this one is cut from what was just read).
+        big = sum(_frame_nbytes(df) for df in frames.values())
+        room = cache.frame_budget()        # what the held rows leave for frames
+        if big > room / 2:
+            pre["no_split"] = True
+            log.info("visplot grid: the union's frames (%.0f MiB) take more than half "
+                     "of the frame cache's %.0f MiB left beside the rows held: each "
+                     "cell reads its own rows", big / 2**20, room / 2**20)
+        return {k: _rows_of(df, selection) for k, df in frames.items()}
+
+    @staticmethod
+    def _preload_covers(sel, base, all_pairs) -> bool:
+        """Whether *sel*'s rows are within *base*'s (see ``preload``)."""
+        def within(a, b):
+            return b is None or (a is not None and set(a) <= set(b))
+        if not (within(sel.spw, base.spw) and within(sel.field_names, base.field_names)
+                and within(sel.scan, base.scan)):
+            return False
+        if base.time_range is not None:
+            if sel.time_range is None:
+                return False
+            if sel.time_range[0] < base.time_range[0] or sel.time_range[1] > base.time_range[1]:
+                return False
+        if base.baselines is None and base.antenna_names is None:
+            return True
+
+        def pairs(s):
+            if s.baselines is not None:
+                return {tuple(p) for p in s.baselines}
+            if s.antenna_names is not None:
+                want = set(s.antenna_names)
+                return {p for p in all_pairs if p[0] in want or p[1] in want}
+            return set(all_pairs)
+        return (pairs(sel) & all_pairs) <= pairs(base)
+
     def _frame_cache_obj(self) -> "_FrameCache":
         """The process-wide cache (see ``_global_frame_cache``)."""
         return _global_frame_cache()
@@ -2913,8 +3260,11 @@ class XArrayReader(abc.ABC):
         another thread holds the cache lock and waits for that worker
         (seen 2026-10-11 as a hang of two plotters built in one process).
         """
+        self._cv_preload = None        # the grid's in-memory copy goes with them
         cache = _GLOBAL_FRAME_CACHE
         token = getattr(self, "_frame_cache_token", None)
+        if cache is not None and token is not None:
+            cache.release(token, blocking=not getattr(_FINALIZING, "on", False))
         if cache is not None and token is not None:
             if getattr(_FINALIZING, "on", False):
                 cache.try_drop_token(token)
@@ -3035,6 +3385,14 @@ class XArrayReader(abc.ABC):
                     missing.append(k)
                 else:
                     raw[k] = frame
+            if missing:
+                # A grid cell (read once, split): its rows cut from the
+                # grid's union frames, read once (G3, 2026-11-13).
+                split = self._split_from_union(xaxis, missing, selection, cache)
+                for k, df in (split or {}).items():
+                    cache.put(key_of(k), gen, df)
+                    raw[k] = df
+                missing = [k for k in missing if k not in raw]
             if missing:
                 with _FlagViewContext("none"):
                     built = self._query_columns_raw(xaxis, missing, selection)
@@ -3301,7 +3659,7 @@ class XArrayReader(abc.ABC):
         averaging over all dimensions not in ``(y_dim, x_dim)``, then
         decimates the result to at most ``max_cells`` cells by applying a
         uniform stride in each dimension.  The caller (``VisibilityRaster``)
-        is responsible for Datashader resampling, colour mapping, and RGBA
+        is responsible for Datashader resampling, color mapping, and RGBA
         conversion.
 
         Two-level rendering contract
@@ -3320,8 +3678,8 @@ class XArrayReader(abc.ABC):
           higher ``max_cells`` to fetch the sub-window at full resolution.
 
         Separating the data reduction (backend) from the canvas sizing and
-        colour mapping (``VisibilityRaster``) keeps the backend free of
-        canvas-size knowledge and lets the caller re-colour without
+        color mapping (``VisibilityRaster``) keeps the backend free of
+        canvas-size knowledge and lets the caller re-color without
         re-reading data.
 
         Parameters
@@ -3333,7 +3691,7 @@ class XArrayReader(abc.ABC):
         x_dim :
             Native axis for the x (column) dimension — same vocabulary.
         quantity :
-            Derived axis to render as colour.  Must be one of
+            Derived axis to render as color.  Must be one of
             ``Axis.AMPLITUDE``, ``Axis.PHASE``, ``Axis.REAL``,
             ``Axis.IMAGINARY``, ``Axis.FLAG``.
         selection :

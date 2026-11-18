@@ -29,7 +29,7 @@ sets:
 - Amplitude in the top panel (slot A), Phase in the bottom one (slot B);
 - in both gear tabs, Average over time Scan / Off and Average over
   channels Off / All (Vector or Scalar is left as it is);
-- a Z-Score (Statistical) colouring back to Continuous, as every preset
+- a Z-Score (Statistical) coloring back to Continuous, as every preset
   does.
 
 The selection is left alone. Over every baseline at once the views are

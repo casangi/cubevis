@@ -274,6 +274,13 @@ class LocalVisibilityReader:
     def set_frame_cache_limit_mb(self, mb: float) -> None:
         self._backend.set_frame_cache_limit_mb(mb)
 
+    def preload(self, selection, budget_mb=None) -> dict:
+        """The grid's cells' rows held in memory (``XArrayReader.preload``)."""
+        return self._backend.preload(selection, budget_mb)
+
+    def drop_preload(self, key=None) -> None:
+        self._backend.drop_preload(key)
+
     def spw_casa_ids(self) -> dict:
         return self._backend.spw_casa_ids()
 

@@ -298,12 +298,12 @@ pieces (a dedicated switch icon plus a slot-keyed sidebar redesign), then
 consolidated into one gear tool opening a *floating popup* local to the
 plot. Revised once more: the popup becomes a **sidebar panel** instead —
 "Panel A" / "Panel B" — each starting with a Kind selector (Raster/Scatter)
-that reshapes the fields below it (axes, quantity, colour scaling — the
+that reshapes the fields below it (axes, quantity, color scaling — the
 raster/scatter colormap controls are already panel-kind-specific in the
 sidebar today, so they belong here too).
 
 **Presented as tabs, not stacked sections (revised again July 28 2026).**
-Two full sections (kind + axes + quantity + colour scaling each) stacked
+Two full sections (kind + axes + quantity + color scaling each) stacked
 simultaneously is a lot of sidebar height. Bokeh's native `Tabs`/
 `TabPanel` widget solves this directly: "Panel A" and "Panel B" as two
 tabs, only one visible at a time, but — crucially — Bokeh's `Tabs` already
@@ -333,7 +333,7 @@ so the scaling concern that motivated a popup doesn't actually apply here.
    (Bokeh `Tabs` preserves inactive-tab widget state), so tweaking both
    before applying still works, just via tab-switching instead of scrolling
    past a stacked section.
-4. User adjusts the active tab's controls (Kind, axes, quantity, colour
+4. User adjusts the active tab's controls (Kind, axes, quantity, color
    scaling).
 5. User presses the **existing global Plot ▶** — no new per-panel apply
    button. The per-panel change-detection that already exists (the same
@@ -1767,7 +1767,7 @@ scratch when this work actually starts.
     "layout": "side",  # "one" | "side" | "over" | (future) "grid"
     "panels": [
         {"slot": "A", "kind": "raster", "y_dim": "TIME", "x_dim": "BASELINE",
-         "quantity": "AMPLITUDE", "colour_scaling": {...}},
+         "quantity": "AMPLITUDE", "color_scaling": {...}},
         {"slot": "B", "kind": "scatter", "x_dim": "UVDIST", "layers": [...]},
     ],
     "selection": {"field": "...", "spw": "...", "correlation": "...", "datacolumn": "..."},

@@ -51,7 +51,7 @@ and unflag boxes alike.
 - **Esc** before letting go of the button drops the box; nothing is sent.
 - **Amber outline**: while any Flag reaches setting is wider than the
   box, the box being drawn is outlined in solid amber instead of the
-  dashed flag / unflag colour.
+  dashed flag / unflag color.
 - **Reason**: a text box. Its text is stored with every flag made from
   then on, shown in the report and the preview, saved in the JSON, and
   written as `reason='...'` in exported flagdata commands (one line, at

@@ -96,8 +96,11 @@ STOKES_CODES = {'I': 1, 'Q': 2, 'U': 3, 'V': 4,
 #: CASA MDoppler type numbers (the spectral record's velType)
 VELOCITY_CONVENTIONS = {0: 'radio', 1: 'optical', 2: 'ratio', 3: 'beta', 4: 'gamma'}
 
-_TO_DEG = {'rad': 180.0 / math.pi, 'deg': 1.0, 'arcmin': 1.0 / 60.0, 'arcsec': 1.0 / 3600.0}
-_TO_ARCSEC = {'rad': 180.0 / math.pi * 3600.0, 'deg': 3600.0, 'arcmin': 60.0, 'arcsec': 1.0}
+# "'" and '"' are how casacore writes arcmin and arcsec (an image from ia.fromshape has "'")
+_TO_DEG = {'rad': 180.0 / math.pi, 'deg': 1.0, 'arcmin': 1.0 / 60.0, 'arcsec': 1.0 / 3600.0,
+           "'": 1.0 / 60.0, '"': 1.0 / 3600.0, "''": 1.0 / 3600.0}
+_TO_ARCSEC = {'rad': 180.0 / math.pi * 3600.0, 'deg': 3600.0, 'arcmin': 60.0, 'arcsec': 1.0,
+              "'": 60.0, '"': 1.0, "''": 1.0}
 
 
 def _floats(values) -> List[float]:
@@ -215,6 +218,69 @@ def from_casa_coordsys(record: dict, shape: Sequence[int], *,
         'stokes': stokes,
         'beam': beam_from_casa(beam),
         'brightness_unit': str(brightness_unit or ''),
+        'extra': extra,
+    }
+
+
+#: xradio's (frame, equinox) -> (the description's frame, equinox, CASA's name for it)
+XRADIO_DIRECTION_FRAMES = {
+    ('fk5', 'j2000.0'): ('FK5', 2000.0, 'J2000'), ('fk5', None): ('FK5', 2000.0, 'J2000'),
+    ('fk4', 'b1950.0'): ('FK4', 1950.0, 'B1950'), ('fk4', None): ('FK4', 1950.0, 'B1950'),
+    ('icrs', None): ('ICRS', None, 'ICRS'), ('galactic', None): ('GALACTIC', None, 'GALACTIC'),
+    ('supergalactic', None): ('SUPERGAL', None, 'SUPERGAL'),
+}
+
+
+def from_image_info(info: dict, *, beam: Optional[dict] = None) -> Dict[str, Any]:
+    '''The description of an image from what ``cubevis.xarray.image``'s
+    ``describe_dataset`` says of its dataset (an xradio image, or a CASA
+    image opened as one): angles there are radians, here degrees.  ``beam``
+    is ``{'major': arcsec, 'minor': arcsec, 'pa': deg}``.'''
+    sizes = info['sizes']
+    shape = [sizes['l'], sizes['m'], sizes['polarization'], sizes['frequency']]
+    direction = None
+    d = info.get('direction')
+    if d is not None and None not in d['increment']:
+        frame, equinox, native = XRADIO_DIRECTION_FRAMES.get(
+            (d['frame'], d.get('equinox')), (str(d['frame']).upper(), None, str(d['frame']).upper()))
+        direction = {
+            'frame': frame,
+            'equinox': equinox,
+            'projection': d['projection'],
+            'projection_parameters': _floats(d['projection_parameters']),
+            'reference_value': [math.degrees(v) for v in d['reference_value']],
+            'reference_pixel': _floats(d['reference_pixel']),
+            'increment': [math.degrees(v) for v in d['increment']],
+            'pc': [_floats(row) for row in d['pc']],
+            'lonpole': d.get('lonpole'),
+            'latpole': d.get('latpole'),
+            'native_frame': native,
+        }
+    spectral = None
+    if info.get('frequency') is not None:
+        sp = info.get('spectral') or {}
+        spectral = {
+            'frame': str(sp.get('frame', '')),
+            'unit': 'Hz',
+            'values': _floats(info['frequency']),
+            'rest_frequency': sp.get('rest_frequency'),
+            'velocity_convention': sp.get('velocity_convention') or 'radio',
+        }
+    extra = {}
+    for key in ('telescope', 'observer'):
+        if info.get(key):
+            extra[key] = str(info[key])
+    if info.get('time') is not None:
+        extra['obsdate'] = {'value': float(info['time']), 'unit': 'd', 'refer': 'UTC'}
+    return {
+        'version': VERSION,
+        'shape': shape,
+        'pixel_origin': 0,
+        'direction': direction,
+        'spectral': spectral,
+        'stokes': list(info.get('polarization') or []),
+        'beam': beam,
+        'brightness_unit': info.get('units') or '',
         'extra': extra,
     }
 

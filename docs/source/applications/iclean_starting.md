@@ -13,7 +13,8 @@ iteration control between cycles.
 ## Before you start
 
 - An environment with `cubevis[iclean]`, which brings in CASA6's
-  `casatasks` and `casatools`: see [](installing.md).
+  `casatasks` and `casatools`, and `arcae` for reading the images: see
+  [](installing.md).
 - A calibrated measurement set.
 
 ## Starting

@@ -54,9 +54,23 @@ def as_mime( path ):
 
     raise RuntimeError( f'''could not load {path}''' )
 
+def _arcae_image( ):
+    '''``cubevis.xarray.image`` when arcae is installed (CASA images without
+    casatools), else None.'''
+    try:
+        import arcae  # noqa: F401                    # pylint: disable=import-outside-toplevel,unused-import
+        from cubevis.xarray import image              # pylint: disable=import-outside-toplevel
+        return image
+    except Exception:
+        return None
+
 def new( pattern, path, overwrite=False ):
     '''Create a new image using ``pattern`` as a pattern. ``pattern`` supplies the
     shape for the new image as well as the coordinate system for the new image.
+    The new image is filled with zeros.
+
+    With arcae installed no casatools is needed (``cubevis.xarray.image``);
+    without it, casatools makes the image as before.
 
     Parameters
     ----------
@@ -69,15 +83,27 @@ def new( pattern, path, overwrite=False ):
     overwrite: bool
         overwrite any existing image, directory or file
     '''
-    if not casatools_available():
-        raise RuntimeError( 'casaimage.new: casatools is not available' )
     if exists(path) and not overwrite:
         raise RuntimeError( '''casaimage.new: image already exists (and 'overwrite=False')''' )
     if not exists(pattern):
         raise RuntimeError( 'casaimage.new: an original image is required' )
+    image = _arcae_image( )
+    if image is not None:
+        import numpy as np                            # pylint: disable=import-outside-toplevel
+        src = image.CasaImage( pattern )
+        made = image.create_image( path, src.shape, dtype=np.float32, coords=src.coords_record( ), overwrite=overwrite )
+        ### a plane at a time: a cube need not fit in memory
+        with made.hold( readonly=False ):
+            if made.ndim <= 2:
+                made[...] = 0
+            else:
+                for index in np.ndindex( *made.shape[2:] ):
+                    made[(slice(None), slice(None)) + index] = 0
+        return made.path
+    if not casatools_available():
+        raise RuntimeError( 'casaimage.new: neither arcae nor casatools is available' )
     im = imagetool( )
     im.open(pattern)
-    print(repr(im.coordsys( )))
     newim = im.newimagefromshape( path, shape=im.shape( ), csys=im.coordsys( ).torecord( ), overwrite=overwrite )
     im.close( )
     im.done( )
@@ -96,11 +122,15 @@ def shape( path ):
 
     Returns
     -------
-    list of int
+    numpy array of int
         shape of image
     '''
     if not exists(path):
         raise RuntimeError( '''casaimage.shape: image does not exist''' )
+    image = _arcae_image( )
+    if image is not None:
+        import numpy as np                            # pylint: disable=import-outside-toplevel
+        return np.array( image.CasaImage( path ).shape )
     im = imagetool( )
     im.open(path)
     result = im.shape( )

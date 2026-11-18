@@ -65,6 +65,17 @@ pytest = ["tests/manual/iclean-imaging/test_remote_session.py",
 args = ["-q"]
 
 [[suite]]
+name = "xarray-image"
+# cubevis.xarray.image (CASA images through arcae as xarray datasets, in
+# xradio's image layout) on images written here, ImageReader over CASA, Zarr
+# and in-memory images, and XarrayImageStore, interactive clean's default
+# image store.  No CASA needed; where casatools is installed the same tests
+# compare with it value by value, and where xradio is, read its images.
+pytest = ["tests/manual/xarray-image"]
+args = ["-q"]
+requires = ["arcae", "xarray", "zarr"]
+
+[[suite]]
 name = "iclean-parity"
 # interactive clean with real tclean (design step 6): the GUI's handlers give
 # the same replies with the imaging on a kernel as in this process; a kernel

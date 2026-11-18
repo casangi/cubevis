@@ -27,11 +27,14 @@
 ########################################################################
 '''``LocalImagingSession``: the imaging layer in this process -- a
 ``Deconvolver`` (casatasks' ``gclean``, or the module ``iclean_backend``
-names) and an ``ImageCube`` per field over a ``CasatoolsImageStore``.
+names) and an ``ImageCube`` per field over an ``ImageStore``
+(``image_store``: ``XarrayImageStore``, or ``CasatoolsImageStore`` when asked).
 
 The same class is what a remote worker will hold; "remote" only puts a
 proxy in front of it.'''
 
+import logging
+import os
 from os.path import abspath, basename, join
 from typing import Callable, Dict, List, Optional
 
@@ -39,6 +42,64 @@ from ._protocols import CycleResult
 from ._image_cube import ImageCube
 from ._casatools_store import CasatoolsImageStore
 from ._progress import CycleProgress
+
+log = logging.getLogger(__name__)
+
+#: environment variable naming the store for images: "xarray" or "casatools"
+IMAGE_STORE_ENV = 'CUBEVIS_IMAGE_STORE'
+IMAGE_STORES = ('xarray', 'casatools')
+
+
+def image_store(name: Optional[str] = None) -> Callable:
+    '''The ``ImageStore`` class for images on disk:
+
+    * ``"xarray"`` -- ``XarrayImageStore``: CASA images through arcae and
+      xradio images in Zarr, by way of ``ImageReader``; no casatools.
+      (``"arcae"`` means the same.)
+    * ``"casatools"`` -- ``CasatoolsImageStore``, as before 2026-11.
+
+    Without ``name``, what the environment variable ``CUBEVIS_IMAGE_STORE``
+    says, read where the images are (a remote kernel's own environment).
+    Without that: xarray, or casatools where arcae or xarray is not
+    installed (said once in the log).  So ``CUBEVIS_IMAGE_STORE=casatools``
+    puts everything back.  With ``CUBEVIS_DEBUG=1`` the log says which store
+    is in use and why; ``image_store_name()`` answers the same question.'''
+    asked = name or os.environ.get(IMAGE_STORE_ENV) or ''
+    why = 'asked for by name' if name else f'{IMAGE_STORE_ENV}={asked}' if asked else 'the default'
+    choice = asked.strip().lower()
+    if choice in ('xarray', 'arcae'):
+        from ._xarray_store import XarrayImageStore        # pylint: disable=import-outside-toplevel
+        return _chosen(XarrayImageStore, why)
+    if choice == 'casatools':
+        return _chosen(CasatoolsImageStore, why)
+    if choice:
+        raise ValueError(f'image store {choice!r}: one of {", ".join(IMAGE_STORES)}')
+    from ._xarray_store import XarrayImageStore, missing_modules          # pylint: disable=import-outside-toplevel
+    missing = missing_modules()
+    if missing:
+        return _chosen(CasatoolsImageStore, f'{" and ".join(missing)} not installed', fallback=True)
+    return _chosen(XarrayImageStore, why)
+
+
+_told: set = set()
+
+
+def _chosen(store: Callable, why: str, fallback: bool = False) -> Callable:
+    '''Say once which store reads the images: at INFO when casatools stands
+    in because arcae or xarray is missing, else at DEBUG (``CUBEVIS_DEBUG=1``).'''
+    if (store, why) not in _told:
+        _told.add((store, why))
+        how = {'XarrayImageStore': 'arcae, through cubevis.xarray.image; no casatools',
+               'CasatoolsImageStore': 'casatools'}.get(store.__name__, '')
+        log.log(logging.INFO if fallback else logging.DEBUG, 'images are read with %s (%s): %s%s',
+                store.__name__, how, why,
+                '; pip install "cubevis[image]" for the arcae store' if fallback else '')
+    return store
+
+
+def image_store_name(name: Optional[str] = None) -> str:
+    '''``"xarray"`` or ``"casatools"``: which store ``image_store(name)`` gives.'''
+    return 'casatools' if image_store(name) is CasatoolsImageStore else 'xarray'
 
 
 def resolve_deconvolver(iclean_backend: str = 'PROD'):
@@ -64,13 +125,14 @@ class LocalImagingSession:
         an object with gclean's surface (``Deconvolver``)
     store_factory:
         ``store_factory(image_path, mask_path)`` makes the ``ImageStore``
-        for one field; ``CasatoolsImageStore`` by default
+        for one field; by default what ``image_store()`` gives
     '''
 
-    def __init__(self, deconvolver, *, store_factory: Callable = CasatoolsImageStore,
+    def __init__(self, deconvolver, *, store_factory: Optional[Callable] = None,
                  log_path: Optional[Callable] = None):
         self._dec = deconvolver
-        self._store_factory = store_factory
+        self._store_factory = store_factory if store_factory is not None else image_store()
+        self._cycles_running = 0
         self._cubes: Dict[str, ImageCube] = {}
         self._products = None
         ### the running cycle's progress, from the imager's log: the deconvolver's own
@@ -123,13 +185,20 @@ class LocalImagingSession:
                 result = result._replace(convergence=rekeyed)
         return result
 
+    def cycle_running(self) -> bool:
+        '''Is the imager at work (``start``, ``run_cycle`` or ``arun_cycle``
+        not yet returned)?  Any thread.'''
+        return self._cycles_running > 0
+
     def _step(self, kind: str) -> CycleResult:
         self._progress.begin(kind)
+        self._cycles_running += 1
         ok = False
         try:
             result = self._result(next(self._dec))
             ok = True
         finally:
+            self._cycles_running -= 1
             self._progress.end(ok)
         self._touch()
         return result
@@ -149,11 +218,13 @@ class LocalImagingSession:
         '''``run_cycle`` without blocking the event loop (gclean runs it in
         a thread: ``gclean.__anext__``).'''
         self._progress.begin('run')
+        self._cycles_running += 1
         ok = False
         try:
             result = self._result(await self._dec.__anext__())
             ok = True
         finally:
+            self._cycles_running -= 1
             self._progress.end(ok)
         self._touch()
         return result
@@ -208,6 +279,8 @@ class LocalImagingSession:
             if field not in info:
                 raise KeyError(f'no field {field!r}; fields are {sorted(info)}')
             store = self._store_factory(info[field]['residual'], info[field]['mask'])
+            if hasattr(store, 'write_guard'):
+                store.write_guard = self.cycle_running      # no mask writes under the imager
             self._cubes[field] = ImageCube(store, track='generation')
         return self._cubes[field]
 
@@ -229,7 +302,8 @@ def as_imaging_session(obj) -> 'LocalImagingSession':
     return LocalImagingSession(obj)
 
 
-def open_image_cube(image_path: str, mask_path: Optional[str] = None) -> ImageCube:
+def open_image_cube(image_path: str, mask_path: Optional[str] = None, *,
+                    store: Optional[str] = None) -> ImageCube:
     '''An ``ImageCube`` over a CASA image on this computer (createmask,
-    createregion, a standalone ``ImagePipe``).'''
-    return ImageCube(CasatoolsImageStore(image_path, mask_path), track='ctime')
+    createregion, a standalone ``ImagePipe``); ``store`` as ``image_store``.'''
+    return ImageCube(image_store(store)(image_path, mask_path), track='ctime')

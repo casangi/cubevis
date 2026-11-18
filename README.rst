@@ -8,6 +8,11 @@ processing backend. Python and CASA drive image/data access while a
 generated JavaScript interface provides an interactive control front-end,
 usable from JupyterLab, Google Colab, or plain Python scripts.
 
+The documentation is at https://casangi.github.io/cubevis/.
+
+``cubevis`` replaces the ``casagui`` and ``vidavis`` packages, which are
+no longer developed.
+
 ``cubevis`` currently provides two applications:
 
 - **Interactive Clean** (``iclean``) - **released**. Visually observe and

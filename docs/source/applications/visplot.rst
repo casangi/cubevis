@@ -1,5 +1,5 @@
-visplot
-=======
+The visplot window
+==================
 
 .. currentmodule:: applications
 
@@ -24,9 +24,9 @@ familiarity with the ``cubevis`` internals.
 Status of this document
 ------------------------
 
-*Updated 2026-10-18.*  Current: installing, launching ``visplot``, the
-task arguments, *Large selections*, *A commissioning workflow*,
-*Reporting a problem* and *Scope, explicitly*.  The *Layout tour* still describes the controls in
+*Updated 2026-11-17.*  Current: the *Grid* layout, *Large selections*, *A commissioning
+workflow*, *Reporting a problem* and *Scope, explicitly*.  Installing,
+launching ``visplot`` and its arguments are in :doc:`visplot_starting`.  The *Layout tour* still describes the controls in
 outline only; every control explains itself in the status area at the
 bottom of the window while the pointer is over it.
 
@@ -36,274 +36,6 @@ bottom of the window while the pointer is over it.
    plain interactive Python or CASA6 session (``ipython``, or a ``casa``
    prompt).  ``visplot.notebook()`` exists but raises
    ``NotImplementedError`` saying so.
-
-Prerequisites
--------------
-
-* A working ``cubevis`` environment with the ``visplot`` task available
-  (``from cubevis import visplot``); see *Installing* below
-* An interactive Python or CASA6 session — **not** a Jupyter notebook
-  (see the note above)
-* A measurement set (MSv2) or an MSv4 / Processing Set. This guide uses
-  ``twhya_selfcal_contsub_ms``, described below.
-
-Installing
-----------
-
-Python 3.12 or 3.13, then::
-
-   pip install "cubevis[visplot]"
-
-``visplot`` reads both MSv2 and MSv4 through ``xarray-ms`` and its
-casacore bindings, ``arcae``.  ``arcae`` is published for Linux (x86_64
-and aarch64) and macOS (Apple Silicon on macOS 14 or later, Intel on
-macOS 15 or later); there is no Windows build.  Elsewhere, run the data
-access on a machine that has the data, with the window on your own
-computer: a *remote kernel* (``kernel_name=``), set up with
-``python -m cubevis.setup``: see :doc:`remote_kernels`.
-
-Launching visplot
-------------------
-
-``visplot`` is invoked as a CASA6-style task, from an interactive
-Python or CASA6 session:
-
-.. code-block:: python
-
-   from cubevis import visplot
-
-   visplot(
-       vis         = "twhya_selfcal_contsub_ms",
-       field       = "5",
-       spw         = "0",
-       correlation = "XX,YY",
-       datacolumn  = "data",
-       layout      = "side",
-   )
-
-The call above does everything: it builds the app, displays the Bokeh
-UI, and runs it — there's no separate step to show the plot.
-
-Task arguments (preview)
-`````````````````````````
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 20 60
-
-   * - Argument
-     - Type
-     - Meaning
-   * - ``vis``
-     - str, optional
-     - Path to the data, as in every CASA task: an MSv2 measurement set
-       or an MSv4 / Processing Set; which one is detected (on the
-       kernel's host with ``kernel_name``). Give exactly one of ``vis``,
-       ``ms`` or ``ps``.
-   * - ``ms``
-     - str, optional
-     - Path to an MSv2 measurement set (instead of ``vis``).
-   * - ``ps``
-     - str, optional
-     - Path to an MSv4 / Processing Set Zarr store (instead of ``vis``).
-   * - ``kernel_name``
-     - str, optional
-     - Run the data access in this Jupyter kernel (usually a kernel on
-       the machine that has the data); the window stays on your
-       computer. The path is then a path on that machine.
-   * - ``backend``
-     - str
-     - ``"auto"`` (default: local, or remote when ``kernel_name`` is
-       given) or ``"remote"``; other values are for development.
-   * - ``field``
-     - str
-     - Fields, CASA style: names or FIELD_IDs (``"3c279"``, ``"5"``),
-       lists (``"3c279,J0522-364"``), id ranges (``"0~2"``, ``">3"``),
-       wildcards (``"J05*"``), ``!`` to exclude (``"!Ceres"``).
-       Default: all fields. The sidebar's *Field* menu shows one field,
-       all, or the several given here.
-   * - ``spw``
-     - str
-     - Spectral window selection, CASA-style (comma list, ``a~b``
-       ranges, channel selection). Default: all.
-   * - ``antenna``
-     - str
-     - Antennas and baselines to tick initially in the sidebar's
-       *Antenna* and *Baseline* tables: names or numbers
-       (``"DA41,DA43"``), ranges (``"DA41~DA46"``), exclusion
-       (``"!DA42"``), and exact baselines (``"DA44&DV19"``), separated
-       by ``,`` or ``;``. Ticked antennas select their baselines to
-       every other antenna; ``!`` selects only baselines between the
-       remaining antennas; ticked baselines select exactly those.
-   * - ``scan``
-     - str
-     - Scans, CASA style: ``"1,3,7"``, ``"1~7"``, ``">30"``, ``"!5"``
-       (all but 5). The sidebar's *Scan* box starts with it.
-   * - ``timerange``
-     - str
-     - UTC time range, CASA style: full dates
-       (``"2012/11/19/07:37:00~2012/11/19/08:00:00"``), times of day
-       (``"07:37:00~08:00"``, on the day of the data), open ends
-       (``">08:00"``, ``"<08:30"``), a start and a length
-       (``"08:00:00+00:10:00"``), AIPS-style day numbers
-       (``"1/00:10:00"``, as the time axis labels data that cross
-       midnight), or one time (the integration around it). One range.
-       The *Time range* box starts with it.
-   * - ``uvrange``
-     - str
-     - UV-distance ranges, CASA style: ``"0~50klambda"``,
-       ``"100~300m"``, ``">200m"``, ``"<1.5km"``; several with commas.
-       Units m, km, lambda, klambda, Mlambda (metres if none);
-       wavelengths are taken at each spectral window's centre
-       frequency. Whole rows (one baseline at one time) are in or out.
-       The *UV range* box starts with it.
-   * - ``autocorr``
-     - str
-     - ``"exclude"`` (default; cross-correlations only), ``"include"``
-       or ``"only"``. On VLBI data before amplitude calibration the
-       autocorrelations are hundreds of times the cross-correlations and
-       flatten every plot of all baselines. A baseline named in
-       ``antenna`` (``"BR&BR"``) is plotted whatever this says.
-   * - ``correlation``
-     - str
-     - Comma-separated correlation labels, e.g. ``"XX,YY"``. Default:
-       all.
-   * - ``datacolumn``
-     - str
-     - ``"data"`` (default), ``"corrected"``, or ``"model"``,
-       depending on what columns are present in the MS.
-   * - ``averaging``
-     - str
-     - How raster cells combine the samples they cover: ``"vector"``
-       (default) averages the complex visibilities and then takes
-       amplitude or phase, so amplitude drops where the samples are
-       incoherent; ``"scalar"`` averages the amplitudes themselves.
-       Sets the initial value for every raster panel; each panel's
-       gear tab has its own *Averaging* control.
-   * - ``raster_corr``
-     - str
-     - Which correlation a raster shows: ``"auto"`` (default; the first
-       of ``correlation``), ``"parallel"`` (the mean of the two parallel
-       hands, (XX+YY)/2 or (RR+LL)/2 -- valid where both are unflagged,
-       and a flag box on it flags both), or one product such as
-       ``"LL"`` (read whether ticked or not). Initial value for every
-       raster panel; each panel's gear tab has its own *Correlation
-       shown* control.
-   * - ``baseline_combine``
-     - str
-     - How a raster cell that covers several baselines combines them
-       (where Baseline is not a plot axis, e.g. Time vs Channel with no
-       single baseline ticked): ``"mean"`` (default) of the baselines'
-       amplitudes, ``"median"`` (what most baselines share, unmoved
-       by a few bad ones), ``"max"`` (the largest, so interference on a few
-       baselines is not diluted), or ``"coherent"`` (the visibilities
-       are added first; for a calibrated point source). ``averaging``
-       applies to the samples within each baseline. Initial value for
-       every raster panel; each panel's gear tab has its own *Baselines
-       combined* control.
-   * - ``baseline_order``
-     - str
-     - How a raster lays out its Baseline axis: ``"number"`` (default),
-       in the order of the sidebar's Baseline table, or ``"length"``,
-       shortest first, with the ticks reading the length. Initial value
-       for every raster panel; each panel's gear tab has its own
-       *Baseline order* control.
-   * - ``detrend``
-     - bool
-     - For the *Phase RMS* and *Coherence* raster quantities: remove a
-       linear phase slope (residual delay or rate) before the statistic
-       is taken. Default ``True``. Initial value for every raster panel;
-       each panel's gear tab has its own *Phase slope* control.
-   * - ``stat_time_window``
-     - str or float
-     - Time window the *Phase RMS* / *Coherence* statistic is taken
-       within: ``"auto"`` (default), ``"off"``, ``"scan"``, or seconds.
-       Where Time is a plot axis every integration shows its window's
-       value; where it is not, the windows are pooled into each cell.
-       ``"auto"`` is ``"off"`` in the first case and ``"scan"`` in the
-       second. Windows never span a gap between scans.
-   * - ``stat_chan_window``
-     - str or int
-     - Channel window for the same statistic: ``"off"`` (default) or a
-       number of channels.
-   * - ``layout``
-     - str
-     - ``"side"`` (side by side), ``"over"`` (stacked) or ``"one"`` --
-       initial panel layout (also the *One / Side by Side / Over /
-       Under* buttons). ``"raster"`` / ``"scatter"`` mean one panel of
-       that kind.
-   * - ``row_height``
-     - int, str or list, optional
-     - Height of each row of plots in pixels (the plot with its axes,
-       not the readout and color bars under it). Default: 550 for One
-       and Side by Side, 280 for Over / Under. ``"fit"``: the rows share
-       the window's height (never below 250 px; the plot area scrolls
-       instead). A list gives one height per row, e.g. ``[250, 400]``
-       for Over / Under. Also the *Height* menu beside the layout
-       buttons; a height chosen there stays when the layout changes.
-   * - ``column_width``
-     - int, str or list, optional
-     - Width of each column of plots in pixels. Default (or ``"fit"``):
-       follow the window. A list gives one width per column (Side by
-       Side has two). With ``plotfile`` there is no window: the default
-       is 1020 for One and Over / Under, 500 per column for Side by Side.
-   * - ``panels``
-     - list of dicts, optional
-     - Each panel's configuration, in screen order, one dict per panel
-       (at most two for now). Keys: ``kind``, ``raster_y``, ``raster_x``,
-       ``raster_qty``, ``averaging``, ``raster_corr``, ``baseline_order``,
-       ``baseline_combine``, ``detrend``, ``stat_time_window``,
-       ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
-       ``scatter_avg_time``, ``scatter_avg_chan``, and for a raster
-       ``scaling``, ``vmin``, ``vmax``. A key left out takes what the
-       flat arguments or ``preset`` give that panel. This is the form the
-       plot summary prints (see *Reporting a problem*).
-   * - ``time_labels``
-     - str
-     - ``"utc"`` (default): time axes and the cursor readout give UTC
-       time of day, with the date in the axis label; ``"elapsed"``:
-       minutes and seconds from the first sample. Also the *Time labels*
-       switch.
-   * - ``plotfile``
-     - str, optional
-     - Write a PNG of the plot to this path instead of opening the
-       window; the task returns the path. Each plot's data area is
-       ``column_width`` by ``row_height``.
-   * - ``preset``
-     - str, optional
-     - Named axis preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
-       ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
-       ``"phaserms-uvdist"``, ``"phase-waterfall"``,
-       ``"waterfall-all"``, ``"antmatrix"``, ``"spectrum"`` or
-       ``"timeseries"``.
-       Corresponds to the toolbar preset buttons.
-   * - ``time_range``
-     - tuple/list of 2 floats, optional
-     - ``(start, end)`` in UNIX seconds (UTC): the numeric form of
-       ``timerange``. Give one or the other.
-   * - ``freq_range``
-     - tuple/list of 2 floats, optional
-     - ``(start, end)`` in Hz.
-   * - ``uvdist_range``
-     - tuple/list of 2 floats, optional
-     - ``(min, max)`` UV distance in metres: the numeric form of
-       ``uvrange``. Give one or the other.
-
-Text in the selection arguments (``field``, ``scan``, ``timerange``,
-``uvrange``, and the sidebar boxes) that does not parse, or matches
-nothing in the data, is refused with a message saying what is accepted -- at construction for an argument, in the status line
-for a box (and nothing is plotted until it is corrected).
-
-All arguments are plain strings, numbers, or simple tuples/lists —
-there's no need to construct any internal ``cubevis`` objects to get a
-plot on screen.
-
-.. figure:: _static/vp_initial_load.png
-   :alt: visplot on first load
-   :width: 100%
-
-   TODO(screenshot): ``visplot`` immediately after the call renders,
-   before pressing Plot.
 
 Layout tour
 ------------
@@ -365,7 +97,9 @@ Toolbar
     (AIPS VPLOT): phase drifts and jumps, amplitude dropouts. Read one
     baseline at a time, as for *Spectrum*
 
-* Layout — *One*, *Side by Side*, *Over / Under*.  Each preset switches
+* Layout — *One*, *Side by Side*, *Over / Under*, *Grid* (the first
+  panel repeated for each baseline, antenna, SPW, field, scan or
+  correlation, page by page; ``layout="grid"``, ``iterate_by=``).  Each preset switches
   to the arrangement that suits it unless *Pin layout* (configuration
   panel, section *Panels*; ``pin_layout=True``) is ticked
 * Height — the height of each row of plots: *default* (the layout's),
@@ -470,6 +204,47 @@ When both panels share the same X quantity (e.g. both are plotted
 against time), their X ranges are linked, so panning one pans the
 other.
 
+Grid
+````
+
+*Grid* (the fourth Layout button, ``layout="grid"``) draws one plot many
+times over: once for each baseline, antenna, SPW, field, scan or
+correlation in the selection, as small plots on a page, paged through --
+plotms's iteration (``iteraxis``, ``gridrows``, ``gridcols``), AIPS
+VPLOT and POSSM, difmap's vplot.  The point is to compare: the one
+baseline or antenna that looks unlike its neighbours.
+
+* **What is drawn** is the grid's own panel, *⚙ Grid panel* in the
+  sidebar's Grid section (or the gear in the grid's toolbar): the same
+  choices as a panel's gear tab, raster or scatter.  It starts as a copy
+  of the first panel; a preset pressed in Grid sets it.
+  ``grid_panel=`` sets it from the start.
+* **Iterate by** chooses the axis, and *then* a second one (Antenna, then
+  SPW: each antenna's SPWs in turn).  The plots are of the current
+  selection only: select five antennas and iterate by antenna for five
+  plots.  *Rows* and *Cols* set a page's size; ⏮ ◀ ▶ ⏭ in the toolbar
+  page through, and *Play* steps through the pages (*Pages/s*, *Loop*).
+  When everything fits on one page, *Play* steps the sidebar's stepper
+  instead (the next antenna, say).
+* **Scale**: *common* (default) gives every plot the same axes, drawn
+  once along the top row and down the left column, and a zoom in one
+  plot zooms them all; *per cell* gives each plot its own axes and zoom.
+  **Color** (rasters): one color range for the page (default), for the
+  whole grid, or per plot.  A scatter plot is shaded by its own density.
+* **Hover** gives that plot's value under the cursor, as in a panel.
+* **Tap a plot** to open it in the One layout with the sidebar set to its
+  selection.  Flag there as usual.  *Grid* again brings back the grid
+  and its selection; flags added or written meanwhile show at once, with
+  no need to press *Plot*.  Flagging is not done in the grid's plots
+  themselves.
+* **Export PNG** in the toolbar writes the page shown;
+  ``plotfile=`` with ``layout="grid"`` writes pages without a window
+  (``exprange``).
+
+The selection is read once for all the plots of a grid and held in
+memory, within the frame cache (see *Large selections*).  A grid too big
+for that still works: each plot then reads its own rows, more slowly.
+
 Large selections
 -----------------
 
@@ -481,6 +256,12 @@ swap -- ``CUBEVIS_VISPLOT_MEMORY_GUARD=<MB>`` sets a limit: a scatter
 estimated to need more is refused before anything is read, with a
 message saying what to narrow.  (``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` is a
 different setting: how much read data is kept for redrawing.)
+
+The Grid layout holds the rows of its selection in memory, counted in that
+frame cache: while it holds them, the cache may run past its size by a
+quarter, no more (``CUBEVIS_VISPLOT_GRID_OVERFLOW=<percent>`` changes the
+share; ``0`` keeps it within the size).  A grid whose rows do not fit is
+drawn plot by plot instead, reading each plot's own rows.
 
 A commissioning workflow
 -------------------------
@@ -712,6 +493,9 @@ Present and working:
   (``VisibilityPlotter(..., headless=True)(plotfile=...)``), and from
   the task (``visplot(..., plotfile="out.png")``)
 * Shared pan/zoom/reset, linked X range when applicable; dark and light
+* The Grid layout: one plot per baseline, antenna, SPW, field, scan or
+  correlation (or two of them), raster or scatter, paged, with
+  drill-down to a full panel and PNG pages (*Grid*)
 
 Not yet available:
 
@@ -720,10 +504,14 @@ Not yet available:
   raster shows one correlation, or the parallel hands averaged, chosen
   in its gear tab and named in its title)
 * Flagging on the antenna × antenna matrix (refused, with the reason)
-* More than two panels
+* More than two panels (the Grid layout repeats one)
+* Flagging in the Grid layout's plots (tap one and flag in the panel)
 * Locate; on-the-fly calibration; plotting calibration tables
 * A ``flagdata`` command export (removed; JSON and writing to the MS
   replace it)
+
+See also :doc:`capabilities/index` for a capability-by-capability
+description of what ``visplot`` can do.
 
 Feedback
 ---------

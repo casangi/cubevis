@@ -493,6 +493,45 @@ class TestFrameCacheUnit:
         assert c.count_token("a") == 0 and c.count_token("b") == 3
         assert c.drop_token("nobody") == 0
 
+    # -- a grid's rows held in memory count in the cache (2026-11-17) --------
+
+    def test_a_reservation_evicts_frames_and_may_overflow_by_the_share(self):
+        one = rd._frame_nbytes(self._frame())
+        c = rd._FrameCache(10 * one, overflow=0.25)
+        for i in range(10):
+            c.put(("f", i), 0, self._frame())
+        assert c.frame_budget() == 10 * one and c.reserve_limit("g") == int(12.5 * one)
+        assert not c.reserve("g", 13 * one)                     # over size + 25 %
+        assert c.reserved_bytes == 0 and c.stats()["entries"] == 10
+        assert c.reserve("g", 8 * one)
+        # frames + rows stay within 12.5 frames: 4 frames left
+        assert c.frame_budget() == int(12.5 * one) - 8 * one
+        assert c.bytes + c.reserved_bytes <= int(12.5 * one)
+        assert c.stats()["entries"] == 4
+        c.release("g")
+        assert c.frame_budget() == 10 * one and c.reserved_bytes == 0
+
+    def test_a_small_reservation_leaves_the_frames_their_size(self):
+        one = rd._frame_nbytes(self._frame())
+        c = rd._FrameCache(10 * one, overflow=0.25)
+        assert c.reserve("g", 2 * one)
+        assert c.frame_budget() == 10 * one                    # within the overflow
+
+    def test_reservations_share_the_overflow(self):
+        one = rd._frame_nbytes(self._frame())
+        c = rd._FrameCache(10 * one, overflow=0.0)
+        assert c.reserve("a", 6 * one)
+        assert c.reserve_limit("b") == 4 * one and not c.reserve("b", 5 * one)
+        assert c.reserve("a", 9 * one)                          # replaces a's own
+        c.try_drop_token("a")
+        assert c.reserved_bytes == 0
+
+    def test_the_overflow_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv(rd.GRID_OVERFLOW_ENV, "50")
+        assert rd._FrameCache(100).overflow == 0.5
+        monkeypatch.setenv(rd.GRID_OVERFLOW_ENV, "lots")
+        assert rd._FrameCache(100).overflow == rd._GRID_OVERFLOW_DEFAULT
+
 
 # ---------------------------------------------------------------------------
 # 5. SelectionSpec.cache_generation

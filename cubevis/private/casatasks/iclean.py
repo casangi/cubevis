@@ -1801,6 +1801,21 @@ class _iclean:
 
 
 
+    --------- iclean parameters --------------------------------------------------
+
+    iclean_backend       Implementation of the clean cycle to use
+                         default: 'PROD', the gclean of the installed casatasks.
+                         Any other value NAME selects a module _gclean_NAME:
+                         an alternate implementation, or a stub for testing.
+    kernel_name          Jupyter kernel to run tclean and the image access on
+                         default: None; everything runs in this Python.
+                         With a kernel name, tclean runs and the images are
+                         read and written on the kernel's computer, and only
+                         the window runs here.  vis and imagename are then
+                         paths on that computer, relative to the kernel's
+                         working directory, and this computer needs no CASA.
+                         Kernels are set up with: python -m cubevis.setup
+                         example: kernel_name='cvpost106-iclean'
     """
 
     _info_group_ = """imaging"""

@@ -152,6 +152,13 @@ sections 4, 9 and 10).
 
 ## Open
 
+> **Closed 2026-11-17** (`gridplot_notes.md` section 15): the stale status
+> line is fixed (with the grid following flags added after it was drawn);
+> the transport item is the transport review's JS-1 / WS-1; real-data
+> timings are dropped as a task; the color-scope default stays *this
+> page*.
+
+
 * **Stale status line** after Back to Grid: it says "One panel" until the
   next Plot (notes section 4).
 * **Default color scope**: "this page" until G3, then "whole grid".

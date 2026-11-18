@@ -104,6 +104,7 @@ casa-image = "cubevis.xarray.image._backend:CasaImageBackendEntrypoint"
 
 [project.urls]
 "Homepage" = "https://github.com/casangi/cubevis?tab=readme-ov-file#cubevis---visualization-tools-for-casa-images"
+"Documentation" = "https://casangi.github.io/cubevis/"
 "Source" = "https://github.com/casangi/cubevis"
 "Bug Tracker" = "https://github.com/casangi/cubevis/issues"
 

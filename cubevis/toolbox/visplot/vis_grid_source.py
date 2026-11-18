@@ -198,6 +198,9 @@ class VisGridSource:
         self._bg: Optional[threading.Thread] = None
         #: what the reader holds in memory for the cells (``_preload``)
         self.preload_info = {"key": None, "mb": 0.0, "reason": "", "s": 0.0}
+        #: changes whenever drawn cells are out of date (``configure``,
+        #: ``sync``): the browser's page cache is only good for one version
+        self.version = 0
 
     # ------------------------------------------------------------------
     # configuration
@@ -228,8 +231,8 @@ class VisGridSource:
             if iterate_by is not None:
                 self._iterate_by = normalize_iterate_by(iterate_by)
             self._template = tmpl
-            self._selection = (selection if selection is not None
-                               else self._p._selection).copy()
+            self._selection = self._fresh((selection if selection is not None
+                                           else self._p._selection).copy())
             self._values, self._labels, self._parts = self._iteration_values()
             self._axes = self._cell_axes()
             self._cells.clear()
@@ -238,10 +241,74 @@ class VisGridSource:
             self._samples.clear()
             self._grid_ref = None
             self._gen += 1
+            self.version += 1
             self._names = (tmpl._panel_spec().axis_label("x"),
                            tmpl._panel_spec().axis_label("y"))
             self._preload()
         return self
+
+    # ------------------------------------------------------------------
+    # flags: the cells follow the plotter's pending flags and commits
+    # ------------------------------------------------------------------
+    def _freshness(self) -> tuple:
+        """The plotter's ``(pending_version, flag_view, cache_generation)``
+        now: what the cells' selection must carry to show the flags as the
+        panels do (FlagController's ``stamp_selection``; a commit's
+        ``_after_disk_change``)."""
+        p = self._p
+        sel = getattr(p, "_selection", None)
+        flags = getattr(p, "_flags", None)
+        pv = getattr(flags, "state_version", None)
+        if pv is None:
+            pv = getattr(sel, "pending_version", 0)
+        view = getattr(sel, "flag_view", None)
+        if flags is not None and hasattr(flags, "main_view"):
+            try:
+                view = flags.main_view()
+            except Exception:                               # noqa: BLE001
+                log.debug("grid: flag view unknown", exc_info=True)
+        gen = getattr(p, "_cache_generation", None)
+        if gen is None:
+            gen = getattr(sel, "cache_generation", 0)
+        return int(pv or 0), view, int(gen or 0)
+
+    def _fresh(self, sel):
+        """*sel* with the plotter's flag state (``_freshness``)."""
+        pv, view, gen = self._freshness()
+        changes = {"pending_version": pv, "cache_generation": gen}
+        if view is not None and hasattr(sel, "flag_view"):
+            changes["flag_view"] = view
+        return replace(sel, **changes)
+
+    def sync(self) -> bool:
+        """Bring the cells up to the plotter's flags: after a flag is added
+        or undone (in a drilled-down cell, say), or a commit, the cells kept
+        and the shared color ranges are dropped, and after a commit the rows
+        held in memory are read again.  True if anything changed (the
+        grid's pages must be drawn again).  Found 2026-11-17: without it the
+        grid showed the flags of its last Plot until the next Plot in Grid."""
+        with self._lock:
+            sel = self._selection
+            if sel is None:
+                return False
+            new = self._fresh(sel)
+            old_key = (sel.pending_version, getattr(sel, "flag_view", None),
+                       sel.cache_generation)
+            new_key = (new.pending_version, getattr(new, "flag_view", None),
+                       new.cache_generation)
+            if old_key == new_key:
+                return False
+            self._selection = new
+            self._cells.clear()
+            self._union = None
+            self._samples.clear()
+            self._grid_ref = None
+            self._gen += 1
+            self.version += 1
+            if new.cache_generation != sel.cache_generation:
+                # the flags on disk changed: the rows held are stale
+                self._preload()
+            return True
 
     def _preload(self) -> None:
         """Read once, split (gridplot G3, 2026-11-13): the reader holds the
@@ -515,6 +582,7 @@ class VisGridSource:
         w, h = int(size[0]), int(size[1])
         out = []
         with self._lock:
+            self.sync()
             shared = self._shared_reference(color, indices if page_indices is None
                                             else page_indices)
             for i in indices:

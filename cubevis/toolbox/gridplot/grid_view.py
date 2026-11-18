@@ -132,6 +132,7 @@ class GridView:
                  theme: str = "light",
                  on_drill: Optional[Callable[[int, str], object]] = None,
                  drill_js=None, play_outer=None, autoload: bool = True,
+                 on_shown: Optional[Callable[[bool], object]] = None, shown_js=None,
                  extra_controls: Sequence = (), extra_tools: Sequence = (),
                  app_context=None,
                  idle_text: str = "", embedded: bool = False,
@@ -150,6 +151,8 @@ class GridView:
         self._on_drill = on_drill
         self._drill_js = drill_js
         self._play_outer = play_outer
+        self._on_shown = on_shown
+        self._shown_js = shown_js
         self._autoload = bool(autoload)
         self._extra = list(extra_controls)
         self._extra_tools = list(extra_tools)
@@ -167,12 +170,13 @@ class GridView:
         # The probe on its own, squashed: a moving cursor makes many, only
         # the last matters, and a page request must not wait behind them.
         self._probe_pipe = comm_mgr.open(squash_queue=True, description="grid view probe")
-        self._ids = {k: str(uuid4()) for k in ("page", "probe", "drill", "save")}
+        self._ids = {k: str(uuid4()) for k in ("page", "probe", "drill", "save", "shown")}
         #: this view's namespace in the browser: ``window.__cvGrid[key]``
         self.key = self._ids["page"]
         self._pipe.register(self._ids["page"], self._handle_page)
         self._pipe.register(self._ids["drill"], self._handle_drill)
         self._pipe.register(self._ids["save"], self._handle_save)
+        self._pipe.register(self._ids["shown"], self._handle_shown)
         self._probe_pipe.register(self._ids["probe"], self._handle_probe)
         self.layout = self._build()
 
@@ -251,7 +255,7 @@ class GridView:
         return {"page": page, "n_pages": n_pages, "n_cells": self.n_cells, "rows": rows,
                 "cols": cols, "cells": cells, "x_name": xn, "y_name": yn, "extent": ext,
                 "partial": msg.get("indices") is not None,
-                "color": self._color_state(color)}
+                "color": self._color_state(color), "version": self._version()}
 
     def _color_kw(self, msg: dict, page: int, rows: int, cols: int):
         """The color scope a request asks for, and ``render``'s keywords
@@ -267,6 +271,37 @@ class GridView:
     def _color_state(self, color) -> dict:
         fn = getattr(self._source, "color_state", None)
         return fn(color) if (fn and color) else {"pending": False, "note": ""}
+
+    def _version(self) -> int:
+        """The source's version (0 for a source without one): pages the
+        browser holds of another version are out of date."""
+        return int(getattr(self._source, "version", 0) or 0)
+
+    async def _handle_shown(self, msg, context=None):
+        try:
+            return await asyncio.to_thread(self.shown, bool((msg or {}).get("on", True)))
+        except Exception as exc:                      # noqa: BLE001 -- shown, not raised
+            log.warning("grid view: shown failed: %s", exc, exc_info=True)
+            return {"error": str(exc)}
+
+    def shown(self, on: bool) -> dict:
+        """The application showed the grid again (*on*) or left it: the
+        source catches up with what changed meanwhile (``sync``: flags
+        added or committed while a cell was drilled into), and the reply
+        carries the version, so the browser draws its page again if it is
+        out of date, plus what the application's ``on_shown`` returns
+        (visplot: its status line)."""
+        out = {}
+        if on:
+            sync = getattr(self._source, "sync", None)
+            if callable(sync):
+                sync()
+        if self._on_shown is not None:
+            extra = self._on_shown(on)
+            if isinstance(extra, dict):
+                out.update(extra)
+        out["version"] = self._version()
+        return out
 
     async def _handle_probe(self, msg, context=None):
         try:
@@ -480,7 +515,7 @@ class GridView:
                     min_frame=list(MIN_FRAME), autoload=self._autoload, label_css=label_css,
                     label_tpl=_LABEL_CSS, idle_text=self._idle_text,
                     drill_js=self._drill_js, play_outer=self._play_outer,
-                    key=self._ids["page"])
+                    shown_js=self._shown_js, key=self._ids["page"])
         args["fit_to"] = None
         if self._app_context is not None:
             self._app_context.add_init_script(code=_GRID_JS, args=args, description="grid view")
@@ -549,7 +584,7 @@ const S = {page: 0, nPages: 1, nCells: 0, rows: +sel_rows.value, cols: +sel_cols
            viewport: null, playing: null, colorTimer: null, outerPlay: false, outerBusy: false,
            cache: new Map(), cacheKey: '', loading: false, syncing: false, zoomTimer: null,
            extent: null, gen: 0, frame: [frame[0], frame[1]], xEach: false, yEach: false, own: new Set(),
-           settle: null};
+           settle: null, version: null};
 const PR = pool[0], PC = pool[1];
 const AXIS0 = Object.assign({}, states[0].data);
 // a 1 x 1 image as Python sent it (a 2-D array, which image_rgba needs):
@@ -758,6 +793,14 @@ async function show(page, why) {
         S.cache.clear(); regrid();
         return show(0, why);
     }
+    if (resp && resp.version != null && resp.version !== S.version) {
+        // the source changed under the pages held (new flags, a commit):
+        // only this one, just drawn, is current
+        const mine = S.cache.get(page);
+        S.cache.clear();
+        if (mine && !resp.partial) S.cache.set(page, mine);
+        S.version = resp.version;
+    }
     apply(resp, page);
     status.text = `drawn in ${(performance.now() - t0).toFixed(0)} ms`;
     const col = resp.color || {};
@@ -831,6 +874,27 @@ const G = {
         const before = JSON.stringify(S.frame);
         regrid();
         if (JSON.stringify(S.frame) !== before && S.nCells > 0) show(S.page, 'resizing');
+    },
+    shown(on) {
+        // the application showed the grid again (or left it): Python
+        // catches up with what changed meanwhile -- flags added in a cell
+        // drilled into, a commit -- and the page is drawn again if what is
+        // on screen is out of date.  Not while the connection is still
+        // opening (a message then drops the session; see connected()).
+        if (!connected()) return Promise.resolve(null);
+        return send(pipe, ids.shown, {on: !!on}).then((resp) => {
+            if (!resp || resp.error) return resp;
+            if (shown_js) {
+                try { shown_js.execute(resp, {on: !!on}); }
+                catch (e) { console.warn('grid shown callback failed:', e); }
+            }
+            if (on && resp.version != null && S.version != null && resp.version !== S.version
+                    && S.nCells > 0) {
+                S.cache.clear(); S.cacheKey = '';
+                return show(S.page, 'flags changed: redrawing');
+            }
+            return resp;
+        });
     },
     reload(why, nCells) {
         // the source changed (the application's Plot): page 1, full extent;

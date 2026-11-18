@@ -44,6 +44,7 @@ Package location
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import NamedTuple, Optional
 
@@ -75,6 +76,8 @@ from .reader import (ScatterLayerSpec, ScatterLayerRender, ScatterLayerReference
                      AntennaZScoreSummary,
                      COLORIZE_AXIS_COLUMNS,
                      OTHER_CATEGORY_LABEL, OTHER_CATEGORY_COLOR, OTHER_CATEGORY_ALPHA)
+
+log = logging.getLogger(__name__)
 
 # Mirrors VisibilityScatter._MIN_ALPHA -- see that module's docstring
 # for the measured rationale (Datashader's min_alpha=40 default makes a

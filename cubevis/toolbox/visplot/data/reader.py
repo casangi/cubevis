@@ -1428,6 +1428,28 @@ _FRAME_CACHE_NODE_MAX = 64 << 30
 _FRAME_CACHE_MIN_BYTES = 256 << 20
 _FRAME_CACHE_FALLBACK = 512 << 20
 
+GRID_OVERFLOW_ENV = "CUBEVIS_VISPLOT_GRID_OVERFLOW"
+"""How far, in percent of the frame cache's size, the rows a grid holds in
+memory (``XArrayReader.preload``) may take the cache past its size.  The
+rows count in the cache: while they are held, frames are evicted so that
+frames and rows together stay within the size plus this share.  ``0``: the
+rows must fit within the cache's size."""
+
+_GRID_OVERFLOW_DEFAULT = 0.25     # Darrell, 2026-11-17: the cache plus a share
+
+
+def _grid_overflow_share() -> float:
+    """``$CUBEVIS_VISPLOT_GRID_OVERFLOW`` (percent) as a fraction; 25 % by
+    default."""
+    env = os.environ.get(GRID_OVERFLOW_ENV)
+    if env is not None and env.strip():
+        try:
+            return max(0.0, float(env) / 100.0)
+        except ValueError:
+            log.warning("%s=%r is not a number; using %.0f %%", GRID_OVERFLOW_ENV, env,
+                        100 * _GRID_OVERFLOW_DEFAULT)
+    return _GRID_OVERFLOW_DEFAULT
+
 
 def _physical_memory_bytes() -> Optional[int]:
     """Total physical memory, or ``None`` if it cannot be determined.
@@ -1774,11 +1796,20 @@ class _FrameCache:
     across a get-or-build.
     """
 
-    def __init__(self, max_bytes: int) -> None:
+    def __init__(self, max_bytes: int, overflow: Optional[float] = None) -> None:
         self.max_bytes = int(max_bytes)
+        #: how far past ``max_bytes`` reserved memory may take the cache
+        #: (a share of ``max_bytes``; ``GRID_OVERFLOW_ENV``)
+        self.overflow = _grid_overflow_share() if overflow is None else max(0.0, float(overflow))
         self.lock = threading.RLock()
         self._d: "collections.OrderedDict" = collections.OrderedDict()
         self.bytes = 0
+        #: memory held outside the frames but counted in the cache: a grid's
+        #: rows in memory (``XArrayReader.preload``), by owner (backend token)
+        self._reserved: dict = {}
+        #: owners collected while the lock was busy (``try_drop_token``):
+        #: their reservations go at the next locked call
+        self._gone: set = set()
         self.hits = 0
         self.misses = 0
         self.evictions = 0
@@ -1798,10 +1829,81 @@ class _FrameCache:
             self.hits += 1
             return frame
 
+    # -- memory reserved in the cache (a grid's rows, gridplot 2026-11-17) --
+    def _purge_gone(self) -> None:
+        """(lock held) Reservations of owners collected meanwhile."""
+        while self._gone:
+            self._reserved.pop(self._gone.pop(), None)
+
+    @property
+    def reserved_bytes(self) -> int:
+        with self.lock:
+            self._purge_gone()
+            return sum(self._reserved.values())
+
+    def _ceiling(self) -> int:
+        """Frames and reservations together never exceed this."""
+        return int(self.max_bytes * (1.0 + self.overflow))
+
+    def frame_budget(self) -> int:
+        """What frames may take now: ``max_bytes`` with nothing reserved;
+        otherwise what the reservations leave of ``max_bytes`` plus the
+        overflow share (never more than ``max_bytes``)."""
+        with self.lock:
+            self._purge_gone()
+            r = sum(self._reserved.values())
+            if r <= 0:
+                return self.max_bytes
+            return max(0, min(self.max_bytes, self._ceiling() - r))
+
+    def reserve_limit(self, owner) -> int:
+        """The most *owner* may reserve: the cache's size plus the overflow
+        share, less what the others have reserved."""
+        with self.lock:
+            others = sum(b for o, b in self._reserved.items() if o != owner)
+            return max(0, self._ceiling() - others)
+
+    def reserve(self, owner, nbytes: int) -> bool:
+        """Count *nbytes* held by *owner* in the cache (replacing what it
+        held), evicting frames to make room; False, and nothing reserved,
+        if it is over ``reserve_limit``."""
+        with self.lock:
+            nbytes = int(nbytes)
+            if self.max_bytes <= 0 or nbytes > self.reserve_limit(owner):
+                return False
+            self._reserved[owner] = nbytes
+            self._shrink("rows held for a grid")
+            return True
+
+    def release(self, owner, blocking: bool = True) -> None:
+        """*owner*'s reservation ends (non-blocking from a finalizer: left
+        to the next ``reserve``/``release`` then)."""
+        if not self.lock.acquire(blocking=blocking):
+            self._gone.add(owner)
+            return
+        try:
+            self._reserved.pop(owner, None)
+        finally:
+            self.lock.release()
+
+    def _shrink(self, why: str = FRAME_CACHE_ENV) -> None:
+        budget = self.frame_budget()
+        while self.bytes > budget and self._d:
+            old_key, (_g, old_bytes, _f) = self._d.popitem(last=False)
+            self.bytes -= old_bytes
+            log.info("visplot frame cache: evicted a %.0f MiB frame to stay within "
+                     "%.0f MiB (%s)", old_bytes / 2**20, budget / 2**20, why)
+            self.evictions += 1
+
     def put(self, key, generation: int, frame: pd.DataFrame) -> bool:
         with self.lock:
             self._drop(key)
             nbytes = _frame_nbytes(frame)
+            if self.max_bytes > 0 and self.max_bytes >= nbytes > self.frame_budget():
+                log.info("visplot frame cache: a %.0f MiB frame is not cached while a "
+                         "grid holds %.0f MiB of rows in the cache", nbytes / 2**20,
+                         self.reserved_bytes / 2**20)
+                return False
             if self.max_bytes <= 0 or nbytes > self.max_bytes:
                 if self.max_bytes > 0:
                     # A frame larger than the whole budget is re-read from
@@ -1813,13 +1915,7 @@ class _FrameCache:
                 return False
             self._d[key] = (generation, nbytes, frame)
             self.bytes += nbytes
-            while self.bytes > self.max_bytes and self._d:
-                old_key, (_g, old_bytes, _f) = self._d.popitem(last=False)
-                self.bytes -= old_bytes
-                log.info("visplot frame cache: evicted a %.0f MiB frame to stay within "
-                         "%.0f MiB (%s)", old_bytes / 2**20, self.max_bytes / 2**20,
-                         FRAME_CACHE_ENV)
-                self.evictions += 1
+            self._shrink()
             return key in self._d
 
     def _drop(self, key) -> None:
@@ -1855,8 +1951,10 @@ class _FrameCache:
         -- there is no count to report since nothing was inspected.
         """
         if not self.lock.acquire(blocking=False):
+            self._gone.add(token)          # its reservation, at the next locked call
             return 0
         try:
+            self._reserved.pop(token, None)
             keys = [k for k in self._d if k[0] == token]
             for k in keys:
                 self._drop(k)
@@ -1876,7 +1974,9 @@ class _FrameCache:
     def stats(self) -> dict:
         with self.lock:
             return {"entries": len(self._d), "bytes": self.bytes,
-                    "max_bytes": self.max_bytes, "hits": self.hits,
+                    "max_bytes": self.max_bytes, "reserved_bytes": sum(self._reserved.values()),
+                    "frame_budget": self.frame_budget(), "overflow": self.overflow,
+                    "hits": self.hits,
                     "misses": self.misses, "evictions": self.evictions}
 
 
@@ -2952,6 +3052,12 @@ class XArrayReader(abc.ABC):
     # read the data as before, and the frames read from the copy are kept
     # apart by the key in their cache fingerprint.  One copy per reader;
     # a commit, a Reload (cache generation) or close drops it.
+    #
+    # The copy counts in the frame cache (2026-11-17, Darrell): it is
+    # reserved there, frames are evicted to make room, and the two together
+    # may run past the cache's size by ``GRID_OVERFLOW_ENV``'s share (25 %),
+    # no more.  Before, the copy was sized against the cache but held beside
+    # it, so the two could reach twice the budget.
 
     #: the fields that narrow rows within the copy's partitions
     _PRELOAD_ROW_FIELDS = ("spw", "field_names", "scan", "time_range",
@@ -2971,8 +3077,12 @@ class XArrayReader(abc.ABC):
             antenna_names=selection.antenna_names, autocorr="include",
             data_column=selection.data_column,
             cache_generation=int(getattr(selection, "cache_generation", 0) or 0))
-        budget = (float(budget_mb) * 2**20 if budget_mb is not None
-                  else float(self._frame_cache_obj().max_bytes))
+        cache = self._frame_cache_obj()
+        owner = self._frame_token()
+        # the cache's size plus its overflow share, less what other grids hold
+        budget = float(cache.reserve_limit(owner))
+        if budget_mb is not None:
+            budget = min(budget, float(budget_mb) * 2**20)
         parts, all_pairs, nbytes = [], set(), 0
         for raw in self._iter_visibility_partitions(base):
             if ("baseline_antenna1_name" in raw.coords
@@ -2989,13 +3099,20 @@ class XArrayReader(abc.ABC):
             heavy = [v for v in (vis, "FLAG", "WEIGHT", "UVW") if v and v in ds.data_vars]
             nbytes += sum(int(ds[v].nbytes) for v in heavy)
             if nbytes > budget:
-                why = (f"the selection is {nbytes / 2**20:.0f} MiB or more, over "
-                       f"{budget / 2**20:.0f} MiB: the cells read one by one")
+                why = (f"the selection is {nbytes / 2**20:.0f} MiB or more, over the "
+                       f"{budget / 2**20:.0f} MiB the frame cache allows (its size plus "
+                       f"{100 * cache.overflow:.0f} %; {FRAME_CACHE_ENV}, "
+                       f"{GRID_OVERFLOW_ENV}): the cells read one by one")
                 log.info("visplot grid: not held in memory (%s)", why)
                 return {"key": None, "mb": round(nbytes / 2**20, 1), "reason": why}
             parts.append((ds, heavy))
         if not parts:
             return {"key": None, "mb": 0.0, "reason": "no rows"}
+        if not cache.reserve(owner, nbytes):            # another grid took the room
+            why = (f"{nbytes / 2**20:.0f} MiB does not fit beside what other grids hold "
+                   f"in the frame cache: the cells read one by one")
+            log.info("visplot grid: not held in memory (%s)", why)
+            return {"key": None, "mb": round(nbytes / 2**20, 1), "reason": why}
         t0 = __import__("time").perf_counter()
         held = []
         for ds, heavy in parts:
@@ -3015,6 +3132,7 @@ class XArrayReader(abc.ABC):
         pre = getattr(self, "_cv_preload", None)
         if pre is not None and (key is None or pre["key"] == key):
             self._cv_preload = None
+            self._frame_cache_obj().release(self._frame_token())
 
     def _preloaded_partitions(self, selection) -> Optional[list]:
         """The in-memory partitions for *selection*, if it carries the
@@ -3062,11 +3180,12 @@ class XArrayReader(abc.ABC):
         # worse than no split.  Then the cells read on their own, from the
         # held rows (this one is cut from what was just read).
         big = sum(_frame_nbytes(df) for df in frames.values())
-        if big > cache.max_bytes / 2:
+        room = cache.frame_budget()        # what the held rows leave for frames
+        if big > room / 2:
             pre["no_split"] = True
             log.info("visplot grid: the union's frames (%.0f MiB) take more than half "
-                     "the frame cache (%.0f MiB): each cell reads its own rows",
-                     big / 2**20, cache.max_bytes / 2**20)
+                     "of the frame cache's %.0f MiB left beside the rows held: each "
+                     "cell reads its own rows", big / 2**20, room / 2**20)
         return {k: _rows_of(df, selection) for k, df in frames.items()}
 
     @staticmethod
@@ -3144,6 +3263,8 @@ class XArrayReader(abc.ABC):
         self._cv_preload = None        # the grid's in-memory copy goes with them
         cache = _GLOBAL_FRAME_CACHE
         token = getattr(self, "_frame_cache_token", None)
+        if cache is not None and token is not None:
+            cache.release(token, blocking=not getattr(_FINALIZING, "on", False))
         if cache is not None and token is not None:
             if getattr(_FINALIZING, "on", False):
                 cache.try_drop_token(token)

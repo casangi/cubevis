@@ -57,18 +57,29 @@ def _find_visplot() -> pathlib.Path:
 _PKG_DIR = _find_visplot()
 
 
-def _load(name):
-    pkg = sys.modules.get("_vp_info_pkg")
+#: the shared plot core moved to ``toolbox/gridplot`` (gridplot G1a,
+#: 2026-11-10); visplot's ``panel_spec`` / ``colormap_scaling`` are now
+#: aliases importing from ``..gridplot``, which a package of visplot's
+#: files alone cannot resolve -- so those two are loaded from gridplot
+_GRID_DIR = _PKG_DIR.parent / "gridplot"
+
+
+def _load(name, where=None, pkg_name="_vp_info_pkg"):
+    pkg = sys.modules.get(pkg_name)
     if pkg is None:
-        pkg = types.ModuleType("_vp_info_pkg")
-        pkg.__path__ = [str(_PKG_DIR)]
-        sys.modules["_vp_info_pkg"] = pkg
-    return importlib.import_module(f"_vp_info_pkg.{name}")
+        pkg = types.ModuleType(pkg_name)
+        pkg.__path__ = [str(where or _PKG_DIR)]
+        sys.modules[pkg_name] = pkg
+    return importlib.import_module(f"{pkg_name}.{name}")
 
 
 ip = _load("info_panel")
-ps = _load("panel_spec")
-cms = _load("colormap_scaling")
+if (_GRID_DIR / "panel_spec.py").is_file():
+    ps = _load("panel_spec", _GRID_DIR, "_gp_info_pkg")
+    cms = _load("colormap_scaling", _GRID_DIR, "_gp_info_pkg")
+else:                                       # before the move (flat layout)
+    ps = _load("panel_spec")
+    cms = _load("colormap_scaling")
 
 
 # --------------------------------------------------------------------------- #

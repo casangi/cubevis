@@ -1103,3 +1103,85 @@ Every table covers 10 antennas and 4 SPWs.  New for the reader:
 - `caltables.tgz` (the nine tables alone) is 0.86 MiB.  It is not
   committed.  The C0 tests will find it through a `CALTABLES` variable
   and skip without it, as the visplot tests do with `VLBA`.
+
+## 15. Before merging: review and fixes (2026-11-17, base `3ef11065`)
+
+The last grid session before `gridplot` merges and casangi/cubevis issue
+9 closes (calplot goes on on `calplot`).  A review of the branch against
+`main` (no conflicts; nothing for the grid stranded on `calplot`), then:
+
+**The grid showed old flags.**  A flag added after Plot in Grid -- in a
+cell drilled into, the usual way to flag from a grid -- did not show on
+the grid's pages, drawn or not, until the next Plot in Grid; a commit
+neither.  `VisGridSource` copied the selection's `pending_version` and
+`cache_generation` at `configure`, kept up to 128 cells, held the rows
+from before the commit, and the browser kept its pages.  Now:
+- `VisGridSource.sync()`, run before every render: when the plotter's
+  pending version, flag view or cache generation differ from the cells',
+  the kept cells, the union and the color samples go, and after a commit
+  the rows held are read again.  `version` changes with it (and with
+  `configure`).
+- Each page reply carries the version; the browser drops the pages it
+  holds of another version.
+- `GridView.shown(on)` (a `shown` message; `G.shown(on)` in the
+  browser): visplot's `__cvGridLayout` sends it when the Layout buttons
+  show the grid or leave it.  Python syncs and answers the version and,
+  through `on_shown`, the status line; the browser draws the page again
+  if it is out of date.  It is not sent while the websocket is still
+  opening (`connected()`).
+- **This also closes the open "status line after Back to Grid"** item
+  (sections 4 and 5): `_grid_shown` sets `_grid_on`, the reply sets the
+  status line.
+- Tests: `test_grid_follows_flags_added_after_plot` (fails without
+  `sync`), `test_grid_follows_a_commit`; the browser check's *back to
+  grid* now also waits for "Layout: Grid by".
+
+**The rows held count in the frame cache** (Darrell: the cache plus a
+set share).  Before, `preload` sized its copy against the cache's budget
+but held it beside the cache, so the two could reach twice the budget --
+up to ~128 GiB on a compute node since section 5's larger budgets.  Now
+`_FrameCache` has reservations: `preload` reserves its bytes
+(`reserve(token, n)`), frames are evicted to make room, and frames plus
+reservations never exceed the size plus `overflow` (25 % by default,
+`CUBEVIS_VISPLOT_GRID_OVERFLOW=<percent>`).  With nothing reserved the
+cache behaves as before.  The split's "union over half the cache" test
+uses what the rows leave (`frame_budget()`).  `drop_preload`, close and
+the backend's finalizer release the reservation (the finalizer without
+blocking: an owner it cannot release then goes at the next locked call).
+Tests in `test_frame_cache.py` (`TestFrameCacheUnit`) and
+`test_rows_held_count_in_the_frame_cache`.
+
+**Smaller**
+- `tests/manual/visplot/test_info_panel.py` failed to collect since G1a
+  ("attempted relative import beyond top-level package"): it loads
+  visplot's files as a package of their own, and `panel_spec` /
+  `colormap_scaling` became aliases of `..gridplot`.  It now loads those
+  two from `toolbox/gridplot`.  35 pass.
+- `visplot_grid_check.py`'s *fit to cells* compared the shape after ✱
+  with the page's rows x cols, which fails on data with fewer cells than
+  a page (the tiny MS's 5 antennas, fitted 2 x 3 as designed); it now
+  expects the fitted shape.  29 of 29 pass on the tiny MS.
+- `data/_scatter_render.py` used `log` without defining it (an error
+  path; already so on `main`).
+- **CI**: a `visplot-grid` suite runs `test_vis_grid.py` (66 tests,
+  about 90 s with two workers), placed before `tiny-ms` so it does not
+  meet the `caltab` suite `calplot` adds after `visplot-remote`.
+- **Docs**: `docs/source/applications/visplot.rst` has a *Grid* section,
+  the grid's task arguments, the overflow setting and the Scope lists.
+
+**Settled, not done**
+- *The transport dropping a session on an early message* (section 4): the
+  transport review on `main` (`devel/notes/drs/review/transport_review_2026-11-16.md`)
+  covers it as JS-1 (a `send()` while connecting starts a second attempt
+  that closes the first mid-handshake) with WS-1 (that aborted handshake
+  is fatal).  When those are fixed, GridView's wait for `connected()`
+  before its first page, and before `shown`, can go.
+- *Real-data timings* (TW Hya, VLBA subset): dropped as a task; they come
+  with use.  The default color scope stays *this page* until they do.
+- *Planned and not built* (plan 9.4 items 7-8, placed in G2 by 9.8): cell
+  badges, outlier outlines and sorting cells by a statistic ("worst
+  first").  Proposed (2026-11-17): build them in the shared `GridView`
+  when calplot (C1) needs them -- antenna-based tables are where they pay
+  most -- and visplot gets them then.  plotms's one row per outer value
+  for compound iteration (section 13): dropped; cells are titled with
+  both values and an outer value's cells are consecutive.

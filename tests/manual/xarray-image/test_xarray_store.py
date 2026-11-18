@@ -135,6 +135,46 @@ def test_mask_writes(images):
     assert np.array_equal(XarrayImageStore(image, mask_path).read_mask_plane([1, 4])[:, :, 0, 0], plane)
 
 
+def test_no_mask_writes_while_a_cycle_runs(images):
+    """the imager has the mask during a cycle, and within one process arcae
+    and casatools cannot see each other's table locks"""
+    from cubevis.imaging import LocalImagingSession, testing as T
+    image, mask_path, _, _, mask = images
+    dec = T.ScriptedDeconvolver(imagename='guard', imsize=[24, 18], nchan=7, niter=20, cycleniter=10)
+    session = LocalImagingSession(dec, store_factory=lambda *_: XarrayImageStore(image, mask_path))
+    field = session.fields()[0]['id']
+    store = session.cube(field).store
+    assert store.write_guard == session.cycle_running and not session.cycle_running()
+    plane = np.ones((24, 18))
+    seen = {}
+    step = dec._step
+
+    def stepping():
+        seen['running'] = session.cycle_running()
+        for name, call in (('plane', lambda: store.write_mask_plane([0, 1], plane)),
+                           ('chans', lambda: store.write_mask_chans(0, 1, np.ones((24, 18, 2)))),
+                           ('edit', lambda: session.cube(field).edit_mask('fill', 'chan', [0, 1]))):
+            try:
+                call()
+                seen[name] = 'written'
+            except RuntimeError as ex:
+                seen[name] = str(ex)
+        seen['read'] = store.read_mask_plane([0, 1]).shape           # reading goes on
+        return step()
+
+    dec._step = stepping
+    session.start()
+    assert seen['running'] is True and seen['read'] == (24, 18, 1, 1)
+    for name in ('plane', 'chans', 'edit'):
+        assert 'a clean cycle is running' in seen[name], (name, seen[name])
+    assert np.array_equal(ci.CasaImage(mask_path)[...], mask)        # nothing was written
+    assert not session.cycle_running()
+    store.write_mask_plane([0, 1], plane)                            # and afterwards it is
+    assert (ci.CasaImage(mask_path)[:, :, 0, 1] == 1).all()
+    ### a store on its own (createmask, a script) has no guard
+    assert XarrayImageStore(image, mask_path).write_guard is None
+
+
 def test_mask_shape_and_missing_images(images, tmp_path):
     image, mask_path = images[0], images[1]
     other = str(tmp_path / 'other.mask')

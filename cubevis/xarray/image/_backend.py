@@ -68,7 +68,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import _coords as co
-from ._image import CasaImage, PagedArray, is_casa_image
+from ._image import CasaImage, IndexedArray, is_casa_image
 from ._schema import (BEAM_PARAMS_LABELS, DEVIATIONS, DIM_FREQUENCY, DIM_L, DIM_M, DIM_POLARIZATION,
                       DIM_TIME, SCHEMA_VERSION, XRADIO_FRAMES, mask_variable_name, quantity)
 
@@ -87,7 +87,7 @@ class LazyPixels(BackendArray):
     ``time`` axis, which the image does not have.  ``invert`` turns a CASA
     mask (True = good) into a flag (True = not valid).'''
 
-    def __init__(self, array: PagedArray, order: Sequence[int], invert: bool = False):
+    def __init__(self, array: IndexedArray, order: Sequence[int], invert: bool = False):
         self.array = array
         self.order = tuple(int(a) for a in order)
         self.invert = invert
@@ -233,7 +233,7 @@ def open_casa_image(path: str, *, variable: str = 'SKY', masks: bool = True, sky
     dims, order = info['dims'], info['order']
     drop = {drop_variables} if isinstance(drop_variables, str) else set(drop_variables or ())
 
-    def lazy(array: PagedArray, invert: bool, attrs: Dict[str, Any]):
+    def lazy(array: IndexedArray, invert: bool, attrs: Dict[str, Any]):
         backend = LazyPixels(array, order, invert=invert)
         var = xr.Variable(dims, indexing.LazilyIndexedArray(backend), attrs)
         ### what a dask user gets with chunks={}: a plane per chunk
@@ -312,6 +312,8 @@ def open_casa_image(path: str, *, variable: str = 'SKY', masks: bool = True, sky
             'tile_shape': list(image.tile_shape) if image.tile_shape else None,
             'masks': image.mask_names,
             'default_mask': image.default_mask,
+            'files': image.files(),
+            'concatenated': [m.path for m in image.members] if hasattr(image, 'members') else None,
         },
         'coordinate_system': record,
         'imageinfo': image.imageinfo,
@@ -411,6 +413,6 @@ class CasaImageBackendEntrypoint(BackendEntrypoint):
         if kwargs:
             raise TypeError(f'casa-image: unexpected arguments {sorted(kwargs)}')
         if not is_casa_image(filename_or_obj):
-            raise ValueError(f'{filename_or_obj!r} is not a CASA paged image')
+            raise ValueError(f'{filename_or_obj!r} is not a CASA image (paged or concatenated)')
         return open_casa_image(os.fspath(filename_or_obj), variable=variable, masks=masks,
                                sky_coords=sky_coords, drop_variables=drop_variables)

@@ -35,6 +35,8 @@ GUI above it do not know which one they have.
 It only shapes what the reader gives into what ``ImageCube`` expects
 (casatools' ``getchunk`` shapes, float64).  Differences that are meant:
 
+* Mask writes are refused while a clean cycle runs (``write_guard``, set by
+  ``LocalImagingSession``): see ``_may_write``.
 * Nothing stays open: each call reads through a handle of its own.  The
   imager (tclean, through casatools) rewrites the residual and the mask in
   this same process between calls, and an arcae handle held across that keeps
@@ -84,6 +86,8 @@ class XarrayImageStore:
         self._img: Optional[ImageReader] = None
         self._msk: Optional[ImageReader] = None
         self._mask_opened = False
+        #: set by the session: a callable that is true while a clean cycle runs
+        self.write_guard = None
 
     # ---- opening ------------------------------------------------------
 
@@ -152,7 +156,16 @@ class XarrayImageStore:
     def read_mask_plane(self, index: List[int]):
         return self._mask().plane(index[0], index[1]).astype(np.float64)[:, :, None, None]
 
+    def _may_write(self) -> None:
+        '''The imager has the mask while a cycle runs.  Within one process its
+        casacore and arcae's cannot see each other's table locks, so a write
+        now could be lost under the imager's own, or read by it half done;
+        refuse it.  (The GUI does not offer mask edits during a cycle.)'''
+        if self.write_guard is not None and self.write_guard():
+            raise RuntimeError('a clean cycle is running: the mask cannot be changed until it ends')
+
     def write_mask_plane(self, index: List[int], pixels) -> None:
+        self._may_write()
         self._mask().write_plane(index[0], index[1], pixels)
 
     def read_mask_chans(self, stokes: int, start: int, count: int):
@@ -161,6 +174,7 @@ class XarrayImageStore:
 
     def write_mask_chans(self, stokes: int, start: int, pixels) -> None:
         '''Write ``[x, y, count]`` (or ``[x, y, 1, count]``) from channel ``start``.'''
+        self._may_write()
         self._mask().write_chans(stokes, start, pixels)
 
     def read_mask_spectrum(self, index: List[int]):

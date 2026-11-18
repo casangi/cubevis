@@ -180,16 +180,15 @@ sandbox **[measured]**:
 
 ### 1.9 Not done, and open
 
-- **Only paged images.**  FITS, MIRIAD, and concatenated or expression
-  images (`imageconcat`) are refused with a message.  If parallel tclean
-  ever hands iclean a concatenated residual, that needs handling.
+- **Only paged images** *(concatenated images are read since section 3)*.
+  FITS, MIRIAD and expression images are refused with a message.
 - **A real ASTROviper image** has not been seen.  The xradio tests use
   images xradio itself wrote here (`make_empty_sky_image`, `write_image`).
   Its schema is 0.0.3 and may move; the differences live in
   `describe_dataset` and `_schema.py`.
 - **An xradio mask for cleaning**: interactive clean's mask is a second
   image.  Where an xradio imager keeps its clean mask is not known.
-- **A guard against mask writes during a cycle** (1.4).
+- **A guard against mask writes during a cycle** (1.4).  *Built: section 3.*
 - **arcae below 0.5.9** was not tried; the `image` extra asks for
   `>=0.5.9,<0.6.0`, inside xarray-ms's range.
 - **Merging with `calplot`**: both branches add `cubevis/xarray/__init__.py`
@@ -269,3 +268,207 @@ name).  `tests/manual/iclean-imaging` (real tclean, local and on a kernel):
 New: `cubevis/xarray/image/_register.py`.  Changed:
 `cubevis/xarray/image/__init__.py`, `cubevis/imaging/_session.py`,
 `_xarray_store.py`, `__init__.py`, two test files, this note.
+
+---
+
+## 3. Concatenated images, locks, the mask tools, the README (2026-11-16, base `xarray-image` `a2b00e4`)
+
+### 3.1 Concatenated images
+
+`CasaImage(path)` gives a `ConcatImage` (`cubevis/xarray/image/_concat.py`)
+for an image made by `ia.imageconcat`, with `CasaImage`'s surface; the
+engine, `ImageReader` and interactive clean's store read and write it
+unchanged.
+
+On disk **[measured, casatools 6.7.6]** it is a directory with one file,
+`imageconcat.json`: `Axis` (the pixel axis joined along) and `Images`.  A
+name starting `./` is beside the concatenated image (`mode="nomove"`),
+`././` is inside its directory (`"copy"`, `"move"`); `mode="paged"` writes
+an ordinary image.
+
+What casacore makes of the parts is followed, and compared with casatools
+for every mode, with channels that run on evenly and with a gap:
+
+| | |
+|---|---|
+| pixels | the parts' joined; a write goes to the part that holds the pixel |
+| pixel mask | the parts' default masks joined; all good for a part without one |
+| spectral axis | the first part's when the channels run on evenly; else a tabular axis of every channel |
+| Stokes axis | the labels joined |
+| beam | the common beam; a beam per plane when they differ; none when any part has none |
+| units, image information | the first part's |
+
+- `concat_images(path, images, axis)` writes one (casatools opens it), so
+  the tests need no CASA.
+- A concatenation of concatenations works.
+- `ImageReader` watches the list and every part's `table.dat`, so a part
+  rewritten by the imager is seen.
+- Internally `PagedArray` and the new `ConcatArray` share `IndexedArray`
+  (the indexing); `is_paged_image` / `is_concat_image` tell the two apart.
+
+Not known: whether today's parallel tclean still writes concatenated
+residuals.  If it does, they now open.
+
+### 3.2 Table locks: what can and cannot cooperate [measured]
+
+| Situation | Result |
+|---|---|
+| casatools holds a write lock; **another process** writes with arcae | arcae waits, and writes 0.15 s after the unlock: casacore's locking works across processes |
+| casatools holds a write lock; **the same process** writes with arcae | arcae writes at once: the lock is not seen |
+| casatools holds a lock; the same process only *reads* with arcae, then another process tries to write | the other process writes at once: **arcae closing its handle released casatools' lock** |
+
+The last two are how POSIX file locks work, not something arcae or
+casacore can be told to do differently: locks belong to the process, so
+two casacore libraries in one process never block each other, and closing
+any descriptor on the lock file drops every lock the process holds on it.
+
+So, for interactive clean, where the imager and the image store share a
+process:
+
+- **Between processes nothing needed doing**: another CASA session, or an
+  imager in another process, is locked out and waits as before.
+- **Within the process there is no lock to cooperate with.**  Darrell's
+  recollection that the casatools store also clashed with tclean is
+  plausible but was not tested.  The casatools store at least shares
+  tclean's casacore (one table object, one cache); arcae does not.
+- **A read during a cycle drops tclean's lock on that image.**  The GUI
+  does read channels during a cycle.  This only matters if a second
+  process uses the same image at that moment.  Not prevented; noted.
+- **Writes during a cycle are refused** (below), the one case where the
+  missing lock could lose data.
+
+### 3.3 No mask writes while a cycle runs
+
+`LocalImagingSession.cycle_running()` is true from the start of `start`,
+`run_cycle` or `arun_cycle` to its return.  The session gives it to each
+`XarrayImageStore` as `write_guard`; `write_mask_plane` and
+`write_mask_chans` then raise `a clean cycle is running: the mask cannot be
+changed until it ends`.  Reads go on.  The GUI already stops mask edits
+during a cycle (`remote_registrations.py`), so this is for a script or a
+future caller.  A store made on its own (the mask tools) has no guard.
+`CasatoolsImageStore` is unchanged.
+
+### 3.4 `createmask` and `createregion`
+
+- **They are broken, and not by this work** **[measured]**: both fail in
+  their constructor, before a browser is involved.  `CubeMask.shape()`
+  makes its `ImagePipe`, which now needs the application context's comm
+  manager (`BokehInit.get_app_context()`), and these applications make
+  their `BokehAppContext` later, in `_launch_gui`.  They predate that
+  design (`CreateMask._asyncio_loop` also uses a `self._cube` that is
+  never set).  What else fails after the constructor was not explored.
+- **Repairing them is a port to the current application structure**
+  (as `toolbox/iclean/_app.py`), to be checked in a browser.  Not done
+  here.
+- **Done**: `cubevis.data.casaimage.new` and `.shape`, which only these two
+  use, go through `cubevis.xarray.image` when arcae is installed (casatools
+  otherwise, as before).  `new` no longer prints the coordinate system.
+  With image access through `open_image_cube`, `CreateMask` itself should
+  need no casatools once ported; CASA-region output (`convert_masks`,
+  `format='region'`) still needs casatools' `regionmanager`.  Their task
+  wrappers
+  (`private/casatasks/createmask.py`, generated) still import casatools
+  for parameter checking and casatasks for logging.
+
+### 3.5 README
+
+Installation says what `iclean` depends on now; a new "Images" section
+under Interactive Clean has the switch back to casatools, the debug line,
+and a short example of the engine, `CasaImage` and `ImageReader`.
+
+### 3.6 Checked
+
+`tests/manual/xarray-image`: 79 pass (17 new: concatenated images with and
+without casatools, the write guard, the mask tools' helpers).
+`tests/manual/iclean-imaging` (real tclean): 118 pass, 2 skipped, as
+before.  `README.rst` parses.
+
+### 3.7 Files
+
+New: `cubevis/xarray/image/_concat.py`,
+`tests/manual/xarray-image/test_concat_image.py`.  Changed:
+`cubevis/xarray/image/_image.py`, `_backend.py`, `_dataset.py`, `_write.py`,
+`__init__.py`; `cubevis/imaging/reader.py`, `_xarray_store.py`,
+`_session.py`; `cubevis/data/casaimage/__init__.py`; `README.rst`; two test
+files; this note.
+
+---
+
+## 4. Before merging (2026-11-18, `xarray-image` `a2b00e4` + section 3, `main` `4f9b5fd`, `calplot` `e36709b`)
+
+### 4.1 Into `main`
+
+- **Merges cleanly** (`README.rst`, `pyproject.toml`, `tests/ci/suites.toml`
+  auto-merge).  On the merged tree `tests/manual/xarray-image` and
+  `tests/manual/iclean-imaging` pass: 196 pass, 2 skipped, and
+  `test_a_path_not_on_the_kernels_side_is_refused_there` failed once in
+  the full run and passed on three reruns.  It checks parameters on a
+  remote kernel and opens no image: a timing flake, not this branch.
+- **arcae as a requirement of `iclean` breaks no install** [measured, PyPI,
+  Python 3.12]: casatools 6.7.6.14 has wheels for Linux x86_64 and macOS
+  arm64 (14, 15, 26); arcae 0.5.9 for those and for Linux aarch64 and
+  macOS 15 x86_64.  Wherever casatools installs, arcae does.
+- **The docs site** that came with `main` (`docs/source/applications/`)
+  said `iclean` brings in "casatasks and casatools".  `installing.md` gets
+  arcae and xarray in its table and a section "How iclean reads images";
+  `iclean_starting.md` one line.  Delivered separately, based on `main`.
+
+### 4.2 When `calplot` merges after this
+
+Two conflicts, both mechanical; with them resolved, both engines
+register side by side and `tests/manual/xarray-image` with
+`tests/manual/calplot` pass (150 pass, 24 skipped).
+
+`cubevis/xarray/__init__.py`: keep the license header and use this
+docstring:
+
+````
+"""``cubevis.xarray`` -- xarray backends for CASA tables, read with arcae.
+
+Nothing here imports Bokeh or CASA (the ``cubevis.imaging`` rule), so a
+remote worker, a test or another package can use it without the GUI.
+arcae is imported when a table is opened, not at import.  Each backend is
+a package of its own that imports nothing from the others, so that any of
+them can leave cubevis and be installed by itself.
+
+* ``caltab`` -- engine ``"casa-caltab"``: a CASA calibration table as an
+  ``xarray.DataTree`` in the shape of xradio's draft calibration schema::
+
+      import xarray as xr
+      dt = xr.open_datatree("cal.G", engine="casa-caltab")
+
+  or ``cubevis.xarray.caltab.open_caltab("cal.G")``.
+
+* ``image`` -- engine ``"casa-image"``: a CASA image as an
+  ``xarray.Dataset`` read lazily, in xradio's image layout; ``CasaImage``
+  for reading and writing pixels and masks directly; ``open_image`` and
+  ``describe_dataset`` for CASA and xradio (Zarr) images alike::
+
+      import xarray as xr
+      ds = xr.open_dataset("ngc5921.image", engine="casa-image")
+
+The engines are entry points (``pyproject.toml``), so an installed cubevis
+needs nothing more.  Run from a checkout that is not installed, importing
+a backend's package registers its engine::
+
+      from cubevis.xarray.caltab import open_caltab     # "casa-caltab" is now an engine
+      import cubevis.xarray.image                       # "casa-image" is now an engine
+
+Plans and records: ``devel/docs/gridplot/grid_and_calplot_plan.md`` section
+10, ``devel/notes/drs/calplot/calplot_notes.md``,
+``devel/notes/drs/xarray-image/xarray_image_notes.md``.
+"""
+````
+
+`pyproject.toml`: one table with both engines:
+
+```toml
+# xarray engines (cubevis/xarray): arcae-based, no Bokeh and no CASA.  Each is
+# a package of its own that imports nothing else of cubevis.
+#   xr.open_datatree("cal.G", engine="casa-caltab")   a CASA calibration table
+#   xr.open_dataset("x.image", engine="casa-image")   a CASA image
+# They need arcae and xarray, which the [image] and [xarray] / [visplot] extras bring.
+[project.entry-points."xarray.backends"]
+casa-caltab = "cubevis.xarray.caltab._backend:CaltabBackendEntrypoint"
+casa-image = "cubevis.xarray.image._backend:CasaImageBackendEntrypoint"
+```

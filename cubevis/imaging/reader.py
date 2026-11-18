@@ -40,7 +40,8 @@ it (``XarrayImageStore``, and through that ``ImageCube`` and interactive
 clean) is written against this class only, so the dataset below can follow
 xradio's schema as that settles.  Below it is ``cubevis.xarray.image``:
 ``open_image`` gives the dataset -- xradio's image layout for both kinds of
-source -- and ``describe_dataset`` what it holds.
+source -- and ``describe_dataset`` what it holds.  A CASA image may be a
+paged image or a concatenation of images (``ia.imageconcat``).
 
 Indices are CASA's, as interactive clean uses them: ``x``, ``y`` (the
 dataset's ``l``, ``m``), then Stokes, then channel.  An image without a
@@ -100,6 +101,7 @@ class ImageReader:
         self._ds = None
         self._desc: Optional[dict] = None
         self._stamp = None
+        self._files: Optional[list] = None
         self._coordinates: Optional[dict] = None
 
     @classmethod
@@ -117,14 +119,19 @@ class ImageReader:
     def _source_stamp(self):
         if self._format == 'dataset':
             return None
-        names = ('table.dat',) if self._format == 'casa-image' else ('zarr.json', '.zmetadata', '.zattrs', '.zgroup')
+        if self._format == 'casa-image':
+            ### table.dat; for a concatenated image, its list and every part's table.dat
+            files = self._files or [os.path.join(self._path, name) for name in ('table.dat', 'imageconcat.json')]
+        else:
+            files = [os.path.join(self._path, name) for name in ('zarr.json', '.zmetadata', '.zattrs', '.zgroup')]
         stamp = []
-        for name in names:
+        for name in files:
             try:
-                st = os.stat(os.path.join(self._path, name))
+                st = os.stat(name)
                 stamp.append((name, st.st_mtime_ns, st.st_size, st.st_ino))
             except OSError:
-                pass
+                if self._files:
+                    stamp.append((name, None))            # a part went away: read the description again
         if not stamp:
             raise FileNotFoundError(self._path)
         return tuple(stamp)
@@ -135,7 +142,8 @@ class ImageReader:
             image = _image_package()
             ds = image.open_image(self._source) if self._format != 'zarr' else image.open_image(self._path, chunks=None)
             self._desc = image.describe_dataset(ds, self._variable_asked)
-            self._ds, self._stamp, self._coordinates = ds, stamp, None
+            self._files = list((ds.attrs.get('casa_image') or {}).get('files') or []) if self._format == 'casa-image' else None
+            self._ds, self._stamp, self._coordinates = ds, self._source_stamp(), None
         return self._ds
 
     def _description(self) -> dict:
@@ -188,6 +196,8 @@ class ImageReader:
         '''Newest change time of the source's files (0 for a dataset in hand).'''
         if self._path is None:
             return 0.0
+        if self._format == 'casa-image':
+            return _image_package().CasaImage(self._path).modified()
         newest = 0.0
         for root, _, files in os.walk(self._path):
             for name in files:
@@ -195,8 +205,6 @@ class ImageReader:
                     newest = max(newest, os.path.getctime(os.path.join(root, name)))
                 except OSError:
                     pass
-            if self._format == 'casa-image':
-                break                                  # the image's own files, not its masks'
         return newest
 
     def beam(self, stokes: int = 0, chan: int = 0) -> Optional[dict]:
@@ -308,7 +316,8 @@ class ImageReader:
 
     def _writable(self, ds) -> bool:
         if self._format == 'casa-image':
-            return os.access(os.path.join(self._path, 'table.dat'), os.W_OK)
+            files = [f for f in (self._files or []) if f.endswith('table.dat')]
+            return bool(files) and all(os.access(f, os.W_OK) for f in files)
         if self._format == 'zarr':
             return os.access(self._path, os.W_OK)
         return isinstance(ds[self._desc['variable']].variable._data, np.ndarray)      # pylint: disable=protected-access

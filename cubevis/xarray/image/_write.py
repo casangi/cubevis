@@ -55,7 +55,9 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from ._image import CasaImage, MASK_COLUMN, PIXEL_COLUMN, PagedArray, _transpose_matrices
+import json
+
+from ._image import CONCAT_FILE, CasaImage, MASK_COLUMN, PIXEL_COLUMN, PagedArray, _transpose_matrices
 
 _TAQL_TYPES = {np.dtype(np.float32): 'R4', np.dtype(np.float64): 'R8',
                np.dtype(np.complex64): 'C4', np.dtype(np.complex128): 'C8',
@@ -316,3 +318,36 @@ def write_image(path: str, pixels, *, coords: Optional[Mapping[str, Any]] = None
     for name, good in masks.items():
         image.mask(name)[...] = np.asarray(good, dtype=bool)
     return image
+
+
+def concat_images(path: str, images: Sequence[str], axis: int = -1, *, overwrite: bool = False) -> CasaImage:
+    '''Make a concatenated image at ``path`` from existing ``images``,
+    joined along pixel ``axis`` (the last by default: channels, for the
+    usual four axes), as ``ia.imageconcat(mode="nomove")`` does: a directory
+    holding ``imageconcat.json`` that names the images, which stay where
+    they are.  casatools opens the result.  Returns it (a ``ConcatImage``).'''
+    path = os.path.abspath(os.path.expanduser(os.fspath(path)))
+    members = [os.path.abspath(os.path.expanduser(os.fspath(p))) for p in images]
+    if not members:
+        raise ValueError('no images to concatenate')
+    first = CasaImage(members[0])
+    axis = axis % first.ndim
+    if os.path.exists(path):
+        if not overwrite:
+            raise FileExistsError(path)
+        shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+    parent = os.path.dirname(path)
+    names = []
+    for member in members:
+        if os.path.dirname(member) == parent:
+            names.append('./' + os.path.basename(member))            # beside the concatenated image
+        elif member.startswith(path + os.sep):
+            names.append('././' + os.path.relpath(member, path))     # inside it
+        else:
+            names.append(member)
+    data_type = {'f4': 'float', 'f8': 'double', 'c8': 'complex', 'c16': 'dcomplex'}.get(first.dtype.str.lstrip('<>=|'), 'float')
+    os.makedirs(path)
+    with open(os.path.join(path, CONCAT_FILE), 'w', encoding='utf-8') as f:
+        json.dump({'Version': 1, 'DataType': data_type, 'Axis': axis, 'TempClose': False,
+                   'Images': names, 'MiscInfo': {}}, f, indent=1)
+    return CasaImage(path)

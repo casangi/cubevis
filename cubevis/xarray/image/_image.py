@@ -53,6 +53,11 @@ one (measured 2026-11-16: an arcae handle held across a casatools
 the image; a new handle saw the new ones).  ``hold()`` keeps one handle
 for a burst of reads where nothing else writes.
 
+A *concatenated* image (``ia.imageconcat``, casacore's ``ImageConcat``) is
+not a table: it is a directory holding ``imageconcat.json``, which names
+the images that make it up.  ``CasaImage(path)`` gives a ``ConcatImage``
+for one (``_concat.py``), with the same surface.
+
 Nothing here imports CASA, Bokeh or xarray; arcae is imported when a table
 is first opened.
 '''
@@ -96,19 +101,39 @@ def table_info(path: str) -> Dict[str, str]:
     return info
 
 
-def is_casa_image(path: Any) -> bool:
-    '''Is ``path`` a CASA paged image: a casacore table whose ``table.info``
-    says ``Type = Image``?  (Not a FITS or MIRIAD file, a concatenated or
-    expression image, or a component list -- casacore opens those through
-    its image classes, which arcae does not have.)'''
+CONCAT_FILE = 'imageconcat.json'
+
+
+def _as_path(path: Any) -> Optional[str]:
     try:
         path = os.fspath(path)
     except TypeError:
-        return False
-    if isinstance(path, bytes):
-        path = os.fsdecode(path)
-    return (os.path.isdir(path) and os.path.isfile(os.path.join(path, 'table.dat'))
+        return None
+    return os.fsdecode(path) if isinstance(path, bytes) else path
+
+
+def is_paged_image(path: Any) -> bool:
+    '''Is ``path`` a CASA paged image: a casacore table whose ``table.info``
+    says ``Type = Image``?'''
+    path = _as_path(path)
+    return (path is not None and os.path.isdir(path) and os.path.isfile(os.path.join(path, 'table.dat'))
             and table_info(path).get('Type') == 'Image')
+
+
+def is_concat_image(path: Any) -> bool:
+    '''Is ``path`` a concatenated image: a directory with
+    ``imageconcat.json`` (and not itself a table)?'''
+    path = _as_path(path)
+    return (path is not None and os.path.isdir(path) and os.path.isfile(os.path.join(path, CONCAT_FILE))
+            and not os.path.isfile(os.path.join(path, 'table.dat')))
+
+
+def is_casa_image(path: Any) -> bool:
+    '''Is ``path`` a CASA image this package reads: a paged image or a
+    concatenation of images?  (Not a FITS or MIRIAD file, an expression
+    image or a component list -- casacore opens those through its image
+    classes, which arcae does not have.)'''
+    return is_paged_image(path) or is_concat_image(path)
 
 
 def _open(path: str, readonly: bool):
@@ -146,12 +171,86 @@ class _Span:
         else:
             raise IndexError(f'axis {axis}: only integers and slices index an image, not {type(key).__name__}')
 
+    @classmethod
+    def run(cls, lo: int, hi: int) -> '_Span':
+        '''The contiguous run ``lo:hi``, kept as an axis.'''
+        span = object.__new__(cls)
+        span.lo, span.hi, span.post, span.drop, span.count = lo, hi, slice(None), False, hi - lo
+        return span
+
     @property
     def contiguous(self) -> bool:
         return self.post == slice(None) or self.post == slice(None, None, 1)
 
 
-class PagedArray:
+class IndexedArray:
+    '''Indexing as numpy's (integers and slices, CASA axis order) for
+    anything that has ``shape`` and ``dtype`` and can read and write a
+    block: ``_read_block(spans)`` gives the run ``lo:hi`` of every axis,
+    all axes kept; ``_write_block(spans, block)`` takes the same.'''
+
+    shape: Tuple[int, ...] = ()
+    dtype = np.dtype(np.float32)
+
+    @property
+    def ndim(self) -> int:
+        return len(self.shape)
+
+    @property
+    def size(self) -> int:
+        return int(np.prod(self.shape, dtype=np.int64))
+
+    def _spans(self, key) -> List[_Span]:
+        if not isinstance(key, tuple):
+            key = (key,)
+        if any(k is Ellipsis for k in key):
+            at = [i for i, k in enumerate(key) if k is Ellipsis]
+            if len(at) > 1:
+                raise IndexError('an index can only have a single ellipsis')
+            fill = self.ndim - (len(key) - 1)
+            key = key[:at[0]] + (slice(None),) * fill + key[at[0] + 1:]
+        if len(key) > self.ndim:
+            raise IndexError(f'too many indices: {len(key)} for an image of {self.ndim} axes')
+        key = key + (slice(None),) * (self.ndim - len(key))
+        return [_Span(k, n, axis) for axis, (k, n) in enumerate(zip(key, self.shape))]
+
+    def _read_block(self, spans: List[_Span]) -> np.ndarray:
+        raise NotImplementedError
+
+    def _write_block(self, spans: List[_Span], block: np.ndarray) -> None:
+        raise NotImplementedError
+
+    def __getitem__(self, key) -> np.ndarray:
+        spans = self._spans(key)
+        out_shape = tuple(s.count for s in spans if not s.drop)
+        if any(s.count == 0 for s in spans):
+            return np.empty(out_shape, dtype=self.dtype)
+        block = self._read_block(spans)
+        if block.dtype != self.dtype:
+            block = block.astype(self.dtype)              # arcae: Bool cells are uint8
+        if not all(s.contiguous for s in spans):
+            block = block[tuple(s.post for s in spans)]
+        return block.reshape(out_shape)
+
+    def __setitem__(self, key, values) -> None:
+        spans = self._spans(key)
+        if not all(s.contiguous for s in spans):
+            raise IndexError('only contiguous selections (step 1) can be written')
+        if any(s.count == 0 for s in spans):
+            return
+        values = np.asarray(values)
+        if values.dtype.kind == 'c' and self.dtype.kind != 'c':
+            raise TypeError(f'complex values cannot be written to {self.dtype} pixels')
+        sel_shape = tuple(s.count for s in spans if not s.drop)
+        full_shape = tuple(s.count for s in spans)
+        self._write_block(spans, np.broadcast_to(values.astype(self.dtype, copy=False), sel_shape).reshape(full_shape))
+
+    def read(self) -> np.ndarray:
+        '''The whole array.'''
+        return self[...]
+
+
+class PagedArray(IndexedArray):
     '''The one tiled array cell of a casacore table: an image's pixels
     (column ``map``) or a pixel mask's (column ``PagedArray``).
 
@@ -217,14 +316,6 @@ class PagedArray:
         return self._column
 
     @property
-    def ndim(self) -> int:
-        return len(self.shape)
-
-    @property
-    def size(self) -> int:
-        return int(np.prod(self.shape, dtype=np.int64))
-
-    @property
     def keywords(self) -> Dict[str, Any]:
         '''The table's keywords as arcae gives them, read when the object was
         made (``refresh()`` reads them again).  2-D arrays are transposed
@@ -282,57 +373,19 @@ class PagedArray:
 
     # ---- pixels -----------------------------------------------------------
 
-    def _spans(self, key) -> List[_Span]:
-        if not isinstance(key, tuple):
-            key = (key,)
-        if any(k is Ellipsis for k in key):
-            at = [i for i, k in enumerate(key) if k is Ellipsis]
-            if len(at) > 1:
-                raise IndexError('an index can only have a single ellipsis')
-            fill = self.ndim - (len(key) - 1)
-            key = key[:at[0]] + (slice(None),) * fill + key[at[0] + 1:]
-        if len(key) > self.ndim:
-            raise IndexError(f'too many indices: {len(key)} for an image of {self.ndim} axes')
-        key = key + (slice(None),) * (self.ndim - len(key))
-        return [_Span(k, n, axis) for axis, (k, n) in enumerate(zip(key, self.shape))]
-
     @staticmethod
     def _arcae_index(spans: List[_Span]) -> tuple:
         return (slice(0, 1),) + tuple(slice(s.lo, s.hi) for s in reversed(spans))
 
-    def __getitem__(self, key) -> np.ndarray:
-        spans = self._spans(key)
-        out_shape = tuple(s.count for s in spans if not s.drop)
-        if any(s.count == 0 for s in spans):
-            return np.empty(out_shape, dtype=self.dtype)
+    def _read_block(self, spans: List[_Span]) -> np.ndarray:
         with self._table(True) as table:
             block = table.getcol(self._column, index=self._arcae_index(spans))
-        block = np.asarray(block)[0].T                    # CASA axis order: a view
-        if block.dtype != self.dtype:
-            block = block.astype(self.dtype)              # arcae: Bool cells are uint8
-        if not all(s.contiguous for s in spans):
-            block = block[tuple(s.post for s in spans)]
-        return block.reshape(out_shape)
+        return np.asarray(block)[0].T                     # CASA axis order: a view
 
-    def __setitem__(self, key, values) -> None:
-        spans = self._spans(key)
-        if not all(s.contiguous for s in spans):
-            raise IndexError('only contiguous selections (step 1) can be written')
-        if any(s.count == 0 for s in spans):
-            return
-        values = np.asarray(values)
-        if values.dtype.kind == 'c' and self.dtype.kind != 'c':
-            raise TypeError(f'complex values cannot be written to {self.dtype} pixels')
-        sel_shape = tuple(s.count for s in spans if not s.drop)
-        full_shape = tuple(s.count for s in spans)
-        block = np.broadcast_to(values.astype(self.dtype, copy=False), sel_shape).reshape(full_shape)
+    def _write_block(self, spans: List[_Span], block: np.ndarray) -> None:
         block = np.ascontiguousarray(block.T)[None, ...]
         with self._table(False) as table:
             table.putcol(self._column, block, index=self._arcae_index(spans))
-
-    def read(self) -> np.ndarray:
-        '''The whole array.'''
-        return self[...]
 
     def __repr__(self) -> str:
         return f'<{type(self).__name__} {self.path} shape={self.shape} dtype={self.dtype}>'
@@ -366,14 +419,26 @@ class CasaImage(PagedArray):
     >>> good = im.mask()[:, :, 0, 12]           # default pixel mask, True = good
     '''
 
+    def __new__(cls, path: Any = None):
+        ### a concatenated image is a ConcatImage, whoever asks for a CasaImage
+        if cls is CasaImage and path is not None and is_concat_image(os.path.expanduser(_as_path(path) or '')):
+            from ._concat import ConcatImage              # pylint: disable=import-outside-toplevel
+            return object.__new__(ConcatImage)
+        return object.__new__(cls)
+
     def __init__(self, path: str):
         path = os.path.abspath(os.path.expanduser(os.fspath(path)))
-        if not is_casa_image(path):
+        if not is_paged_image(path):
             kind = table_info(path).get('Type')
-            what = f'a casacore table of type {kind!r}' if kind else 'not a CASA paged image'
-            raise ValueError(f'{path}: {what}; only paged images (table.info "Type = Image") are read '
-                             '(not FITS, MIRIAD, concatenated or expression images)')
+            what = f'a casacore table of type {kind!r}' if kind else 'not a CASA image'
+            raise ValueError(f'{path}: {what}; paged images (table.info "Type = Image") and concatenated '
+                             'images (imageconcat.json) are read, not FITS, MIRIAD or expression images')
         super().__init__(path, PIXEL_COLUMN)
+
+    def files(self) -> List[str]:
+        '''The files whose change means the image's description (shape,
+        keywords) may have changed.'''
+        return [os.path.join(self.path, 'table.dat')]
 
     # ---- keywords ---------------------------------------------------------
 
@@ -409,10 +474,11 @@ class CasaImage(PagedArray):
         name = self._keywords.get('Image_defaultmask')
         return str(name) if name and name in self.mask_names else None
 
-    def mask(self, name: Optional[str] = None) -> Optional[PagedArray]:
+    def mask(self, name: Optional[str] = None) -> Optional[IndexedArray]:
         '''The pixel mask ``name`` (the default mask when None) as a boolean
         ``PagedArray``, True where a pixel is good; None when the image has
-        no default mask.'''
+        no default mask.  (An ``IndexedArray``: a ``PagedArray``, or a
+        ``ConcatArray`` for a concatenated image.)'''
         if name is None:
             name = self.default_mask
             if name is None:

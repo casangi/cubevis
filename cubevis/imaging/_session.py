@@ -132,6 +132,7 @@ class LocalImagingSession:
                  log_path: Optional[Callable] = None):
         self._dec = deconvolver
         self._store_factory = store_factory if store_factory is not None else image_store()
+        self._cycles_running = 0
         self._cubes: Dict[str, ImageCube] = {}
         self._products = None
         ### the running cycle's progress, from the imager's log: the deconvolver's own
@@ -184,13 +185,20 @@ class LocalImagingSession:
                 result = result._replace(convergence=rekeyed)
         return result
 
+    def cycle_running(self) -> bool:
+        '''Is the imager at work (``start``, ``run_cycle`` or ``arun_cycle``
+        not yet returned)?  Any thread.'''
+        return self._cycles_running > 0
+
     def _step(self, kind: str) -> CycleResult:
         self._progress.begin(kind)
+        self._cycles_running += 1
         ok = False
         try:
             result = self._result(next(self._dec))
             ok = True
         finally:
+            self._cycles_running -= 1
             self._progress.end(ok)
         self._touch()
         return result
@@ -210,11 +218,13 @@ class LocalImagingSession:
         '''``run_cycle`` without blocking the event loop (gclean runs it in
         a thread: ``gclean.__anext__``).'''
         self._progress.begin('run')
+        self._cycles_running += 1
         ok = False
         try:
             result = self._result(await self._dec.__anext__())
             ok = True
         finally:
+            self._cycles_running -= 1
             self._progress.end(ok)
         self._touch()
         return result
@@ -269,6 +279,8 @@ class LocalImagingSession:
             if field not in info:
                 raise KeyError(f'no field {field!r}; fields are {sorted(info)}')
             store = self._store_factory(info[field]['residual'], info[field]['mask'])
+            if hasattr(store, 'write_guard'):
+                store.write_guard = self.cycle_running      # no mask writes under the imager
             self._cubes[field] = ImageCube(store, track='generation')
         return self._cubes[field]
 

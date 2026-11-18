@@ -32,14 +32,16 @@ describe either.
 
 * ``CasaImage(path)`` -- pixels by index (``im[x, y, stokes, chan]``,
   reads and writes of part of an image), keywords, the coordinate system
-  record, pixel masks.  Needs arcae and numpy.
+  record, pixel masks.  Needs arcae and numpy.  Paged images, and
+  concatenated ones (``ia.imageconcat``: a ``ConcatImage``).
 * ``xr.open_dataset(path, engine="casa-image")`` / ``open_casa_image(path)``
   -- a lazily read dataset in xradio's image layout.  Needs xarray too.
 * ``open_image(source)`` -- a CASA image, an image in Zarr (xradio's, or
   one saved from here) or a dataset in hand; ``describe_dataset(ds)`` --
   what it holds in plain values, whichever of the two wrote it.
-* ``write_image``, ``create_image``, ``default_coords``, ``to_casa_image``
-  -- CASA images written with arcae alone, which casatools opens.
+* ``write_image``, ``create_image``, ``default_coords``, ``to_casa_image``,
+  ``concat_images`` -- CASA images written with arcae alone, which
+  casatools opens.
 
 This package stands alone: it imports nothing else of cubevis (not
 ``cubevis.xarray.caltab`` either), so it can be moved out as it is.
@@ -53,8 +55,9 @@ engine is only ever used when named: it does not compete with xradio's
 Record: ``devel/notes/drs/xarray-image/xarray_image_notes.md``.
 '''
 
-from ._image import CasaImage, PagedArray, is_casa_image, table_info
-from ._write import create_image, write_image, default_coords, beam_record, put_keywords
+from ._image import CasaImage, IndexedArray, PagedArray, is_casa_image, is_concat_image, is_paged_image, table_info
+from ._concat import ConcatArray, ConcatImage
+from ._write import create_image, write_image, default_coords, beam_record, put_keywords, concat_images
 from ._backend import CasaImageBackendEntrypoint, LazyPixels, open_casa_image, to_casa_image, describe
 from ._dataset import open_image, describe_dataset, sky_variable, source_format
 from ._register import register
@@ -63,8 +66,9 @@ from . import _schema as schema
 
 register()
 
-__all__ = ['CasaImage', 'PagedArray', 'is_casa_image', 'table_info',
-           'create_image', 'write_image', 'default_coords', 'beam_record', 'put_keywords',
+__all__ = ['CasaImage', 'ConcatImage', 'IndexedArray', 'PagedArray', 'ConcatArray',
+           'is_casa_image', 'is_paged_image', 'is_concat_image', 'table_info',
+           'create_image', 'write_image', 'default_coords', 'beam_record', 'put_keywords', 'concat_images',
            'CasaImageBackendEntrypoint', 'LazyPixels', 'open_casa_image', 'to_casa_image', 'describe',
            'open_image', 'describe_dataset', 'sky_variable', 'source_format',
            'register', 'coords', 'schema']

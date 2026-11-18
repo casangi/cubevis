@@ -551,3 +551,21 @@ def test_a_held_handle_is_stale_after_casatools_writes(tmp_path):
         held = float(im[0, 0, 0, 0])
     assert float(im[0, 0, 0, 0]) == 5.0
     assert held == 0.0
+
+
+def test_the_mask_tools_helpers_need_no_casatools(cube, tmp_path, monkeypatch):
+    """cubevis.data.casaimage.new and .shape (createmask, createregion)"""
+    pytest.importorskip('PIL')
+    import cubevis.data.casaimage as old
+    path, pixels, _ = cube
+    monkeypatch.setattr(old, 'casatools_available', lambda: False)
+    monkeypatch.setattr(old, 'imagetool', lambda: (_ for _ in ()).throw(AssertionError('casatools was used')))
+    assert list(old.shape(path)) == list(pixels.shape) and (old.shape(path) == old.shape(path)).all()
+    made = old.new(path, str(tmp_path / 'new.mask'))
+    assert made == str(tmp_path / 'new.mask')
+    mask = ci.CasaImage(made)
+    assert mask.shape == pixels.shape and mask.dtype == np.float32 and not mask[...].any()
+    assert mask.coords_record() == ci.CasaImage(path).coords_record() and mask.mask_names == []
+    with pytest.raises(RuntimeError, match='already exists'):
+        old.new(path, made)
+    old.new(path, made, overwrite=True)

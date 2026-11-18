@@ -64,7 +64,7 @@ def source_format(source: Any) -> str:
         return 'casa-image'
     if os.path.isdir(path) and any(os.path.exists(os.path.join(path, f)) for f in ('zarr.json', '.zgroup', '.zmetadata')):
         return 'zarr'
-    raise ValueError(f'{path}: neither a CASA paged image nor a Zarr store')
+    raise ValueError(f'{path}: neither a CASA image (paged or concatenated) nor a Zarr store')
 
 
 def open_image(source: Any, **kwargs: Any):

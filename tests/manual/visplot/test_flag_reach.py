@@ -720,14 +720,12 @@ class TestGui:
             h = getattr(vp, f"_hint_flagf_{n}")
             f = vp._flags.registry.get(n)
             assert f.label in h.text.replace("&amp;", "&")
-            # A filter whose help is longer than the status area holds
-            # shows its name and description there; the parameters are in
-            # the long form the h key opens (help_text.py, 2026-11-18).
-            long_html = next((t["cv_long_help"] for t in (h.tags or [])
-                              if isinstance(t, dict)), "")
+            # The whole text is shown (cut off at a narrow window, where
+            # ? opens the filter's documentation entry: help_text.py).
+            assert any(isinstance(t, dict) and t.get("cv_help") for t in (h.tags or []))
             for spec in f.params:
                 if spec.gui and spec.help:
-                    assert (spec.label or spec.name) in h.text + long_html
+                    assert (spec.label or spec.name) in h.text
 
 
 # ---------------------------------------------------------------------------

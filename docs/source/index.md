@@ -51,6 +51,7 @@ applications/installing
 applications/remote_kernels
 applications/visplot_starting
 applications/visplot
+applications/visplot_help
 applications/capabilities/index
 applications/iclean_starting
 applications/iclean_parameters

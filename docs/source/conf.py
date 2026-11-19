@@ -7,7 +7,7 @@ import os
 import sys
 
 sys.path.insert(0, abspath(dirname(__file__)))                         # links
-sys.path.insert(0, abspath(join(dirname(__file__), 'extensions')))     # xref, pydoc_include
+sys.path.insert(0, abspath(join(dirname(__file__), 'extensions')))     # xref, pydoc_include, vp_help
 
 # -- Project information -----------------------------------------------------
 
@@ -31,6 +31,7 @@ extensions = [ 'sphinx.ext.todo',
                'myst_parser',
                'xref',
                'pydoc_include',
+               'vp_help',            # help/<vp-label>.html for visplot's h key
              ]
 
 source_suffix = { '.rst': 'restructuredtext', '.md': 'markdown' }

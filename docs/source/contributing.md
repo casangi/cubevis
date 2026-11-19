@@ -106,6 +106,54 @@ Each folder in `devel/slides` that contains a `slides.html` is copied to
 the site as `<folder>/slides.html` and listed on the [](slides.md) page.
 Adding a deck needs no change to the documentation.
 
+## visplot's in-window help
+
+In the `visplot` window, text in the status area that has a longer
+explanation here carries a ⓘ, and pressing **?** opens this
+documentation at that explanation ([](applications/visplot.rst), *Help in
+the window*). The code names each entry by a label, a target in
+[](applications/visplot_help.md) or anywhere else, such as
+
+```markdown
+(vp-flag-reach)=
+
+### Flag reaches
+```
+
+and the build writes `help/<label>.html` for every label starting with
+`vp-`, a page that forwards to wherever the label is
+(`docs/source/extensions/vp_help.py`). So:
+
+- **A label can go anywhere** in the documentation, on any page, before
+  a heading or before a paragraph, list or note inside a section. So the
+  entry can be the place that already explains the control (a
+  capability page, say) rather than a copy of it on the help page; two
+  labels above one heading are fine. Each label is defined once.
+- **Moving an entry**, to another heading or another page, needs no
+  change to the code: keep its label.
+- **A new entry** the code points at needs its label here in the same
+  pull request. `tests/manual/visplot/test_help_labels.py` (run with the
+  quick tests) fails for a label the code uses and the documentation
+  does not define.
+- **Do not remove or rename a label within a major.minor version.** A
+  later patch release replaces that version's copy of the documentation,
+  and the earlier patch releases still installed would lose the entry. To
+  rename one, keep the old label as a second target above the heading.
+
+A message gets a ⓘ by including `help_text.marker("vp-…")` in its text;
+a control's description by giving its help spec a label
+(`(text, "vp-…")`).
+
+A copy without the label (a release made before it, or a development
+version, which has no copy of its own and uses the latest) is sent to
+the latest copy's entry by the site's `404.html`. To try **?** against a
+local build, set `CUBEVIS_DOCS_URL` to it before starting `visplot`,
+for example `CUBEVIS_DOCS_URL=http://localhost:8000/` with
+`python -m http.server 8000` running in `docs/build/html`. Or push the change to a
+`docs-<name>` branch and set `CUBEVIS_DOCS_URL` to its preview copy,
+`https://casangi.github.io/cubevis/dev/docs-<name>/`, to try it before
+it is merged.
+
 ## Building locally
 
 ```console

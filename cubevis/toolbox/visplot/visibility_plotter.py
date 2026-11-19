@@ -231,6 +231,8 @@ if (notify_div) notify_div.styles = Object.assign({{}}, notify_div.styles,
 hint.styles = Object.assign({{}}, hint.styles,
     {{'max-height': (_alert ? {_STATUS_HEIGHT - _HINT_ALERT_ROW_PX} : {_STATUS_HEIGHT}) + 'px'}});
 hint.visible = true;
+// Its \u24d8 when it has an entry (help_text.CUE_JS, installed at load).
+if (window.__cvHelpCue) window.__cvHelpCue(hint);
 """
 # The notify text changed (a Plot reply, Return in the Scan box) while a
 # help is showing: lay the status area out again, so a new warning
@@ -245,13 +247,18 @@ status_row.visible = _alert;
 cb_obj.styles = Object.assign({{}}, cb_obj.styles, {{'text-align': _alert ? 'left' : 'right'}});
 _shown.styles = Object.assign({{}}, _shown.styles,
     {{'max-height': (_alert ? {_STATUS_HEIGHT - _HINT_ALERT_ROW_PX} : {_STATUS_HEIGHT}) + 'px'}});
+if (window.__cvHelpCue) window.__cvHelpCue(_shown);
 """
 _HIDE_HINT_JS = """
 hint.visible = false;
 if (notify_div) notify_div.styles = Object.assign({}, notify_div.styles, {'text-align': 'right'});
 if (status_div) status_div.visible = true;
 status_row.visible = true;
+if (window.__cvHelpCue) { window.__cvHelpCue(hint); window.__cvHelpCue(notify_div); window.__cvHelpCue(status_div); }
 """
+# A status-row text changed (a Plot reply, a check in the browser, the
+# flagging code): its \u24d8 if the new text carries a help marker.
+_STATUS_TEXT_CUE_JS = "if (window.__cvHelpCue) window.__cvHelpCue(cb_obj);"
 
 # Status-area help with fixed text: name -> HTML, created as
 # ``self._hint_<name>`` in _build_status_bar and attached with _hover().
@@ -261,18 +268,14 @@ _STATIC_HINTS = {
     "col": "<b>Data column</b> \u2014 which visibilities are plotted  | <b>DATA</b>: as observed  | <b>CORRECTED_DATA</b>: after calibration has been applied  | <b>MODEL_DATA</b>: what the calibration model predicts  | Only the columns this dataset has are listed",
     # ---- raster gear tab
     "r_axes": (
-        "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: a bad antenna is a whole row and column  | Y and X must differ" + _helptext.MORE_CUE,
-        _helptext.points_html("<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: one cell per baseline over time and channels, mirrored, so a bad antenna is a whole row and column (the Ant\u00d7Ant preset); the two Antenna axes only go together  | Y and X must differ  | Which correlation is shown: <b>Correlation shown</b>, below")),
+        "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: a bad antenna is a whole row and column  | Y and X must differ", "vp-r-axes"),
     "r_qty": "<b>Raster quantity</b> \u2014 what the color shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
     "scaling": (
-        "<b>Color scaling</b> \u2014 how values are spread over the colors; changes the picture, never the data  | <b>eq_hist</b>: every color used equally; shows faint structure  | <b>linear</b>: honest about size  | <b>log / sqrt</b>: in between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights above a cutoff" + _helptext.MORE_CUE,
-        _helptext.points_html("<b>Color scaling</b> \u2014 how values are spread over the colors; changes the picture, never the data  | <b>eq_hist</b> uses every color equally and shows faint structure, but distances between colors mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap")),
+        "<b>Color scaling</b> \u2014 how values are spread over the colors; changes the picture, never the data  | <b>eq_hist</b>: every color used equally; shows faint structure  | <b>linear</b>: honest about size  | <b>log / sqrt</b>: in between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights above a cutoff", "vp-scaling"),
     "bcombine": (
-        "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines (a raster without Baseline on an axis). Averaging applies within each baseline; this is how the baselines are combined  | <b>Mean</b>: the general picture  | <b>Median</b>: what most baselines share  | <b>Maximum</b>: a problem shows even on one baseline  | <b>Vector (coherent)</b>: a complex sum, for a calibrated point source; Vector averaging only" + _helptext.MORE_CUE,
-        _helptext.points_html("<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Median</b>: the middle baseline at each cell: what most baselines share, unmoved by a few bad ones. A feature that shows in Maximum but not in Median is on a few baselines (find and flag those); one in both is on most of them  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Vector (coherent)</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low. Offered only with Vector averaging  | Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline")),
+        "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines (a raster without Baseline on an axis). Averaging applies within each baseline; this is how the baselines are combined  | <b>Mean</b>: the general picture  | <b>Median</b>: what most baselines share  | <b>Maximum</b>: a problem shows even on one baseline  | <b>Vector (coherent)</b>: a complex sum, for a calibrated point source; Vector averaging only", "vp-bcombine"),
     "border": (
-        "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out  | <b>By number</b>: the Baseline table\u2019s order; baselines to one antenna sit together  | <b>By length</b>: shortest first. Trouble that grows along the axis is about distance; trouble in scattered columns is about particular antennas" + _helptext.MORE_CUE,
-        _helptext.points_html("<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out; the baselines that have data are drawn side by side either way  | <b>By number</b>: in the order of the Baseline table; baselines to one antenna sit together  | <b>By length</b>: shortest first, and the ticks read the length. Trouble that grows along the axis is then about distance (atmosphere, a source that is resolved); trouble in scattered columns is about particular antennas  | The cursor readout names the baseline and its length in both")),
+        "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out  | <b>By number</b>: the Baseline table\u2019s order; baselines to one antenna sit together  | <b>By length</b>: shortest first. Trouble that grows along the axis is about distance; trouble in scattered columns is about particular antennas", "vp-border"),
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
     # ---- scatter gear tab
     "s_x": "<b>Scatter X axis</b>  | <b>UV Distance</b>: baseline length; in wavelengths to compare across frequency  | <b>Time</b>: stability through the observation  | <b>Frequency / Channel</b>: the spectrum  | <b>U / V</b>: with V or U as Y, the uv coverage  | For Phase RMS and Coherence, X also decides what one point is (see the window controls)",
@@ -280,14 +283,12 @@ _STATIC_HINTS = {
     "colorize": "<b>Layer coloring</b> \u2014 each ticked correlation is a layer with its own colors  | <b>Continuous</b>: density of points; scaling works as for the raster  | <b>Categorical</b>: color by antenna, baseline, field, scan or SPW; tick which values to show  | <b>Statistical</b>: color by Z-Score so outliers stand out  | <b>Layer</b> chooses which layer the controls below apply to",
     # ---- toolbar
     "s_avg": (
-        "<b>Averaging (scatter)</b> \u2014 one point per baseline and correlation for each stretch of time and block of channels, instead of one per sample  | <b>Average over time</b>: <i>Off</i>, <i>Scan</i>, or a length  | <b>Average over channels</b>: <i>Off</i>, a number, or <i>All</i> (a time series)  | <b>Vector</b>: average the complex visibilities; <b>Scalar</b>: average the amplitudes" + _helptext.MORE_CUE,
-        _helptext.points_html("<b>Averaging (scatter)</b> \u2014 one point per baseline and correlation for each stretch of time and block of channels, instead of one per sample: what a spectrum or a time series needs  | <b>Average over time</b>: <i>Off</i> (every integration), <i>Scan</i> (a spectrum per scan, with X Frequency or Channel), or a length (from the start of each scan, never across a scan boundary)  | <b>Average over channels</b>: <i>Off</i>, a number of channels, or <i>All</i> (one point per spectral window: a time series, with X Time)  | <b>Vector</b>: average the complex visibilities, then take amplitude and phase; amplitude drops where the samples do not add up (noise, an uncalibrated phase, a delay across the averaged channels)  | <b>Scalar</b>: average the amplitudes  | Amplitude, Phase, Real and Imaginary only; flagged samples are left out; a flag box takes every sample behind the points it encloses")),
+        "<b>Averaging (scatter)</b> \u2014 one point per baseline and correlation for each stretch of time and block of channels, instead of one per sample  | <b>Average over time</b>: <i>Off</i>, <i>Scan</i>, or a length  | <b>Average over channels</b>: <i>Off</i>, a number, or <i>All</i> (a time series)  | <b>Vector</b>: average the complex visibilities; <b>Scalar</b>: average the amplitudes", "vp-s-avg"),
     # ---- Flagging panel (HRS H5, 2026-10-07)
     "flag_filter": "<b>Filter</b> \u2014 which of the samples inside a drawn box are flagged  | <b>All selected</b>: every sample in the box  | The others take only the samples that meet a condition, so a generous box can be drawn round a bad stretch and only the bad samples in it go  | The condition and its settings are described under the list",
     "flag_preview": "<b>Preview each proposal</b> \u2014 show what a box would flag (how many samples, on which baselines, antennas, windows and scans) and paint those samples on the plots before anything is recorded; then accept or reject  | Worth having on while the Flag reaches settings are wider than the box",
     "flag_reach": (
-        "<b>Flag reaches</b> \u2014 how far each flag (or unflag) goes beyond the box that is drawn: <b>Baselines</b>, <b>All channels</b>, <b>All selected spectral windows</b>, <b>Whole scan</b>, <b>All fields</b>, <b>All correlations</b>. The settings stay until changed; the line underneath and the box turn amber while any is wider than the box  | For one box only: <b>Shift</b> while dragging gives the full height, <b>Alt</b> (<b>Option</b>) the full width; <b>Esc</b> drops the box" + _helptext.MORE_CUE,
-        _helptext.points_html("<b>Flag reaches</b> \u2014 how far each flag (or unflag) goes beyond the box that is drawn. The settings stay until changed; the line underneath turns amber while any is wider than the box  | <b>Baselines</b>: <i>As drawn</i>; or all baselines <i>to the antenna they share</i> (drag across two or more baselines of the bad antenna; refused if they do not share exactly one); or all <i>to every antenna drawn</i>; or <i>all baselines</i>  | <b>All channels</b>: the drawn time range over the whole band (a bad integration)  | <b>All selected spectral windows</b>: the same channels and times in every selected window  | <b>Whole scan</b>: every integration of the scans the box touches  | <b>All fields</b>: only matters on a plot without a Time axis  | <b>All correlations</b>: not just the one plotted  | Baselines, windows, scans and fields are extended for a raster box with the All selected filter; other boxes say so  | While any is wider, the box is outlined in amber as it is drawn  | For one box only, without changing these: <b>Shift</b> while dragging gives the full height of the plot as shown, <b>Alt</b> (<b>Option</b> on a Mac) the full width. A key held as the drag starts, or pressed during it, counts for the whole drag, even if let go first; <b>Esc</b> before letting go of the button drops the box")),
+        "<b>Flag reaches</b> \u2014 how far each flag (or unflag) goes beyond the box that is drawn: <b>Baselines</b>, <b>All channels</b>, <b>All selected spectral windows</b>, <b>Whole scan</b>, <b>All fields</b>, <b>All correlations</b>. The settings stay until changed; the line underneath and the box turn amber while any is wider than the box  | For one box only: <b>Shift</b> while dragging gives the full height, <b>Alt</b> (<b>Option</b>) the full width; <b>Esc</b> drops the box", "vp-flag-reach"),
     "flag_reason": "<b>Reason</b> \u2014 a few words on why, stored with every flag made from now on until the text is changed  | Shown in Describe pending flags, saved in the JSON, and written as the reason in exported flagdata commands, so flags can later be listed or undone by reason  | Leave empty for none",
     "flag_display": "<b>Pending flags on the plots</b>  | <b>Hide flagged</b>: flagged samples disappear and color scales and statistics are recomputed without them \u2014 flag, then look again  | <b>Show in color</b>: the data stay as on disk and the samples the pending flags change are painted in the chosen color, to see what has been marked",
     "flag_shown": "<b>Show flagged data</b> \u2014 also draw samples that are flagged now, on disk or pending, in the chosen color  | Needed to unflag: an Unflag box can only take what is drawn",
@@ -302,13 +303,12 @@ _STATIC_HINTS = {
     "grid_scaling": "<b>Grid color scaling</b> \u2014 how the cells spread their values over the colors, applied at <b>Plot &#9654;</b>  | <b>auto</b>: the quantity's own (Phase: linear \u2212180..180\u00b0; Z-Score: threshold)  | Min / max: empty is automatic  | <b>Color</b> above says which cells share one range",
     "pin_layout": "<b>Pin layout</b> \u2014 keep the panels arranged as they are now (One, Side by Side or Over / Under) when a preset is pressed  | Unticked, each preset switches to the arrangement that suits it (Spectrum and the waterfalls one above the other, the others side by side)  | Only the arrangement is kept: a preset still sets what each panel shows  | The Layout buttons in the toolbar change the arrangement either way",
     "autocorr": (
-        "<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only; autocorrelations can be far larger and flatten the plots  | <b>Include</b>: both  | <b>Only</b>: autocorrelations alone: bandpass shape and interference per station  | Applied by Plot" + _helptext.MORE_CUE,
-        _helptext.points_html("<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only. Autocorrelations can be hundreds of times larger (VLBI data before amplitude calibration) and flatten every plot of all baselines  | <b>Include</b>: both; the Ant\u00d7Ant matrix then has its diagonal  | <b>Only</b>: autocorrelations alone \u2014 the bandpass shape and interference at each station  | A baseline ticked by name (e.g. BR&amp;BR) is plotted whatever is chosen here  | Applied by Plot")),
+        "<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only; autocorrelations can be far larger and flatten the plots  | <b>Include</b>: both  | <b>Only</b>: autocorrelations alone: bandpass shape and interference per station  | Applied by Plot", "vp-autocorr"),
     "time_labels": "<b>Time labels</b> \u2014 how every time axis and the cursor readout give time  | <b>UTC</b>: time of day, with the date in the axis label; when the data cross midnight the ticks read day/hh:mm:ss from the first day, as in AIPS. Matches observing logs, <tt>listobs</tt> and the Time range box  | <b>Elapsed</b>: minutes and seconds from the first sample shown  | Changes the labels only; nothing is read again",
     "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, color bars) to a PNG file where Python is running  | The path is reported in the status line",
     "tb_row_height": "<b>Row height</b> \u2014 the height of each row of plots, in every layout  | <i>default</i>: 550 px for One and Side by Side, 280 px for Over / Under  | <i>fit</i>: the rows share the window's height, after the readouts and color bars below each plot (never less than 250 px; the plot area scrolls instead)  | Takes effect at once, and stays when the layout changes  | <code>row_height=</code> sets it from Python (a number, \"fit\", or one height per row)",
     "tb_theme": "<b>Dark / Light</b> \u2014 switch the background  | The colormaps change with it so faint points stay visible; exported PNGs follow",
-    "tb_help": "<b>Help</b> \u2014 open the full explanations of the controls in a separate tab  | Over a control whose help ends in \u201cpress h for more\u201d, press <b>h</b> (or <b>?</b>) to open it at that control",
+    "tb_help": "<b>Help</b> \u2014 open the documentation of the controls in a separate tab  | Whatever this area shows that has more to read carries a <b>\u24d8</b>: press <b>?</b> to open it (or click the \u24d8 of a message)",
 }
 
 # Preset definitions: (raster_y, raster_x, raster_qty, scatter_x, scatter_y, layout)
@@ -478,11 +478,9 @@ _PRESET_BUTTONS = (
     ("phase-waterfall", "\u03c6 Wfall", 68,
      "<b>Phase waterfall</b> \u2014 Time \u00d7 Channel phase in a cyclic colormap (\u2212180\u00b0 and +180\u00b0 are the same color)  | Scatter: Phase vs Time  | Stripes across frequency are a delay; stripes in time are a rate; uniform color is calibrated  | Tick one baseline, or step through them"),
     ("waterfall-all", "All-BL", 62,
-     ("<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG; each cell shows the largest amplitude (Baselines combined: Maximum)  | A quick survey for interference. A flag box here flags <b>every selected baseline</b>" + _helptext.MORE_CUE,
-      _helptext.points_html("<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG  | Each cell shows the largest amplitude among the baselines (Baselines combined is set to Maximum)  | Scatter: Amplitude vs Channel  | A quick survey for interference: one picture instead of one per baseline. A flag box here flags <b>every selected baseline</b>, and the message says how many  | What looks bad here may be on only a few baselines: tick antennas or baselines to find which before flagging them all"))),
+     ("<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG; each cell shows the largest amplitude (Baselines combined: Maximum)  | A quick survey for interference. A flag box here flags <b>every selected baseline</b>", "vp-preset-waterfall-all")),
     ("antmatrix", "Ant\u00d7Ant", 68,
-     ("<b>Antenna \u00d7 antenna</b> \u2014 one cell per baseline, averaged over time and channels, like AIPS LISTR\u2019s matrix; mirrored, so an antenna bad on every baseline is a whole row and column  | Hover a cell for its baseline  | Scatter: Amplitude vs UV Distance, where that antenna\u2019s baselines stand apart  | Flag on Baseline \u00d7 Time once the antenna is found" + _helptext.MORE_CUE,
-      _helptext.points_html("<b>Antenna \u00d7 antenna</b> \u2014 one cell per baseline, averaged over time and channels, like AIPS LISTR\u2019s matrix  | The matrix is mirrored, so an antenna that is bad on every baseline shows as a whole row and column  | Hover a cell for its baseline; the diagonal holds the autocorrelations when Autocorrelations (Data section) is Include  | Scatter: Amplitude vs UV Distance, where that antenna\u2019s baselines stand apart  | Averaging (raster gear tab) applies: vector averaging over a long stretch reads low where the phase is not calibrated yet \u2014 use Scalar, or narrow the time range  | Flag on Baseline \u00d7 Time once the antenna is found"))),
+     ("<b>Antenna \u00d7 antenna</b> \u2014 one cell per baseline, averaged over time and channels, like AIPS LISTR\u2019s matrix; mirrored, so an antenna bad on every baseline is a whole row and column  | Hover a cell for its baseline  | Scatter: Amplitude vs UV Distance, where that antenna\u2019s baselines stand apart  | Flag on Baseline \u00d7 Time once the antenna is found", "vp-preset-antmatrix")),
     ("spectrum", "Spectrum", 74,
      "<b>Spectrum</b> \u2014 amplitude above phase against frequency, each scan averaged, like AIPS POSSM  | Both panels are scatter plots, one above the other  | Read one baseline at a time: tick one, or step with Baseline \u25c0 \u25b6 (or Antenna \u25c0 \u25b6 for every baseline to one antenna)  | Shows the bandpass shape, edge channels, and a phase slope across the band (a delay)  | Average over time is set to Scan; change it in either panel's gear tab"),
     ("timeseries", "Time series", 84,
@@ -4727,32 +4725,24 @@ class VisibilityPlotter:
         except Exception as exc:                      # noqa: BLE001 -- a missing nicety
             log.debug("connection status in the busy chip not installed: %s", exc)
 
-    def _help_entries(self) -> list:
-        """The help page's entries (help_text.py): every status-area hint
-        with a long form, in the order the hints were made.  ``div`` lets
-        the key handler find the one showing."""
-        out = []
-        for k, d in vars(self).items():
-            if not (k.startswith("_hint_") and isinstance(d, Div)):
-                continue
-            long_html = next((t.get("cv_long_help") for t in (d.tags or [])
-                              if isinstance(t, dict) and t.get("cv_long_help")), None)
-            if long_html:
-                name = k[len("_hint_"):]
-                out.append({"id": f"help-{name}", "title": _helptext.title_of(d.text, name),
-                            "long": long_html, "div": d})
-        return out
+    def _help_sources(self) -> list:
+        """What **?** reads, in order (help_text.py): every status-area
+        help Div (one shows at a time), then the status row's warning and
+        status text."""
+        return self._hint_divs() + [self._notify_div, self._status_div]
 
     def _help_button(self, theme_btn):
-        """The toolbar's Help button, and the page-wide h / ? key
-        (help_text.py), installed once at page load."""
-        entries = self._help_entries()
+        """The toolbar's Help button, and the page-wide ? key
+        (help_text.py), installed once at page load.  Both open the
+        documentation copy for this cubevis (``help_text.docs_base``)."""
+        base = _helptext.docs_base()
         btn = Button(label="? Help", button_type="default", width=70)
-        args = {"entries": entries, "theme_btn": theme_btn}
-        btn.js_on_click(CustomJS(args=args, code=_helptext.HELP_BUTTON_JS))
+        btn.js_on_click(CustomJS(args={"base": base}, code=_helptext.HELP_BUTTON_JS))
         try:
             from bokeh.events import DocumentReady
             from bokeh.io import curdoc
+            args = {"base": base, "sources": self._help_sources(),
+                    "status_row": self._status_row}
             curdoc().js_on_event(DocumentReady, CustomJS(args=args, code=_helptext.KEY_HANDLER_JS))
         except Exception as exc:                      # noqa: BLE001
             log.debug("help key not installed: %s", exc)
@@ -6060,7 +6050,8 @@ for (const dt of other.tools) {
             try:
                 scan_sel, tr, uv = self._parse_selection_texts(scan_t, time_t, uv_t)
             except SelectionTextError as exc:
-                text = f"⚠ {exc}"
+                # The marker gives it a ⓘ and lets ? open the box's entry (help_text.py).
+                text = _helptext.with_selection_label(f"⚠ {exc}")
                 self._notify(text)
                 return {"status": "error", "status_text": text,
                         "notify_text": text, "notify_color": "#f38ba8"}
@@ -6134,7 +6125,7 @@ for (const dt of other.tools) {
                 continue
             problem = raster_axes_problem(panel_msg.get("y"), panel_msg.get("x"))
             if problem:
-                text = f"⚠ Panel {slot.id}: {problem}"
+                text = f"⚠ Panel {slot.id}: {problem}" + _helptext.marker("vp-r-axes")
                 self._notify(text)
                 return {"status": "error", "status_text": text,
                         "notify_text": text, "notify_color": "#f38ba8",
@@ -6530,7 +6521,11 @@ for (const dt of other.tools) {
                 except Exception as exc:
                     log.error("_handle_plot: panel %s scatter update_axes "
                               "failed: %s", slot.id, exc, exc_info=True)
-                    text = f"⚠ Panel {slot.id} scatter error: {exc}"
+                    # Too large for the memory guard: the ⓘ (and ?) explain
+                    # the limit (help_text.marker).
+                    mark = (_helptext.marker("vp-memory-guard")
+                            if type(exc).__name__ == "SelectionTooLargeError" else "")
+                    text = f"⚠ Panel {slot.id} scatter error: {exc}{mark}"
                     self._notify(text)
                     return {"status": "error", "status_text": text,
                             "notify_text": text, "notify_color": "#f38ba8",
@@ -7064,7 +7059,8 @@ cvApplySelectionText(
             err = getattr(getattr(slot, "scatter", None), "_render_error", None)
             if err and slot.kind == "scatter":
                 vw_note += (f"<br><span style='color:#f38ba8'>⚠ Panel {slot.id}: "
-                            f"{_html.escape(err)}</span>")
+                            f"{_html.escape(err)}</span>"
+                            + _helptext.marker("vp-memory-guard"))
         return (
             f"<b>{fname}</b>  |  Layout: {layout_label}<br>"
             f"{field}  |  {spw}  |  {antenna}{narrowed}  |  Col: {col}{flag_note}"
@@ -8613,12 +8609,13 @@ for (let i = 0; i < cols.length; i++) {
         # and is checked the same way.
         from .selection_text import SCAN_TEXT_JS
         _scan_check = CustomJS(
-            args={"notify_div": self._notify_div, "scans": [int(x) for x in scan_ids
+            args={"notify_div": self._notify_div, "scan_marker": _helptext.marker("vp-scan"),
+                  "scans": [int(x) for x in scan_ids
                                                               if str(x).lstrip("-").isdigit()]},
             code=SCAN_TEXT_JS + """
 const r = cvParseScanText(cb_obj.value, scans);
 if (!r.ok) {
-    notify_div.text = '\u26a0 ' + r.error;
+    notify_div.text = '\u26a0 ' + r.error + scan_marker;
     notify_div.styles = Object.assign({}, notify_div.styles, {color: '#f38ba8'});
 } else if ((notify_div.text || '').indexOf('\u26a0 Scan:') === 0) {
     notify_div.text = '';
@@ -12326,15 +12323,19 @@ if (x != null && !isNaN(x)) {
             "border-top":  "1px solid #45475a",
         }
 
+        # cv_status_row: ? reads these only while the status row shows
+        # (help_text.OPEN_HELP_JS); a message may carry a help marker.
         self._status_div = Div(
             text        = self._status_text(),
             sizing_mode = "stretch_width",
             visible     = True,
+            tags        = [{"cv_status_row": True}],
             styles      = _status_style,
         )
         self._notify_div = Div(
             text        = "",
             sizing_mode = "stretch_width",
+            tags        = [{"cv_status_row": True}],
             styles      = {
                 "font-size":    "12px",
                 "font-family":  "monospace",
@@ -12360,40 +12361,37 @@ if (x != null && !isNaN(x)) {
         # Pre-built hint divs — one per sidebar widget that benefits from help.
         # All start hidden; focus/blur JS toggles visibility.
         def _hint(spec):
-            # A plain string, or (tracking, long_html) -- help_text.py.
-            # The long form rides in the Div's tags, where the help key
-            # handler finds the one showing.
-            tracking, long_html = _helptext.split_spec(spec)
+            # A plain string, or (tracking, label) -- help_text.py.  The
+            # label (the documentation entry ? opens) rides in the Div's
+            # tags, where the key handler finds the one showing.
+            tracking, label = _helptext.split_spec(spec)
             return Div(text=tracking, sizing_mode="stretch_width",
                        visible=False, styles=_hint_style,
-                       tags=_helptext.long_tag(long_html))
+                       tags=_helptext.help_tag(label))
 
         self._hint_field    = _hint("")   # filled in _build_sidebar with MS data
         self._hint_spw      = _hint("")
         self._hint_corr     = _hint("")
-        self._hint_scan     = _hint("")
-        self._hint_antenna  = _hint("")
-        self._hint_time     = _hint("")
-        self._hint_uvrange  = _hint("")
+        self._hint_scan     = _hint(("", "vp-scan"))
+        self._hint_antenna  = _hint(("", "vp-antenna"))
+        self._hint_time     = _hint(("", "vp-time"))
+        self._hint_uvrange  = _hint(("", "vp-uvrange"))
         # The "tick from text" boxes under the SPW / Antenna / Baseline
         # tables (2026-10): what may be typed, shown while the pointer
         # is over the box, like Time range's and UV range's.
         self._hint_spw_text      = _hint("")
-        self._hint_antenna_text  = _hint("")
-        self._hint_baseline_text = _hint("")
+        self._hint_antenna_text  = _hint(("", "vp-antenna"))
+        self._hint_baseline_text = _hint(("", "vp-antenna"))
         # Controls in the gear tabs and the antenna switch (2026-10-06):
         # what each one does and when to use it.  Fixed text, so filled
         # here; attached to the controls by _hover().
         self._hint_rcorr      = _hint((
-            "<b>Correlation shown</b> \u2014 a raster shows one correlation at a time  | <b>First ticked</b>: the first one ticked in the Data section  | <b>Parallel hands</b>: (XX+YY)/2 or (RR+LL)/2, the Stokes I-like view; a flag box here flags both hands  | A product: that one, whether ticked or not" + _helptext.MORE_CUE,
-            _helptext.points_html("<b>Correlation shown</b> \u2014 a raster shows one correlation at a time  | <b>First ticked</b>: the first one ticked in the Data section, named in the title  | <b>Parallel hands</b>: the mean of the two parallel hands, (XX+YY)/2 or (RR+LL)/2, the Stokes I-like view AIPS editors start from; a sample counts only where both hands are unflagged, and a flag box here flags both  | A product: that one, whether ticked or not  | Two panels on RR and LL show a problem in one hand only")))
+            "<b>Correlation shown</b> \u2014 a raster shows one correlation at a time  | <b>First ticked</b>: the first one ticked in the Data section  | <b>Parallel hands</b>: (XX+YY)/2 or (RR+LL)/2, the Stokes I-like view; a flag box here flags both hands  | A product: that one, whether ticked or not", "vp-rcorr"))
         self._hint_averaging  = _hint((
-            "<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities; amplitude drops where samples do not line up. The default in AIPS and plotms  | <b>Scalar</b>: average the amplitudes; no loss from decorrelation  | Vector next to Scalar shows where coherence is lost" + _helptext.MORE_CUE,
-            _helptext.points_html("<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities, then take amplitude / phase. Amplitude drops where samples do not line up (noise, uncalibrated phase, a delay across the averaged channels). The default in AIPS and plotms, which both offer scalar averaging too  | <b>Scalar</b>: average the amplitudes themselves; shows signal plus noise level, no loss from decorrelation  | Vector next to Scalar on two panels shows where coherence is lost")))
+            "<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities; amplitude drops where samples do not line up. The default in AIPS and plotms  | <b>Scalar</b>: average the amplitudes; no loss from decorrelation  | Vector next to Scalar shows where coherence is lost", "vp-averaging"))
         self._hint_detrend    = _hint("<b>Phase slope</b> \u2014 for Phase RMS and Coherence  | <b>Remove</b>: take out a linear phase slope (a delay across frequency, a rate in time) before measuring the scatter, wherever the data clearly show one. Use for data that are not yet fringe-fitted  | <b>Keep</b>: measure the data as they are; a delay or rate then shows up as large scatter and low coherence  | On noise-dominated or already calibrated data the two give the same picture")
         self._hint_twin       = _hint((
-            "<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, else one scan  | <b>Off</b>: no windows  | <b>Scan</b> or a length; never across a gap  | Longer windows are steadier but blur changes in time" + _helptext.MORE_CUE,
-            _helptext.points_html("<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, one scan where it is not  | <b>Off</b>: no windows  | <b>Scan</b> or a length: each scan, or pieces of that length; never across a gap  | For <b>Amp V Diff / Phase Diff</b> it is the stretch the reference mean is taken over (Auto and Off mean one scan)  | Longer windows are steadier but blur changes in time; on the plot they show as blocks")))
+            "<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, else one scan  | <b>Off</b>: no windows  | <b>Scan</b> or a length; never across a gap  | Longer windows are steadier but blur changes in time", "vp-twin"))
         self._hint_cwin       = _hint("<b>Channel window</b> \u2014 how many channels each Phase RMS / Coherence value is measured within  | <b>Off</b>: the whole band where frequency is not a plot axis, single channels where it is  | A number: blocks of that many channels  | Needed, with a time window or alone, to see these quantities on a Time \u00d7 Channel waterfall")
         self._hint_ant_mode   = _hint("<b>Which baselines the ticked antennas select</b>  | <b>Either end</b>: every baseline with a ticked antenna at one end \u2014 one antenna against all the others  | <b>Both ends</b>: only baselines between ticked antennas \u2014 tick all and untick one to exclude it, or tick a few for a sub-array  | Ticked baselines override both")
         self._hint_s_twin     = _hint("<b>Time window (scatter)</b> \u2014 the stretch of time each Phase RMS / Coherence point is measured within  | <b>Auto</b>: one integration when X is Time, otherwise one scan  | <b>Off</b>: single integrations when X is Time, otherwise the whole selected time range  | <b>Scan</b> or a length: as given  | Short windows of noisy data give scattered, low-reading values")
@@ -12429,6 +12427,8 @@ if (x != null && !isNaN(x)) {
             args={"all_hints": self._hint_divs(), "status_row": self._status_row,
                   "status_div": self._status_div},
             code=_NOTIFY_CHANGED_JS))
+        for d in (self._notify_div, self._status_div):
+            d.js_on_change("text", CustomJS(code=_STATUS_TEXT_CUE_JS))
         self._status_col = column(
             self._status_row,
             *self._hint_divs(),

@@ -80,6 +80,22 @@ def _in_notebook() -> bool:
     return shell is not None and type(shell).__name__ == "ZMQInteractiveShell"
 
 
+def base() -> str:
+    """The copy of the documentation for this cubevis, without asking the
+    site: ``v<X.Y>/`` for a release, the latest for anything else.  For
+    links followed later, by a reader (visplot's **h** key): the site's
+    404 page sends an address in a copy that does not exist on to the
+    latest copy (docs/source/extensions/vp_help.py), so no network is
+    needed here.  ``CUBEVIS_DOCS_URL`` replaces it, e.g. with a local
+    build (``file:///.../_build/html/``)."""
+    import os
+    env = (os.environ.get("CUBEVIS_DOCS_URL") or "").strip()
+    if env:
+        return env if env.endswith("/") else env + "/"
+    release = _release(_version())
+    return f"{SITE}v{release}/" if release else SITE
+
+
 def url(page: Optional[str] = None) -> DocsURL:
     """The documentation URL for this cubevis (see ``docs``), without opening it."""
     release = _release(_version())

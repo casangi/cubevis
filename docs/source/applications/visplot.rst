@@ -28,7 +28,9 @@ Status of this document
 workflow*, *Reporting a problem* and *Scope, explicitly*.  Installing,
 launching ``visplot`` and its arguments are in :doc:`visplot_starting`.  The *Layout tour* still describes the controls in
 outline only; every control explains itself in the status area at the
-bottom of the window while the pointer is over it.
+bottom of the window while the pointer is over it, and where there is
+more to read (a ⓘ) pressing **?** opens it, in :doc:`visplot_help`:
+see *Help in the window*.
 
 .. note::
 
@@ -111,7 +113,8 @@ Toolbar
   tab's ✕) is ticked, which keeps it open to try one setting after
   another
 * Help — holding the pointer over any toolbar or sidebar control shows
-  what it does in the status area at the bottom
+  what it does in the status area at the bottom; the *? Help* button
+  opens :doc:`visplot_help`.  See *Help in the window*, below
 * Pan / Zoom / Reset (shared across both panels when both are shown).
   Wheel (scroll) zoom is off until its toolbar button is clicked, so a
   trackpad or mouse-wheel scroll over a plot scrolls the page
@@ -245,6 +248,36 @@ The selection is read once for all the plots of a grid and held in
 memory, within the frame cache (see *Large selections*).  A grid too big
 for that still works: each plot then reads its own rows, more slowly.
 
+.. _vp-help-window:
+
+Help in the window
+------------------
+
+The status area at the bottom of the window shows what the last *Plot*
+or flagging step did, warnings, and -- while the pointer is over a
+toolbar or sidebar control -- a short description of that control.
+
+* **ⓘ means there is more.**  A description or a warning that has a
+  longer explanation in this documentation ends with a ⓘ (for a
+  description cut off by the size of the area, at its bottom right).
+  Text without a ⓘ is all there is.
+* **? opens it.**  Pressing **?** anywhere in the window opens the
+  explanation of what the status area is showing, in a separate browser
+  tab (the same one each time): the description of the control under the
+  pointer, or a warning when the description has no ⓘ.  Over text
+  without a ⓘ the key does nothing.
+* **Click a warning's ⓘ** to open its explanation.  (For a control's
+  description use the key: moving the pointer onto the ⓘ leaves the
+  control, and its description goes.)
+* **In a text box** (Scan, Time range, UV range, the antenna boxes)
+  **?** is typed into the box.  Scroll the window or press
+  **Esc** to leave the box, then press the key.
+* The explanations are the documentation of the installed version of
+  ``cubevis`` (the latest documentation for a development version).
+  :doc:`visplot_help` lists them all; the *? Help* button opens it.
+
+.. _vp-memory-guard:
+
 Large selections
 -----------------
 
@@ -252,9 +285,15 @@ A scatter panel holds every selected sample while it draws.  A selection
 estimated to need more than 70 % of the memory available is loaded
 anyway (it may be slow while the system swaps) and noted in the log.
 Where swapping is not wanted -- a shared cluster node, a machine without
-swap -- ``CUBEVIS_VISPLOT_MEMORY_GUARD=<MB>`` sets a limit: a scatter
-estimated to need more is refused before anything is read, with a
-message saying what to narrow.  (``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` is a
+swap -- ``CUBEVIS_VISPLOT_MEMORY_GUARD=<MB>``, set before ``visplot``
+starts, sets a limit: a scatter estimated to need more (about 110 bytes a
+sample) is refused before anything is read, with a message saying what
+to narrow.  *Plot* reports it; a panel whose selection is too large when
+the window opens stays empty, with the message in the status area.  To
+get under the limit, select less (fewer fields, scans, spectral windows,
+antennas or correlations, a shorter time range), average over time or
+channels (the scatter panel's *Averaging*), or use a raster, whose size
+does not grow with the data.  ``off`` or no value means no limit.  (``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` is a
 different setting: how much read data is kept for redrawing.)
 
 The Grid layout holds the rows of its selection in memory, counted in that

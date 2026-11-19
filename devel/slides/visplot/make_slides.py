@@ -122,7 +122,7 @@ def save(name, slide, footnote=FOOT):
 s = Slide("visplot at a glance",
           "One tool for what plotms and msview do today, built for commissioning and data inspection.")
 rows = [
-    ("Reads", BLUE, "MSv2 measurement sets through xarray-ms, and MSv4 / Processing Sets through xarray's own Zarr engine. "
+    ("Reads", BLUE, "MSv2 measurement sets through xarray-ms, and MSv4 / Processing Sets through xradio. "
                     "vis= detects which, as in any CASA task. Data column DATA, CORRECTED or MODEL."),
     ("Shows", ORANGE, "One plot or two (side by side, or one over the other), each a raster (a 2-D image over Baseline, Time, Channel or Antenna × Antenna) "
                       "or a scatter (Amplitude, Phase, Real, Imaginary, Phase RMS … against Time, Frequency, "
@@ -392,7 +392,7 @@ layer(L, 481, R - L, 62, "XArrayReader", "one interface: scatter samples, raster
 down(270, 543, 573)
 down(670, 543, 573)
 layer(L, 573, 380, 62, "MSv2Backend", "reads: xarray-ms on arcae · flags: arcae")
-layer(490, 573, 380, 62, "MSv4Backend", "reads and flags: xarray / Zarr, no xradio")
+layer(490, 573, 380, 62, "MSv4Backend", "reads: xradio · flags: Zarr")
 down(270, 635, 665)
 down(670, 635, 665)
 for cx, lab, sub in [(270, "MSv2 measurement set", "CASA table format"), (670, "MSv4 / Processing Set", "Zarr store")]:

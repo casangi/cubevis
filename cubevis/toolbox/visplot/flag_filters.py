@@ -38,7 +38,7 @@ exclude already-flagged samples from its own statistics).
 
 The Flagging panel lists a curated set (``FlagFilter.gui``; 2026-10-09,
 HRS H5 slice 2): All selected, Value range (on the quantity the panel
-shows), Outlier from neighbours (running median along time or channel),
+shows), Outlier from neighbors (running median along time or channel),
 Z-Score, Amplitude outlier (MAD), Phase deviation, Grow around flags --
 each with at most two controls.  The reference population is chosen
 automatically ("auto") and is no longer a control.
@@ -754,13 +754,13 @@ OUTLIER = _register_builtin(FlagFilter(
                       choices=("time", "channel"),
                       help="time: each sample against the integrations before and "
                            "after it (spikes in time, brief interference); channel: "
-                           "against the neighbouring channels (narrow-band "
+                           "against the neighboring channels (narrow-band "
                            "interference, a bad channel)."),
             ParamSpec("nsigma", "float", 5.0, "Cutoff (sigma)", min=0.0,
-                      help="How far from its neighbours a sample must be, in robust "
+                      help="How far from its neighbors a sample must be, in robust "
                            "standard deviations of the baseline's scatter about them. "
                            "Lower takes more.")),
-    label="Outlier from neighbours",
+    label="Outlier from neighbors",
     description="Amplitudes far from the running median of the "
                 f"{RUNNING_WINDOW} samples around them, per baseline and correlation, "
                 "within each scan. Finds spikes that a smooth change in gain or a "

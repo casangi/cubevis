@@ -542,8 +542,14 @@ class TestRealPlotter:
     def test_control_has_help_in_the_status_area(self, plotter):
         from cubevis.bokeh.models import EvHover
         hint = plotter._hint_bcombine
-        text = hint.text
-        assert text.startswith("<b>Baselines combined</b>")
+        assert hint.text.startswith("<b>Baselines combined</b>")
+        # The status area shows a short form ending in "press h for
+        # more"; the rest is in the long form the h key opens
+        # (help_text.py, 2026-11-18).  Together they say all of this.
+        from cubevis.toolbox.visplot import help_text
+        long_html = next(t["cv_long_help"] for t in hint.tags if isinstance(t, dict))
+        assert hint.text.endswith(help_text.MORE_CUE)
+        text = hint.text + long_html
         # "Vector (coherent)": renamed from "Coherent" (2026-11-18,
         # pre-preview feedback) and offered only with Vector averaging.
         for word in ("<b>Mean</b>", "<b>Median</b>", "<b>Maximum</b>",

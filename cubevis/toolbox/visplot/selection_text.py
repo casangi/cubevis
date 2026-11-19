@@ -166,6 +166,12 @@ def parse_scan_text(text: Optional[str], scans: Sequence) -> Optional[list[str]]
             got = {i for i in ids if (i > n if m_cmp.group(1) == ">" else i < n)}
         elif re.fullmatch(r"\d+", body):
             got = {int(body)} & set(ids)
+        elif re.fullmatch(r"(\d+)\s*-\s*(\d+)", body):
+            # "2-15": a natural guess, but CASA writes ranges with ~
+            # (2026-11-18, pre-preview feedback).
+            a, b = re.fullmatch(r"(\d+)\s*-\s*(\d+)", body).groups()
+            raise SelectionTextError(
+                f"Scan: {tok!r} \u2014 a range is written with ~, as {a}~{b}")
         else:
             raise SelectionTextError(
                 f"Scan: {tok!r} is not a scan number, range (a~b), "
@@ -451,3 +457,57 @@ def uv_range_text(uv: Optional[list]) -> str:
         else:
             parts.append(f"{lo:g}~{hi:g}{u}")
     return ",".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Scan text, in the browser
+# ---------------------------------------------------------------------------
+
+#: ``cvParseScanText(text, scans)`` -- :func:`parse_scan_text` for the
+#: browser, so the Scan box can be checked when Return is pressed instead
+#: of only at Plot (2026-11-18).  *scans* are the data's scan numbers.
+#: Returns ``{ok: true, scans: [...]|null}`` or ``{ok: false, error}``,
+#: with the Python version's messages word for word (a parity test runs
+#: both on the same inputs: test_scan_text_js.py).
+SCAN_TEXT_JS = r"""
+function cvParseScanText(text, scans) {
+    const repr = (t) => "'" + t + "'";
+    text = String(text || '').trim();
+    if (!text) return {ok: true, scans: null};
+    const ids = Array.from(new Set((scans || []).map(x => parseInt(String(x).trim(), 10))
+                                                .filter(x => !isNaN(x)))).sort((a, b) => a - b);
+    const shown = ids.slice(0, 12).join(', ') + (ids.length > 12 ? ' …' : '');
+    const keep = new Set(), drop = new Set();
+    let positive = false;
+    for (const raw of text.split(',')) {
+        const tok = raw.trim();
+        if (!tok) continue;
+        const neg = tok.startsWith('!');
+        const body = neg ? tok.slice(1).trim() : tok;
+        let m, got;
+        if ((m = /^(\d+)\s*~\s*(\d+)$/.exec(body))) {
+            const lo = Math.min(+m[1], +m[2]), hi = Math.max(+m[1], +m[2]);
+            got = ids.filter(i => lo <= i && i <= hi);
+        } else if ((m = /^([<>])\s*(\d+)$/.exec(body))) {
+            const n = +m[2];
+            got = ids.filter(i => m[1] === '>' ? i > n : i < n);
+        } else if (/^\d+$/.test(body)) {
+            got = ids.indexOf(+body) >= 0 ? [+body] : [];
+        } else if ((m = /^(\d+)\s*-\s*(\d+)$/.exec(body))) {
+            return {ok: false, error: 'Scan: ' + repr(tok) + ' — a range is written with ~, as ' +
+                                      m[1] + '~' + m[2]};
+        } else {
+            return {ok: false, error: 'Scan: ' + repr(tok) + ' is not a scan number, range (a~b), ' +
+                                      '>n, <n or !n'};
+        }
+        if (!got.length)
+            return {ok: false, error: 'Scan: ' + repr(tok) + ' matches no scan in the data (scans: ' +
+                                      shown + ')'};
+        for (const g of got) (neg ? drop : keep).add(g);
+        if (!neg) positive = true;
+    }
+    const chosen = (positive ? Array.from(keep) : ids).filter(i => !drop.has(i)).sort((a, b) => a - b);
+    if (!chosen.length) return {ok: false, error: 'Scan: the selection leaves no scan'};
+    return {ok: true, scans: chosen};
+}
+"""

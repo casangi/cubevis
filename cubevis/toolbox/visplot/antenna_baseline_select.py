@@ -696,6 +696,12 @@ function doIterateAntenna(delta) {
     for (let i = 0; i < names.length; i++)
         if (!has || has[i] !== 0) cand.push(i);
     if (cand.length === 0) return;
+    // The ▶ steps: through the ticked antennas when two or more are
+    // ticked, else through all with data, a single tick moving with it
+    // (iteration_subset.py, 2026-11-18).  Guarded: tests run this
+    // function on its own, where the old behavior below still applies.
+    if (typeof cvIterSubsetStep === 'function' &&
+        cvIterSubsetStep(ant_src, 'antenna', cand, delta)) return;
     // Only EXACTLY ONE ticked antenna has a position to step from.  No
     // tick, or several, starts fresh at the first antenna -- the rule
     // the free-text antenna box followed before this table replaced it.
@@ -731,12 +737,25 @@ def iterate_baseline_js(guard_js: str) -> str:
 function doIterateBaseline(delta) {
     const a1 = (bl_src.data && bl_src.data['ant1']) || [];
     const a2 = (bl_src.data && bl_src.data['ant2']) || [];
+    // Two or more baselines ticked: step through those only, ticks
+    // unchanged (iteration_subset.py, 2026-11-18).
+    const _bt = (bl_src.selected && bl_src.selected.indices) || [];
+    if (typeof cvIterSubsetStep === 'function' && _bt.length >= 2) {
+        const _has = (bl_src.data && bl_src.data['has_data']) || null;
+        const _all = [];
+        for (let i = 0; i < a1.length; i++) if (!_has || _has[i] !== 0) _all.push(i);
+        cvIterSubsetStep(bl_src, 'baseline', _all, delta);
+        return;
+    }
     // What to step through: every baseline, in id order -- or, when
     // some but not all antennas are ticked, only the baselines that
     // have a ticked antenna at either end ("the next baseline to this
     // antenna").
     const names = (ant_src && ant_src.data && ant_src.data['name']) || [];
-    const asel  = (ant_src && ant_src.selected && ant_src.selected.indices) || [];
+    // The antenna being iterated, when there is one, else the ticks.
+    const asel  = (typeof cvIterEffective === 'function')
+        ? cvIterEffective(ant_src, 'antenna')
+        : ((ant_src && ant_src.selected && ant_src.selected.indices) || []);
     // Baselines with no data in the field / SPW selection (has_data 0,
     // from the last Plot) are skipped (2026-10-10).
     const has   = (bl_src.data && bl_src.data['has_data']) || null;
@@ -748,6 +767,12 @@ function doIterateBaseline(delta) {
     } else {
         for (let i = 0; i < a1.length; i++) if (!has || has[i] !== 0) cand.push(i);
     }""" + guard_js + """
+    // One or no baseline ticked: through the candidates, the ▶ moving (and
+    // a single tick with it) -- iteration_subset.py.
+    if (typeof cvIterSubsetStep === 'function') {
+        cvIterSubsetStep(bl_src, 'baseline', cand, delta);
+        return;
+    }
     // Exactly one ticked baseline, and one of the candidates, has a
     // position to step from; anything else starts at the first.
     const sel = bl_src.selected.indices || [];

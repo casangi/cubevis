@@ -237,9 +237,18 @@ def equalize_histogram(
     finite_mask = np.isfinite(values)
     out = np.full(values.shape, np.nan, dtype=np.float64)
     if np.any(finite_mask):
+        # Below the reference: 0, the colorbar's bottom (2026-11-18).
+        # ``left=cdf[0]`` gave the first bin's share instead.  Harmless
+        # while the reference was all the data (nothing lies below it),
+        # but a manual min/max restricts the reference to the band
+        # between the lines, and every value under the band then took
+        # that share -- 0.25 of the colorbar with four samples in the
+        # band -- instead of the bottom color, unlike the clamping every
+        # other scaling does (apply_explicit_scaling clips to [min, max]).
+        # Above the reference stays cdf[-1] == 1, the top.
         out[finite_mask] = np.interp(
             values[finite_mask], bin_centers, cdf,
-            left=cdf[0], right=cdf[-1],
+            left=0.0, right=cdf[-1],
         )
     return out
 

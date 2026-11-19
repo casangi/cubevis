@@ -67,11 +67,13 @@ from bokeh.models import ColumnDataSource
 
 import dataclasses
 from .visibility_plot import _composite_flag_mask
+from .visibility_plot import _CV_SET_BUSY_JS
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
 )
 from ..gridplot.panel_spec import ColorBand, PanelSpec, CATEGORY_PRIORITY_CAPTIONS
 from ..gridplot import colormap_scaling as _cms
+from . import colormap_sync as _csync
 from .data.reader import (ScatterLayerSpec, ScatterLayerReference, CATEGORY_PRIORITIES,
                           DEFAULT_CATEGORY_PRIORITY, EXCLUDED_DISPLAYS,
                           DEFAULT_EXCLUDED_DISPLAY,
@@ -1071,6 +1073,27 @@ class VisibilityScatter(VisibilityPlot):
             )
         return counts, edges
 
+    def colormap_state(self, layer_index: int = 0) -> dict:
+        """What layer *layer_index*'s color-scaling controls should show
+        now (``colormap_sync``): its histogram and scaling settings."""
+        lyr = self._layers[layer_index]
+        counts, edges = self.histogram(layer_index)
+        return _csync.colormap_state(
+            counts, edges, scaling=lyr.scaling,
+            alpha=lyr.scaling_alpha, gamma=lyr.scaling_gamma,
+            vmin=lyr.scaling_vmin, vmax=lyr.scaling_vmax)
+
+    def colormap_states(self) -> list:
+        """:meth:`colormap_state` for every layer, in layer order (what the
+        Plot response sends for a scatter panel)."""
+        out = []
+        for i in range(len(self._layers)):
+            try:
+                out.append(self.colormap_state(i))
+            except (IndexError, AttributeError):
+                out.append(None)
+        return out
+
     def colormap_controls(self, layer_index: int = 0):
         """Return a Bokeh widget column for one layer's scaling controls.
 
@@ -1204,6 +1227,12 @@ class VisibilityScatter(VisibilityPlot):
         # button has no label above it, unlike the TextInputs).
         reset_button_col = column(Spacer(height=19), reset_button)
 
+        # Threshold: one cutoff line and field (colormap_sync, 2026-11-18).
+        if lyr.scaling == "threshold":
+            max_span.visible = False
+            max_input.visible = False
+            min_input.title = "cutoff"
+
         controls = column(
             scaling_select,
             equation,
@@ -1211,6 +1240,25 @@ class VisibilityScatter(VisibilityPlot):
             hist_fig,
             row(reset_button_col, min_input, max_input),
         )
+
+        # Sync source (colormap_sync): see VisibilityRaster.colormap_controls.
+        # One per layer, indexed like the layers, so the Plot response's
+        # per-layer states land on the right controls.
+        cmap_sync = _csync.sync_source()
+        if not hasattr(self, "_cmap_sync") or self._cmap_sync is None:
+            self._cmap_sync = []
+        while len(self._cmap_sync) <= layer_index:
+            self._cmap_sync.append(None)
+        self._cmap_sync[layer_index] = cmap_sync
+        cmap_sync.js_on_change("data", CustomJS(
+            args={"hist_source": hist_source, "min_span": min_span,
+                  "max_span": max_span, "min_input": min_input,
+                  "max_input": max_input, "scaling_select": scaling_select,
+                  "alpha_input": alpha_input, "gamma_input": gamma_input,
+                  "equation": equation,
+                  "equations": {k: _cms.scaling_equation_label(k)
+                                for k in _cms.ALL_SCALINGS}},
+            code=_csync.APPLY_JS))
 
         if self._comm is None:
             # No comm channel -- controls render but are inert, matching
@@ -1244,7 +1292,7 @@ class VisibilityScatter(VisibilityPlot):
     } else {
         console.warn('[visplot colormap] response had no image:', resp);
     }
-"""
+""" + _csync.APPLY_REPLY_JS
 
         scaling_js = CustomJS(
             args={
@@ -1252,14 +1300,26 @@ class VisibilityScatter(VisibilityPlot):
                 "equation": equation, "alpha_input": alpha_input,
                 "gamma_input": gamma_input, "equations": equations,
                 "layer_index": layer_index,
+                "cmap_sync": cmap_sync, "min_span": min_span,
+                "max_span": max_span, "min_input": min_input,
+                "max_input": max_input,
             },
             code=f"""
 const s = cb_obj.value;
 alpha_input.visible = (s === 'log' || s === 'power');
 gamma_input.visible = (s === 'gamma');
 equation.text = equations[s] || s;
+{_csync.THRESHOLD_JS}
+// A reply that only shows the layer's scaling (colormap_sync): nothing
+// to send.
+{_csync.QUIET_GUARD_JS}
 console.log('[visplot colormap] sending:', {{layer_index: layer_index, scaling: s}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{layer_index: layer_index, scaling: s}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1269,12 +1329,17 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, scaling: s}}, func
         def _numeric_submit_js(field_key: str) -> "CustomJS":
             return CustomJS(
                 args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
-                      "layer_index": layer_index},
+                      "layer_index": layer_index, "cmap_sync": cmap_sync},
                 code=f"""
 const v = parseFloat(cb_obj.value);
 if (isNaN(v)) return;
 console.log('[visplot colormap] sending:', {{layer_index: layer_index, {field_key}: v}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1292,7 +1357,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, 
                 args={"paired_input": paired_input},
                 code="""
 if (cb_obj.location == null || isNaN(cb_obj.location)) return;
-paired_input.value = cb_obj.location.toFixed(6);
+paired_input.value = String(parseFloat(Number(cb_obj.location).toPrecision(6)));
 """,
             )
 
@@ -1303,14 +1368,20 @@ paired_input.value = cb_obj.location.toFixed(6);
             from a non-Plot origin)."""
             return CustomJS(
                 args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
-                      "layer_index": layer_index, "paired_input": paired_input},
+                      "layer_index": layer_index, "paired_input": paired_input,
+                      "cmap_sync": cmap_sync},
                 code=f"""
 if (cb_obj.dragging) return;  // only act when the drag just ENDED
 const v = cb_obj.location;
 if (v == null || isNaN(v)) return;
-paired_input.value = v.toFixed(6);
+paired_input.value = String(parseFloat(Number(v).toPrecision(6)));
 console.log('[visplot colormap] sending (span release):', {{layer_index: layer_index, {field_key}: v}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1324,13 +1395,19 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, 
         def _range_submit_js(field_key: str, paired_span) -> "CustomJS":
             return CustomJS(
                 args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
-                      "layer_index": layer_index, "paired_span": paired_span},
+                      "layer_index": layer_index, "paired_span": paired_span,
+                      "cmap_sync": cmap_sync},
                 code=f"""
 const v = parseFloat(cb_obj.value);
 if (isNaN(v)) return;
 paired_span.location = v;
 console.log('[visplot colormap] sending (field submit):', {{layer_index: layer_index, {field_key}: v}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1344,14 +1421,16 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, 
                   "layer_index": layer_index,
                   "min_span": min_span, "max_span": max_span,
                   "min_input": min_input, "max_input": max_input,
-                  "hist_lo": hist_lo, "hist_hi": hist_hi},
+                  "hist_source": hist_source, "cmap_sync": cmap_sync},
             code=f"""
-min_span.location = hist_lo;
-max_span.location = hist_hi;
-min_input.value = hist_lo.toFixed(6);
-max_input.value = hist_hi.toFixed(6);
+{_csync.RESET_EDGES_JS}
 console.log('[visplot colormap] sending (reset):', {{layer_index: layer_index, reset_range: true}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -2675,8 +2754,12 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
 
         scans = identity.get("scan_names") or []
         if scans:
+            # Sorted, consecutive scans as ranges, never cut (a summary
+            # table: complete, but not one entry per scan) -- see
+            # selection_text.format_scan_list.
+            from .selection_text import format_scan_list
             rows.append(("Scan" + ("s" if len(scans) > 1 else ""),
-                         ", ".join(_html_escape(s) for s in scans)))
+                         _html_escape(format_scan_list(scans, limit=None))))
 
         pairs = identity.get("antenna_pairs") or []
         if pairs:
@@ -3565,6 +3648,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             scaling_gamma = lyr.scaling_gamma,
             scaling_vmin  = lyr.scaling_vmin,
             scaling_vmax  = lyr.scaling_vmax,
+            cmap          = self.colormap_state(idx),
         )
 
     def _legend_html(self, layer_index: int) -> str:

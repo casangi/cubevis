@@ -244,7 +244,10 @@ class TestZscoreButtonWiring:
     def _buttons():
         start = _SRC.index("_PRESET_BUTTONS = (")
         end = _SRC.index("\n)\n", start) + 3
-        ns = {}
+        # A long help text is a (tracking, long_html) spec built with
+        # help_text (2026-11-18).
+        from cubevis.toolbox.visplot import help_text
+        ns = {"_helptext": help_text}
         exec(_SRC[start:end], ns)
         return ns["_PRESET_BUTTONS"]
 
@@ -259,9 +262,11 @@ class TestZscoreButtonWiring:
         end = _SRC.index("\n}\n", start) + 3
         ns = {"Axis": Axis}
         exec(_SRC[start:end], ns)
+        from cubevis.toolbox.visplot import help_text
         for name, label, width, text in self._buttons():
             assert name in presets or name in ns["_PAIR_PRESETS"], name
-            assert label and width > 0 and text.startswith("<b>")
+            # text: a help spec -- a string, or (tracking, long_html)
+            assert label and width > 0 and help_text.split_spec(text)[0].startswith("<b>")
 
     def test_buttons_are_built_and_wired_from_the_table(self):
         assert "for name, label, width, _help in _PRESET_BUTTONS" in _SRC

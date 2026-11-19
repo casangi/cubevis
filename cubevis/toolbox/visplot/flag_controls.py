@@ -84,6 +84,11 @@ REACH_BASELINE_WORDS = {
 REACH_WARN_COLOR = "#f9a825"      # amber: readable on dark and light
 REACH_QUIET_COLOR = "#8c8fa1"
 REASON_MAX = 80
+# The built-in filters with an entry in the documentation
+# (docs/source/applications/visplot_help.md, ``vp-flagf-<name>``); a filter
+# the user registers has none, and its help has no label.
+DOCUMENTED_FILTERS = frozenset({"all", "value_range", "outlier", "zscore",
+                                "amplitude_mad", "phase_deviation", "grow"})
 
 
 # ``flag_reach="..."`` words (constructor / task argument) -> setting.
@@ -475,11 +480,17 @@ class FlagController:
                 log.warning("%s", exc)          # expected, not a bug: no traceback
             else:
                 log.exception("flag request failed")
-            return self.response(f"⚠ {verb.capitalize()} failed: {html.escape(str(exc))}",
+            # A reach that does not fit the box (flag_engine.ScopeError):
+            # a ⓘ for the Flag reaches entry (help_text.marker).
+            mark = (help_text.marker("vp-flag-reach")
+                    if type(exc).__name__ == "ScopeError" else "")
+            return self.response(f"⚠ {verb.capitalize()} failed: {html.escape(str(exc))}{mark}",
                                  NOTIFY_WARN, refresh=False)
         if prop.delta is None:
             why = "; ".join(prop.warnings) or "nothing matched"
-            return self.response(f"⚠ Nothing to {verb}: {html.escape(why)}.", NOTIFY_WARN,
+            # Why a box can take nothing: the filters' entry.
+            return self.response(f"⚠ Nothing to {verb}: {html.escape(why)}."
+                                 + help_text.marker("vp-flag-filters"), NOTIFY_WARN,
                                  refresh=False)
         if self.preview:
             self.proposal = prop
@@ -1061,7 +1072,8 @@ class FlagController:
             if not caps.get("casa" if casa else "write"):
                 return self.response("⚠ Writing flags is unavailable here: "
                                      + html.escape(caps.get("casa_reason" if casa else
-                                                            "write_reason") or "unknown reason"),
+                                                            "write_reason") or "unknown reason")
+                                     + help_text.marker("vp-flag-export"),
                                      NOTIFY_WARN, refresh=False)
             if not deltas:
                 return self.response("Nothing to write: no pending operations.", NOTIFY_OK,
@@ -1182,7 +1194,8 @@ class FlagController:
                     f"({k.get('should_be_flagged', 0):,} not flagged, "
                     f"{k.get('should_be_unflagged', 0):,} not unflagged, "
                     f"{k.get('collateral', 0):,} changed that should not have). "
-                    f"Previous flags saved as {where} -- restore them if needed.")
+                    f"Previous flags saved as {where} -- restore them if needed."
+                    + help_text.marker("vp-flag-export"))
             color = NOTIFY_WARN
         return self.response(text, color, preview_closed=True)
 
@@ -1496,11 +1509,13 @@ class FlagController:
 
     def filter_hints(self) -> dict:
         """Status-area help per filter: ``{"flagf_<name>": spec}``, a spec
-        as in ``help_text`` (an HTML string, or ``(tracking, long_html)``
-        for a text longer than the status area holds).
+        as in ``help_text``: ``(text, label)`` for the built-in filters,
+        whose entries are in the documentation (``vp-flagf-<name>``), the
+        text alone for a filter registered by the user.
 
         What the filter picks out of a box and what each of its
-        parameters does (the text that used to be tooltips).
+        parameters does (the text that used to be tooltips).  The whole
+        text is shown; its ⓘ (and ?) leads to the entry.
         """
         out = {}
         esc = html.escape
@@ -1511,19 +1526,14 @@ class FlagController:
                 if spec.gui and spec.help:
                     pts.append(f"<b>{esc(spec.label or spec.name)}</b>: {esc(spec.help)}")
             full = "  | ".join(pts)
-            # Too long for the five-line status area (help_text.py,
-            # 2026-11-18): the filter's name and description there, with
-            # the cue; everything, parameters included, in the long form.
-            if len(help_text.visible_text(full)) > help_text.TRACKING_BUDGET:
-                out[f"flagf_{n}"] = (pts[0] + help_text.MORE_CUE,
-                                     help_text.points_html(full))
-            else:
-                out[f"flagf_{n}"] = full
+            label = (help_text.LABEL_PREFIX + "flagf-" + n.replace("_", "-")
+                     if n in DOCUMENTED_FILTERS else None)
+            out[f"flagf_{n}"] = (full, label) if label else full
         return out
 
-    def export_hint(self) -> str:
+    def export_hint(self):
         """Status-area help for the Export / commit group: a help spec
-        (``help_text``), long-form when it does not fit."""
+        (``help_text``) with its documentation entry."""
         caps = self.capabilities()
         pts = ["<b>Export / commit</b> \u2014 what to do with the pending flags; nothing "
                "is written until <b>Go</b>",
@@ -1540,12 +1550,7 @@ class FlagController:
                    "directory or next to the data are listed, this data's first")
         pts.append("<b>File</b>: where to write, or what to load or restore; empty takes a "
                    "name made from the data name and the time")
-        full = "  | ".join(pts)
-        # Longer than the status area holds (help_text.py): the first point
-        # there, everything in the long form.
-        if len(help_text.visible_text(full)) > help_text.TRACKING_BUDGET:
-            return (pts[0] + help_text.MORE_CUE, help_text.points_html(full))
-        return full
+        return ("  | ".join(pts), "vp-flag-export")
 
     def themed_widgets(self) -> list:
         """Widgets the Light/Dark toggle must restyle (``stylesheets[0]``)."""

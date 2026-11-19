@@ -543,19 +543,19 @@ class TestRealPlotter:
         from cubevis.bokeh.models import EvHover
         hint = plotter._hint_bcombine
         assert hint.text.startswith("<b>Baselines combined</b>")
-        # The status area shows a short form ending in "press h for
-        # more"; the rest is in the long form the h key opens
-        # (help_text.py, 2026-11-18).  Together they say all of this.
-        from cubevis.toolbox.visplot import help_text
-        long_html = next(t["cv_long_help"] for t in hint.tags if isinstance(t, dict))
-        assert hint.text.endswith(help_text.MORE_CUE)
-        text = hint.text + long_html
+        # The status area shows a short form; the rest is in the
+        # documentation entry the ? key opens (help_text.py, reworked
+        # 2026-11-19).  Together they say all of this.
+        from test_help_labels import doc_section
+        label = next(t["cv_help"] for t in hint.tags if isinstance(t, dict))
+        assert label == "vp-bcombine"
+        text = hint.text + doc_section(label)
         # "Vector (coherent)": renamed from "Coherent" (2026-11-18,
         # pre-preview feedback) and offered only with Vector averaging.
         for word in ("<b>Mean</b>", "<b>Median</b>", "<b>Maximum</b>",
                      "<b>Vector (coherent)</b>", "Offered only with Vector averaging",
                      "every selected baseline"):
-            assert word in text
+            assert word in text or word.replace("<b>", "**").replace("</b>", "**") in text
         assert hint in plotter._hint_divs()
         # each raster gear tab's control sits in a hover wrapper that
         # shows this hint

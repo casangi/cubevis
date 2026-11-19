@@ -23,7 +23,7 @@ order is roughly the order in which they could be taken up.
 | 6 | [Time (integration) iteration](#6-time-integration-iteration) | large | 1 |
 | 7 | [Per-cell aggregation](#7-per-cell-aggregation-max-min-std-) | large | — |
 | 8 | [Statistic windows: more general, typed values](#8-statistic-windows-more-general-typed-values) | small to medium | 7 |
-| 9 | [User-guide pages from the in-app help](#9-user-guide-pages-from-the-in-app-help) | medium | sidebar reorganization |
+| 9 | [User-guide pages from the in-app help](#9-user-guide-pages-from-the-in-app-help) | done; rewrite open | sidebar reorganization |
 
 ## How iteration works now
 
@@ -303,23 +303,29 @@ quantity is part of item 7.
 
 ## 9. User-guide pages from the in-app help
 
-**Agreed for later** (2026-11-18).
+**Done** on `debug-0002` (2026-11-19), the other way round from the one
+first planned: the long form of each help is written in the user guide,
+[`visplot_help.md`](../../../docs/source/applications/visplot_help.md),
+and the code only names it by a label (`help_text.py`).  Whatever the
+status area shows that has an entry carries a ⓘ; pressing **?** anywhere
+in the window (or clicking a message's ⓘ) opens the documentation copy
+for the installed version at that entry.  Letters are not used (`h` was,
+briefly): they stay free for keyboard navigation.  A test checks every label the
+code uses exists in the documentation; the build writes a forwarding
+page for each (`docs/source/extensions/vp_help.py`).  How labels are
+kept is in `docs/source/contributing.md`.
 
-**Today.** Hover help can now have a long form (`help_text.py`).  The
-tracking text shows in the status area, ending in "press h for more".
-Pressing **h** (or **?**) opens the long form in a help tab.  The toolbar
-**Help** button opens the full list.  The long forms live in the code
-only.
+**Still open.**
 
-**Design questions.**
-
-* A Sphinx extension (`docs/source/extensions/` exists) could render the
-  same entries into the user guide, so the in-app help and the docs
-  cannot drift apart.  This is best done with the user guide's
-  control-by-control rewrite, after the planned sidebar reorganization.
-* **Long-form content.** The first long forms are the old hint texts as
-  lists.  Real long-form help (examples, tables, figures) can go into the
-  same strings, since they are free HTML.  Is there a budget for writing
-  it before the preview?
-
-**Size.** Medium, mostly writing.
+* **The control-by-control rewrite** of the user guide, after the
+  planned sidebar reorganization.  The help page's entries can then
+  move into it; their labels go with them, and the code does not change.
+* **Long-form content.**  The entries are the old long hint texts, lightly
+  edited.  Examples and figures can now be added like anywhere else in the
+  documentation.
+* **More entries.**  Controls whose help fits the status area have no
+  entry yet (no ⓘ).  Messages with one so far: the Scan, Time range and UV
+  range errors, a raster's axes, the memory guard, and from flagging a
+  reach that does not fit the box, a box that takes nothing, writing
+  unavailable, and a write that does not check out.  Others can be given
+  one with `help_text.marker`; most status lines need none.

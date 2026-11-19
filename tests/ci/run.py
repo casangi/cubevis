@@ -66,7 +66,8 @@ def argv_of(entry: dict, tmp: str) -> list:
 
 def run_one(entry: dict, tmp: str) -> tuple:
     """``(status, seconds, note)``; status PASS, FAIL or TIMEOUT."""
-    env = dict(os.environ, **{k: str(v) for k, v in entry.get("env", {}).items()})
+    env = dict(os.environ, **{k: str(v).format(tmp=tmp, python=sys.executable, root=ROOT)
+                              for k, v in entry.get("env", {}).items()})
     env.setdefault("PYTHONPATH", ROOT)
     t0 = time.monotonic()
     try:

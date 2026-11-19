@@ -18,7 +18,7 @@
 #   timeout     seconds (default 900)
 #   after       a suite this one needs (skipped unless that one passed)
 #
-# In "command" and "args", {tmp} is a temporary directory shared by the
+# In "command", "args" and "env", {tmp} is a temporary directory shared by the
 # suites of one run, {python} this Python, {root} the repository.
 
 [[suite]]
@@ -100,6 +100,18 @@ name = "visplot-grid"
 pytest = ["tests/manual/gridplot/test_vis_grid.py"]
 args = ["-q"]
 requires = ["xradio", "arcae", "xarray_ms"]
+
+[[suite]]
+name = "visplot-help"
+# visplot's in-window help: every documentation entry the h key opens is
+# defined in docs/source (test_help_labels: a label in the code with no
+# entry would land on the help index instead), and the key handler, the
+# help specs and the status area's warning handling (test_help_text; its
+# JavaScript tests need node, which GitHub's runners have)
+pytest = ["tests/manual/visplot/test_help_labels.py",
+          "tests/manual/visplot/test_help_text.py"]
+args = ["-q"]
+env = {CUBEVIS_SRC = "{root}/cubevis"}
 
 [[suite]]
 name = "tiny-ms"

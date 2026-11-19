@@ -1,15 +1,21 @@
-"""test_help_text.py -- status-area help that fits, with a long form.
+"""test_help_text.py -- status-area help, its ⓘ, and ? to the documentation.
 
 Pre-preview feedback (2026-11-18): several hover-help texts were far
-longer than the fixed five-line status area, and could not be read,
-since the help follows the pointer.  ``help_text`` makes every hint a
-spec, a string or ``(tracking, long_html)``; these tests hold every
-tracking text to ``TRACKING_BUDGET`` and keep the "press h for more" cue
-exactly where a long form exists.
+longer than the fixed five-line status area.  Reworked 2026-11-19: the
+long form of each help is in the documentation
+(docs/source/applications/visplot_help.md); a hint spec is a string or
+``(tracking, label)``.  What the status area shows with a label (a help,
+or a message carrying a marker) gets a ⓘ, and **?** opens
+``<docs>/help/<label>.html`` for the first such thing displayed (**h**
+did too until it was removed, 2026-11-19).  A help without a label must
+fit the area (``TRACKING_BUDGET``).  That every label exists in the documentation is
+test_help_labels.py's.
 
-The key handler and the help page run under ``node`` against plain-object
-stand-ins (the convention of test_iteration_step.py); the live behavior
-was checked in headless Chrome (Bokeh 3.10).
+The key handler runs under ``node`` against plain-object stand-ins (the
+convention of test_iteration_step.py); the live behavior was checked in
+headless Chrome (Bokeh 3.10) against a local documentation build:
+Outlier from neighbors -> visplot_help.html#vp-flagf-outlier, the Scan
+warning -> #vp-scan; the ⓘ on help and on marked messages.
 
 Run:  python -m pytest test_help_text.py -q
 """
@@ -28,20 +34,26 @@ ensure_cubevis_importable()
 
 from cubevis.toolbox.visplot import help_text as ht            # noqa: E402
 from cubevis.toolbox.visplot import visibility_plotter as vp   # noqa: E402
-from cubevis.toolbox.visplot.flag_controls import FlagController  # noqa: E402
+from cubevis.toolbox.visplot.flag_controls import FlagController, DOCUMENTED_FILTERS  # noqa: E402
 from cubevis.toolbox.visplot.flag_filters import FilterRegistry  # noqa: E402
 
 NODE = shutil.which("node")
 needs_node = pytest.mark.skipif(NODE is None, reason="node not on PATH")
 
 
+def _fake_flags():
+    return SimpleNamespace(registry=FilterRegistry(None),
+                           capabilities=lambda: {"write": True, "casa": True})
+
+
 def _all_specs() -> dict:
     """Every hint spec reachable without building a plotter: the fixed
-    ones, the preset buttons' and the flag filters'."""
+    ones, the preset buttons', the flag filters' and the export group's."""
     specs = {f"static:{k}": v for k, v in vp._STATIC_HINTS.items()}
     specs.update({f"preset:{name}": text for name, _l, _w, text in vp._PRESET_BUTTONS})
-    fake = SimpleNamespace(registry=FilterRegistry(None))
+    fake = _fake_flags()
     specs.update({f"filter:{k}": v for k, v in FlagController.filter_hints(fake).items()})
+    specs["flag:export"] = FlagController.export_hint(fake)
     return specs
 
 
@@ -49,50 +61,62 @@ SPECS = _all_specs()
 
 
 @pytest.mark.parametrize("name", sorted(SPECS))
-def test_tracking_text_fits(name):
-    tracking, _long = ht.split_spec(SPECS[name])
+def test_unlabelled_text_fits(name):
+    """Without a documentation entry there is nowhere to read the rest."""
+    tracking, label = ht.split_spec(SPECS[name])
+    if label:
+        assert label.startswith(ht.LABEL_PREFIX), name
+        return
     n = len(ht.visible_text(tracking))
     assert n <= ht.TRACKING_BUDGET, f"{name}: {n} characters"
 
 
 @pytest.mark.parametrize("name", sorted(SPECS))
-def test_cue_exactly_where_a_long_form_exists(name):
-    tracking, long_html = ht.split_spec(SPECS[name])
-    has_cue = tracking.endswith(ht.MORE_CUE)
-    assert has_cue == bool(long_html), name
-    if long_html:
-        assert ht.MORE_CUE not in long_html
+def test_no_cue_written_into_the_text(name):
+    """The cue is drawn in the browser where the text is cut off."""
+    tracking, _label = ht.split_spec(SPECS[name])
+    assert "press <b>h</b>" not in tracking and "for more" not in tracking, name
 
 
-def test_the_reported_ones_now_have_long_forms():
+def test_the_long_ones_have_entries():
     for name in ("static:flag_reach", "static:bcombine", "static:s_avg", "static:r_axes",
-                 "preset:antmatrix", "filter:flagf_outlier"):
+                 "preset:antmatrix", "filter:flagf_outlier", "flag:export"):
         assert ht.split_spec(SPECS[name])[1], name
 
 
-def test_long_forms_keep_the_full_text():
-    """Nothing was lost by shortening: the long form holds every point
-    the old single text had (spot-checked on the longest)."""
-    _t, long_html = ht.split_spec(SPECS["static:flag_reach"])
-    for phrase in ("refused if they do not share exactly one", "Whole scan",
-                   "Esc</b> before letting go"):
-        assert phrase in long_html
-    _t, long_html = ht.split_spec(SPECS["static:bcombine"])
-    assert "find and flag those" in long_html and "Offered only with Vector averaging" in long_html
+def test_every_builtin_filter_has_an_entry():
+    reg = FilterRegistry(None)
+    assert set(reg.gui_names()) == set(DOCUMENTED_FILTERS)
+    for n in reg.gui_names():
+        assert ht.split_spec(SPECS[f"filter:flagf_{n}"])[1] == "vp-flagf-" + n.replace("_", "-")
 
 
-def test_points_html_and_title():
-    assert ht.points_html("<b>A</b> — lead  | one  | two") == \
-        "<p><b>A</b> — lead</p><ul><li>one</li><li>two</li></ul>"
-    assert ht.points_html("only") == "<p>only</p>"
-    assert ht.title_of("<b>Flag reaches</b> — x", "fallback") == "Flag reaches"
-    assert ht.title_of("plain", "fallback") == "fallback"
+def test_markers_and_selection_labels():
+    m = ht.marker("vp-scan")
+    assert ht.visible_text(m) == "" and ht.label_in("text" + m) == "vp-scan"
+    assert ht.label_in("plain") is None and ht.marker(None) == ""
+    assert ht.label_in(ht.with_selection_label("\u26a0 Scan: '2-15' bad")) == "vp-scan"
+    assert ht.label_in(ht.with_selection_label("\u26a0 Time range: x")) == "vp-time"
+    assert ht.label_in(ht.with_selection_label("UV range: x")) == "vp-uvrange"
+    assert ht.with_selection_label("\u26a0 Field: x") == "\u26a0 Field: x"
+
+
+def test_urls(monkeypatch):
+    assert ht.help_url("vp-scan", "https://x/v1.2/") == "https://x/v1.2/help/vp-scan.html"
+    assert ht.help_url(None, "https://x/") == "https://x/help/index.html"
+    monkeypatch.setenv("CUBEVIS_DOCS_URL", "file:///tmp/site")
+    assert ht.docs_base() == "file:///tmp/site/"
+    monkeypatch.delenv("CUBEVIS_DOCS_URL")
+    from cubevis import _docs
+    monkeypatch.setattr(_docs, "_version", lambda: "1.2.3")
+    assert ht.docs_base() == _docs.SITE + "v1.2/"
+    monkeypatch.setattr(_docs, "_version", lambda: "1.2.4.dev3+gabc")
+    assert ht.docs_base() == _docs.SITE
 
 
 def test_no_british_spelling_in_filter_help():
     for k, spec in SPECS.items():
-        for part in ht.split_spec(spec):
-            assert "neighbour" not in (part or ""), k
+        assert "neighbour" not in ht.split_spec(spec)[0], k
 
 
 # --------------------------------------------------------------------------
@@ -102,18 +126,19 @@ def test_no_british_spelling_in_filter_help():
 _HARNESS = r"""
 const listeners = [];
 const opened = [];
-const window = {open: (url, name) => { const w = {name, html: '', document: {
-    open() {}, write(h) { w.html += h; }, close() {}, getElementById() { return {scrollIntoView() {}}; }},
-    focus() {}}; opened.push(w); return w; }};
+const window = {open: (url, name) => { opened.push({url, name}); return {focus() {}}; }};
 const document = {addEventListener: (t, f) => listeners.push([t, f])};
 function key(k, path, extra) {
     let prevented = false;
     const e = Object.assign({key: k, ctrlKey: false, metaKey: false, altKey: false, repeat: false,
-        defaultPrevented: false, composedPath: () => path, preventDefault: () => { prevented = true; }}, extra || {});
+        defaultPrevented: false, composedPath: () => path, preventDefault: () => { prevented = true; },
+        stopPropagation() {}, stopImmediatePropagation() {}}, extra || {});
     for (const [t, f] of listeners) if (t === 'keydown') f(e);
     return prevented;
 }
-const div = (visible) => ({visible});
+const hint = (visible, label, text) => ({visible, text: text || '', tags: label ? [{cv_help: label}] : []});
+const rowdiv = (text) => ({visible: true, text: text || '', tags: [{cv_status_row: true}]});
+const status_row = {visible: true};
 """
 
 
@@ -124,76 +149,184 @@ def _node(script: str):
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
-def _install(entries_js: str, light: bool = False) -> str:
-    return (f"const entries = {entries_js}; const theme_btn = {{active: {str(light).lower()}}};\n"
-            f"new Function('window', 'document', 'entries', 'theme_btn', 'console', "
-            f"{json.dumps(ht.KEY_HANDLER_JS)})(window, document, entries, theme_btn, console);\n")
+def _install(sources_js: str) -> str:
+    return (f"const sources = {sources_js}; const base = 'https://d/v1.1/';\n"
+            f"new Function('window', 'document', 'sources', 'status_row', 'base', 'console', "
+            f"{json.dumps(ht.KEY_HANDLER_JS)})(window, document, sources, status_row, base, console);\n")
 
 
 @needs_node
 class TestHelpKey:
-    ENTRIES = ("[{id: 'help-a', title: 'A', long: '<p>long A</p>', div: div(false)},"
-               " {id: 'help-b', title: 'B', long: '<p>long B</p>', div: div(true)}]")
+    SOURCES = "[hint(false, 'vp-a'), hint(true, 'vp-b'), rowdiv(''), rowdiv('status')]"
 
-    def test_h_opens_the_showing_entry_first(self):
-        r = _node(_install(self.ENTRIES) + """
-const p = key('h', [{tagName: 'DIV'}, {tagName: 'BODY'}]);
-const w = opened[0];
-console.log(JSON.stringify({p, n: opened.length, name: w.name,
-   bFirst: w.html.indexOf("id='help-b'") < w.html.indexOf("id='help-a'"),
-   cur: w.html.indexOf("id='help-b' class='cur'") >= 0}));
-""")
-        assert r == {"p": True, "n": 1, "name": "visplot-help", "bFirst": True, "cur": True}
+    def test_question_mark_opens_the_entry_of_the_help_showing(self):
+        r = _node(_install(self.SOURCES) + """
+const p = key('?', [{tagName: 'DIV'}, {tagName: 'BODY'}]);
+console.log(JSON.stringify({p, opened}));""")
+        assert r == {"p": True, "opened": [{"url": "https://d/v1.1/help/vp-b.html",
+                                            "name": "visplot-help"}]}
 
-    def test_question_mark_too(self):
-        r = _node(_install(self.ENTRIES) + "key('?', [{tagName: 'DIV'}]); console.log(JSON.stringify(opened.length));")
-        assert r == 1
+    def test_letters_do_not_open_help(self):
+        # h worked too for a day; removed rather than left undocumented,
+        # which keeps every letter free (vi-style h/j/k/l, I/J/K/L).
+        r = _node(_install(self.SOURCES) + """
+let stopped = 0;
+for (const k of ['h', 'H', 'i']) key(k, [{tagName: 'DIV'}], {stopPropagation: () => stopped++});
+console.log(JSON.stringify([opened.length, stopped]));""")
+        assert r == [0, 0]
+
+    def test_a_help_without_entry_passes_to_the_marked_warning(self):
+        # The help showing has no entry (no ⓘ) and the warning above it
+        # has one (a ⓘ): ? opens the warning's, the one thing marked.
+        r = _node(_install("[hint(true, null), rowdiv('w<span data-cv-help=\"vp-scan\"></span>')]") + """
+const p = key('?', [{tagName: 'DIV'}]); console.log(JSON.stringify({p, o: opened.map(o => o.url)}));""")
+        assert r == {"p": True, "o": ["https://d/v1.1/help/vp-scan.html"]}
+
+    def test_the_help_showing_wins_over_the_warning(self):
+        r = _node(_install("[hint(true, 'vp-a'), rowdiv('w<span data-cv-help=\"vp-scan\"></span>')]") + """
+key('?', [{tagName: 'DIV'}]); console.log(JSON.stringify(opened.map(o => o.url)));""")
+        assert r == ["https://d/v1.1/help/vp-a.html"]
+
+    def test_a_handled_key_goes_no_further(self):
+        # Jupyter (which has its own keyboard shortcuts) must not see
+        # it; an unhandled key it must.
+        r = _node(_install(self.SOURCES) + """
+let stopped = 0;
+const ex = {stopPropagation: () => stopped++, stopImmediatePropagation: () => stopped++};
+key('?', [{tagName: 'DIV'}], ex);
+const before = stopped;
+sources[1].visible = false;
+key('?', [{tagName: 'DIV'}], ex);
+console.log(JSON.stringify([before, stopped, window.__cvHelpBase]));""")
+        assert r == [2, 2, "https://d/v1.1/"]
+
+    def test_marked_warning_when_no_help_shows(self):
+        r = _node(_install("[hint(false, 'vp-a'), rowdiv('\u26a0 Scan: x<span data-cv-help=\"vp-scan\"></span>'), rowdiv('s')]") + """
+key('?', [{tagName: 'DIV'}]); console.log(JSON.stringify(opened.map(o => o.url)));""")
+        assert r == ["https://d/v1.1/help/vp-scan.html"]
+
+    def test_status_row_hidden_is_not_displayed(self):
+        r = _node(_install("[hint(false, 'vp-a'), rowdiv('w<span data-cv-help=\"vp-scan\"></span>')]") + """
+status_row.visible = false; key('?', [{tagName: 'DIV'}]); console.log(JSON.stringify(opened.length));""")
+        assert r == 0
+
+    def test_nothing_labelled_does_nothing(self):
+        r = _node(_install("[hint(false, 'vp-a'), rowdiv(''), rowdiv('Field: all')]") + """
+const p = key('?', [{tagName: 'DIV'}]); console.log(JSON.stringify({p, n: opened.length}));""")
+        assert r == {"p": False, "n": 0}
 
     def test_typing_in_a_field_inside_shadow_dom_does_not_open(self):
-        r = _node(_install(self.ENTRIES) + """
-key('h', [{tagName: 'INPUT'}, {tagName: 'DIV'}, {tagName: 'FIELDSET'}]);
-key('h', [{tagName: 'SELECT'}, {tagName: 'DIV'}]);
-key('h', [{tagName: 'DIV', isContentEditable: true}]);
+        r = _node(_install(self.SOURCES) + """
+key('?', [{tagName: 'INPUT'}, {tagName: 'DIV'}, {tagName: 'FIELDSET'}]);
+key('?', [{tagName: 'SELECT'}, {tagName: 'DIV'}]);
+key('?', [{tagName: 'DIV', isContentEditable: true}]);
 console.log(JSON.stringify(opened.length));""")
         assert r == 0
 
     def test_modifiers_and_other_keys_ignored(self):
-        r = _node(_install(self.ENTRIES) + """
-key('h', [{tagName: 'DIV'}], {metaKey: true});
-key('h', [{tagName: 'DIV'}], {ctrlKey: true});
-key('j', [{tagName: 'DIV'}]);
+        r = _node(_install(self.SOURCES) + """
+key('?', [{tagName: 'DIV'}], {metaKey: true});
+key('?', [{tagName: 'DIV'}], {ctrlKey: true});
+key('/', [{tagName: 'DIV'}]);
 console.log(JSON.stringify(opened.length));""")
         assert r == 0
 
-    def test_nothing_showing_or_no_long_form_does_nothing(self):
-        r = _node(_install("[{id: 'help-a', title: 'A', long: 'x', div: div(false)}]") + """
-const p = key('h', [{tagName: 'DIV'}]); console.log(JSON.stringify({p, n: opened.length}));""")
-        assert r == {"p": False, "n": 0}
 
-    def test_light_theme_page(self):
-        r = _node(_install(self.ENTRIES, light=True) + """
-key('h', [{tagName: 'DIV'}]); console.log(JSON.stringify(opened[0].html.indexOf('#f8fafc') >= 0));""")
-        assert r is True
+@needs_node
+def test_help_button_opens_the_index():
+    r = _node("""
+const base = 'https://d/';
+new Function('window', 'base', 'console', %s)(window, base, console);
+console.log(JSON.stringify(opened));
+""" % json.dumps(ht.HELP_BUTTON_JS))
+    assert r == [{"url": "https://d/help/index.html", "name": "visplot-help"}]
 
 
 @needs_node
-def test_help_button_opens_index_without_anchor():
-    r = _node("""
-const entries = [{id: 'help-a', title: 'A', long: '<p>long A</p>', div: div(false)}];
-const theme_btn = {active: false};
-new Function('window', 'entries', 'theme_btn', 'console', %s)(window, entries, theme_btn, console);
-console.log(JSON.stringify({n: opened.length, cur: opened[0].html.indexOf("class='cur'") >= 0,
-  toc: opened[0].html.indexOf("<a href='#help-a'>A</a>") >= 0}));
-""" % json.dumps(ht.HELP_BUTTON_JS))
-    assert r == {"n": 1, "cur": False, "toc": True}
+def test_cue_js_is_safe_without_bokeh():
+    r = _node("new Function('window', %s)(window); window.__cvHelpCue({visible: true, tags: []});"
+              "console.log(JSON.stringify(typeof window.__cvHelpCue));" % json.dumps(ht.CUE_JS))
+    assert r == "function"
+
+
+_CUE_HARNESS = r"""
+const el = (tag) => ({tag, children: [], style: {}, className: '', textContent: '', title: '',
+    listeners: {}, appendChild(c) { this.children.push(c); c.parent = this; return c; },
+    addEventListener(t, f) { this.listeners[t] = f; }, remove() {
+        const p = this.parent; if (p) p.children = p.children.filter(x => x !== this); },
+    querySelectorAll(sel) { const out = []; const walk = (n) => { for (const c of n.children) {
+        if (c.className === 'cv-info') out.push(c); walk(c); } }; walk(this); return out; }});
+const cueDocument = {createElement: el};
+const requestAnimationFrame = (f) => f();
+const getComputedStyle = () => ({backgroundColor: '#000'});
+function viewOf(div) {
+    // As in Bokeh: the markup element is inside the shadow root.
+    const v = {model: div, el: {scrollHeight: 50, clientHeight: 96}, shadow_el: el('shadow'),
+               markup_el: el('markup'), _child_views: new Map()};
+    v.shadow_el.appendChild(v.markup_el);
+    return v;
+}
+"""
+
+
+def _cue(script: str):
+    return _node(_CUE_HARNESS + "const Bokeh = {index: {}};\n"
+                 + "new Function('window', 'Bokeh', 'document', 'requestAnimationFrame', "
+                 + "'getComputedStyle', 'console', %s)(window, Bokeh, cueDocument, "
+                   "requestAnimationFrame, getComputedStyle, console);\n" % json.dumps(ht.CUE_JS)
+                 + script)
+
+
+@needs_node
+class TestInfoMark:
+    def test_help_with_entry_gets_a_corner_mark_even_when_it_fits(self):
+        r = _cue("""
+const d = {visible: true, tags: [{cv_help: 'vp-a'}], text: 'short'};
+const v = viewOf(d); Bokeh.index.x = {model_view: v};
+window.__cvHelpCue(d);
+const box = v.shadow_el.children[1];
+console.log(JSON.stringify([v.shadow_el.children.length, box.style.position, box.children[0].textContent,
+                            v.markup_el.children.length]));""")
+        assert r == [2, "sticky", "\u24d8", 0]
+
+    def test_message_with_marker_gets_an_inline_mark_that_opens_it(self):
+        r = _cue("""
+const got = [];
+window.__cvHelpBase = 'https://d/'; window.__cvOpenHelp = (b, l) => got.push(b + l);
+const d = {visible: true, tags: [{cv_status_row: true}], text: '\u26a0 x<span data-cv-help="vp-scan"></span>'};
+const v = viewOf(d); Bokeh.index.x = {model_view: v};
+window.__cvHelpCue(d);
+const m = v.markup_el.children[0];
+m.listeners.click({stopPropagation() {}});
+console.log(JSON.stringify([m.textContent, got]));""")
+        assert r == ["\u24d8", ["https://d/vp-scan"]]
+
+    def test_no_entry_no_mark_and_a_stale_one_goes(self):
+        r = _cue("""
+const d = {visible: true, tags: [{cv_status_row: true}], text: 'x<span data-cv-help="vp-scan"></span>'};
+const v = viewOf(d); Bokeh.index.x = {model_view: v};
+window.__cvHelpCue(d);
+const n1 = v.markup_el.children.length;
+d.text = 'Plotted 3 panels';
+window.__cvHelpCue(d);
+const h = {visible: true, tags: [], text: 'plain help'};
+const hv = viewOf(h); Bokeh.index.y = {model_view: hv};
+window.__cvHelpCue(h);
+console.log(JSON.stringify([n1, v.markup_el.children.length, hv.shadow_el.children.length]));""")
+        assert r == [1, 0, 1]   # the plain help: its markup only
 
 
 def test_wiring_in_plotter():
     import inspect
     src = inspect.getsource(vp)
-    assert "tags=_helptext.long_tag(long_html)" in src
+    assert "tags=_helptext.help_tag(label)" in src
     assert 'self._hover(self._help_button(dark_btn), "tb_help")' in src
     assert "_helptext.KEY_HANDLER_JS" in src
+    assert "window.__cvHelpCue(hint)" in vp._SHOW_HINT_JS
+    assert "window.__cvHelpCue(_shown)" in vp._NOTIFY_CHANGED_JS
+    assert "window.__cvHelpCue(notify_div)" in vp._HIDE_HINT_JS
+    assert "__cvHelpCue(cb_obj)" in vp._STATUS_TEXT_CUE_JS
+    assert "d.js_on_change(\"text\", CustomJS(code=_STATUS_TEXT_CUE_JS))" in src
 
 
 # --------------------------------------------------------------------------
@@ -203,6 +336,7 @@ def test_wiring_in_plotter():
 def _run_status(script: str):
     js = {k: getattr(vp, k) for k in ("_SHOW_HINT_JS", "_HIDE_HINT_JS", "_NOTIFY_CHANGED_JS")}
     code = f"""
+const window = {{}};
 const M = (o) => Object.assign({{visible: true, styles: {{}}, text: ''}}, o);
 const hint = M({{visible: false}}), other = M({{visible: true}});
 const all_hints = [hint, other];
@@ -303,7 +437,7 @@ console.log(JSON.stringify([btn.blurred, chk.blurred]));""")
     def test_escape_leaves_the_field(self):
         r = _run_leave(self.SETUP + """
 fire('keydown', [input, host], {key: 'Escape'});
-fire('keydown', [input, host], {key: 'h'});
+fire('keydown', [input, host], {key: '?'});
 console.log(JSON.stringify(input.blurred));""")
         assert r == 1
 

@@ -13,7 +13,7 @@
 <path d="M470 359 V381" stroke="#8A94A0" stroke-width="3"/><path d="M463 379 L470 389 L477 379 Z" fill="#8A94A0"/>
 <rect x="70" y="389" width="800" height="62" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
 <text x="470.0" y="417.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Image building</text>
-<text x="470.0" y="439.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">scatter: Datashader bins points · raster: cells drawn to pixels · both: Datashader colours</text>
+<text x="470.0" y="439.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">scatter: Datashader bins points · raster: cells drawn to pixels · both: Datashader colors</text>
 <path d="M470 451 V473" stroke="#8A94A0" stroke-width="3"/><path d="M463 471 L470 481 L477 471 Z" fill="#8A94A0"/>
 <rect x="70" y="481" width="800" height="62" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
 <text x="470.0" y="509.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">XArrayReader</text>

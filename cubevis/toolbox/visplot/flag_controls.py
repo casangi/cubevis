@@ -17,15 +17,15 @@ Display of pending flags (user selectable, ``flag_display=``)
 ------------------------------------------------------------
 ``"hide"`` (default)
     Pending flags are applied like on-disk flags: flagged points disappear,
-    and every statistic (colour scaling, Z-Score reference, Flag fraction)
+    and every statistic (color scaling, Z-Score reference, Flag fraction)
     is recomputed without them -- the AIPS flag-then-look-again loop.
 ``"color"``
     The data are drawn from the on-disk flags only and the samples whose
     state the pending flags change are painted on top in a user-selected
-    colour (``flag_color=``).
+    color (``flag_color=``).
 
 While a proposal is under review (preview on) the samples it would change
-are painted in the proposal colour (orange) in either mode.
+are painted in the proposal color (orange) in either mode.
 
 The data backend is told which view a query wants through
 ``SelectionSpec.flag_view`` (``"effective"``, ``"disk"``, ``"pending"``,
@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import html
+from . import help_text
 import logging
 import os
 import time
@@ -161,7 +162,7 @@ class FlagController:
     display :
         ``"hide"`` or ``"color"`` -- see the module docstring.
     color :
-        Colour for pending flags in ``"color"`` mode.
+        Color for pending flags in ``"color"`` mode.
     """
 
     def __init__(self, plotter, *, filters: Optional[Mapping[str, Any]] = None,
@@ -230,7 +231,7 @@ class FlagController:
         """``[(flag_view, rgba), ...]`` panels composite over their image."""
         out = []
         if self.show_flagged:
-            # First, so pending / proposal colours are drawn on top of it.
+            # First, so pending / proposal colors are drawn on top of it.
             out.append(("flagged", _hex_to_rgba(self.flagged_color, 0.8)))
         if self.display == "color" and len(self.db):
             out.append(("pending", _hex_to_rgba(self.color)))
@@ -242,7 +243,7 @@ class FlagController:
         """Send the pending state to the backend, re-stamp every panel's
         selection and mark every panel stale (re-queried on next render).
 
-        ``data_changed=False``: only the overlays changed (display colour,
+        ``data_changed=False``: only the overlays changed (display color,
         "Show flagged data", a display switch with nothing pending) -- the
         drawn data are the same, so panels only refresh their overlays."""
         if not data_changed:
@@ -1238,10 +1239,10 @@ class FlagController:
             row("Samples (as proposed)", f"{total:,}"),
             row("Undo / redo available", f"{'yes' if self.db.can_undo() else 'no'} / "
                                          f"{'yes' if self.db.can_redo() else 'no'}"),
-            row("Display", esc(self.display) + (f" (colour {esc(self.color)})"
+            row("Display", esc(self.display) + (f" (color {esc(self.color)})"
                                                if self.display == "color" else "")),
             row("Preview", "on" if self.preview else "off"),
-            row("Show flagged data", ("on (colour " + esc(self.flagged_color) + ")")
+            row("Show flagged data", ("on (color " + esc(self.flagged_color) + ")")
                 if self.show_flagged else "off"),
             row("Current filter", esc(f.label) + (" " + esc(str(self.filter_params.get(f.name)))
                                                   if self.filter_params.get(f.name) else "")),
@@ -1402,11 +1403,11 @@ class FlagController:
                              reach_spw=reach_spw, reach_scan=reach_scan,
                              reach_field=reach_field, reach_note=reach_note,
                              reason=reason_in, preview=preview_cb, filter=filt_sel)
-        display = RadioButtonGroup(labels=["Hide flagged", "Show in colour"],
+        display = RadioButtonGroup(labels=["Hide flagged", "Show in color"],
                                    active=DISPLAY_MODES.index(self.display), width=width)
-        color = ColorPicker(title="Pending colour", color=self.color, width=width)
+        color = ColorPicker(title="Pending color", color=self.color, width=width)
         show_flagged = Checkbox(label="Show flagged data (to unflag)", active=self.show_flagged)
-        flagged_color = ColorPicker(title="Flagged colour", color=self.flagged_color, width=width)
+        flagged_color = ColorPicker(title="Flagged color", color=self.flagged_color, width=width)
         # mid-grey: readable on both the dark and the light sidebar
         info = Div(text=self.info_text(), width=width,
                    styles={"font-size": "11px", "color": "#8c8fa1"})
@@ -1494,7 +1495,9 @@ class FlagController:
         return column(*kids, width=width)
 
     def filter_hints(self) -> dict:
-        """Status-area help per filter: ``{"flagf_<name>": html}``.
+        """Status-area help per filter: ``{"flagf_<name>": spec}``, a spec
+        as in ``help_text`` (an HTML string, or ``(tracking, long_html)``
+        for a text longer than the status area holds).
 
         What the filter picks out of a box and what each of its
         parameters does (the text that used to be tooltips).
@@ -1507,11 +1510,20 @@ class FlagController:
             for spec in f.params:
                 if spec.gui and spec.help:
                     pts.append(f"<b>{esc(spec.label or spec.name)}</b>: {esc(spec.help)}")
-            out[f"flagf_{n}"] = "  | ".join(pts)
+            full = "  | ".join(pts)
+            # Too long for the five-line status area (help_text.py,
+            # 2026-11-18): the filter's name and description there, with
+            # the cue; everything, parameters included, in the long form.
+            if len(help_text.visible_text(full)) > help_text.TRACKING_BUDGET:
+                out[f"flagf_{n}"] = (pts[0] + help_text.MORE_CUE,
+                                     help_text.points_html(full))
+            else:
+                out[f"flagf_{n}"] = full
         return out
 
     def export_hint(self) -> str:
-        """Status-area help for the Export / commit group."""
+        """Status-area help for the Export / commit group: a help spec
+        (``help_text``), long-form when it does not fit."""
         caps = self.capabilities()
         pts = ["<b>Export / commit</b> \u2014 what to do with the pending flags; nothing "
                "is written until <b>Go</b>",
@@ -1528,7 +1540,12 @@ class FlagController:
                    "directory or next to the data are listed, this data's first")
         pts.append("<b>File</b>: where to write, or what to load or restore; empty takes a "
                    "name made from the data name and the time")
-        return "  | ".join(pts)
+        full = "  | ".join(pts)
+        # Longer than the status area holds (help_text.py): the first point
+        # there, everything in the long form.
+        if len(help_text.visible_text(full)) > help_text.TRACKING_BUDGET:
+            return (pts[0] + help_text.MORE_CUE, help_text.points_html(full))
+        return full
 
     def themed_widgets(self) -> list:
         """Widgets the Light/Dark toggle must restyle (``stylesheets[0]``)."""
@@ -1541,7 +1558,7 @@ class FlagController:
         div = Div(text="", sizing_mode="stretch_width")
         acc = Button(label="Accept", button_type="success", width=110)
         rej = Button(label="Reject", button_type="danger", width=110)
-        # Readable in both themes: page colours via the info-strip CSS
+        # Readable in both themes: page colors via the info-strip CSS
         # variables (set by the Light/Dark toggle), full-strength text, a
         # solid accent border (2026-09-30: grey-on-grey was hard to read).
         div.styles = {"color": "var(--cv-info-fg, #cdd6f4)", "font-size": "13px"}
@@ -1580,7 +1597,7 @@ def scatter_layer_entries(panel) -> list:
     Shared by the FlagTool (``FlagController.build_request``) and the
     InfoTool box probe so both address exactly the same samples: hidden
     layers (alpha 0) are skipped and categories hidden by a categorical
-    colouring are excluded.
+    coloring are excluded.
     """
     layers = []
     for lyr in getattr(panel, "_layers", ()):

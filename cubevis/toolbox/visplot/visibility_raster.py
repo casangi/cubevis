@@ -44,23 +44,25 @@ from bokeh.models import ColumnDataSource
 
 import dataclasses
 from .visibility_plot import _composite_flag_mask
+from .visibility_plot import _CV_SET_BUSY_JS
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
 )
-from .panel_spec import ColorBand, PanelSpec
-from . import colormap_scaling as _cms
+from ..gridplot.panel_spec import ColorBand, PanelSpec
+from ..gridplot import colormap_scaling as _cms
+from . import colormap_sync as _csync
 from .data.reader import (
     CHANNEL_AXIS_ATTR, CHANNEL_REF_ATTR,
     _agg_value, _cell_bounds, channel_range_to_freq,
 )
-from . import raster_grid as _rg
-from .raster_grid import BaselineAxis, normalize_baseline_order
+from ..gridplot import raster_grid as _rg
+from ..gridplot.raster_grid import BaselineAxis, normalize_baseline_order
 from .axes import Axis
 from .data._antenna_matrix import ANTENNA_DIMS as _ANT_DIM_MAP
 
 #: Raster dimensions of the antenna x antenna matrix (HRS H7).
 _ANT_DIMS = tuple(_ANT_DIM_MAP.values())
-from . import palettes as _palettes
+from ..gridplot import palettes as _palettes
 from .selection import normalize_averaging, normalize_baseline_combine
 from .data._raster_average import combines_baselines
 from .data._raster_diff import DIFF_QUANTITIES, describe_diff_window
@@ -176,8 +178,8 @@ class _Detail:
     ``VisibilityRaster._agg`` always holds the aggregate of the whole
     selection.  When that had to be decimated and the user zooms in past
     its resolution, the zoomed region is queried again and kept here.
-    The full aggregate is never replaced, so zooming back out, colour
-    scaling, the colour bar, the axis ranges and the time origin all go
+    The full aggregate is never replaced, so zooming back out, color
+    scaling, the color bar, the axis ranges and the time origin all go
     on working from the whole selection.  See ``_ensure_detail``.
     """
     agg:          object            # DataArray, in the full raster's coordinates
@@ -1029,6 +1031,18 @@ class VisibilityRaster(VisibilityPlot):
         counts, edges = np.histogram(finite, bins=bins)
         return counts, edges
 
+    def colormap_state(self) -> dict:
+        """What the color-scaling controls should show now: this
+        raster's histogram and scaling settings (``colormap_sync``).
+        Sent with every Plot response and live scaling reply, so the
+        controls follow the picture rather than what was drawn when the
+        sidebar was built."""
+        counts, edges = self.histogram()
+        return _csync.colormap_state(
+            counts, edges, scaling=self._scaling,
+            alpha=self._scaling_alpha, gamma=self._scaling_gamma,
+            vmin=self._scaling_vmin, vmax=self._scaling_vmax)
+
     def colormap_controls(self):
         """Return a Bokeh widget column for scaling / range controls.
 
@@ -1243,6 +1257,13 @@ class VisibilityRaster(VisibilityPlot):
         # rendered.
         reset_button_col = column(Spacer(height=19), reset_button)
 
+        # Threshold uses only the lower cutoff (2026-11-18): one line
+        # and one field, titled "cutoff" -- see colormap_sync.
+        if self._scaling == "threshold":
+            max_span.visible = False
+            max_input.visible = False
+            min_input.title = "cutoff"
+
         controls = column(
             scaling_select,
             equation,
@@ -1250,6 +1271,21 @@ class VisibilityRaster(VisibilityPlot):
             hist_fig,
             row(reset_button_col, min_input, max_input),
         )
+
+        # Sync source (colormap_sync, 2026-11-18): the Plot response and
+        # the live scaling replies write this raster's colormap_state()
+        # here, and every control above follows.
+        cmap_sync = _csync.sync_source()
+        self._cmap_sync = [cmap_sync]
+        cmap_sync.js_on_change("data", CustomJS(
+            args={"hist_source": hist_source, "min_span": min_span,
+                  "max_span": max_span, "min_input": min_input,
+                  "max_input": max_input, "scaling_select": scaling_select,
+                  "alpha_input": alpha_input, "gamma_input": gamma_input,
+                  "equation": equation,
+                  "equations": {k: _cms.scaling_equation_label(k)
+                                for k in _cms.ALL_SCALINGS}},
+            code=_csync.APPLY_JS))
 
         if self._comm is None:
             # No comm channel (e.g. static/offline construction) --
@@ -1295,21 +1331,35 @@ class VisibilityRaster(VisibilityPlot):
     } else {
         console.warn('[visplot colormap] response had no image:', resp);
     }
-"""
+""" + _csync.APPLY_REPLY_JS
 
         scaling_js = CustomJS(
             args={
                 "comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                 "equation": equation, "alpha_input": alpha_input,
                 "gamma_input": gamma_input, "equations": equations,
+                "cmap_sync": cmap_sync, "min_span": min_span,
+                "max_span": max_span, "min_input": min_input,
+                "max_input": max_input,
             },
             code=f"""
 const s = cb_obj.value;
 alpha_input.visible = (s === 'log' || s === 'power');
 gamma_input.visible = (s === 'gamma');
 equation.text = equations[s] || s;
+{_csync.THRESHOLD_JS}
+// Set by the plotter when it only shows a scaling that Plot applies
+// (a drill-down from the grid, gridplot G3), and by colormap_sync when a
+// reply only shows the display's own scaling: nothing to send.
+{_csync.QUIET_GUARD_JS}
+if (window.__cvQuietScaling) return;
 console.log('[visplot colormap] sending:', {{scaling: s}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{scaling: s}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1322,12 +1372,18 @@ comm.send('{msg_update_scaling}', {{scaling: s}}, function(resp) {{
             Non-numeric input is silently ignored (matches the old
             Python callbacks' try/except ValueError: pass behaviour)."""
             return CustomJS(
-                args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div},
+                args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
+                      "cmap_sync": cmap_sync},
                 code=f"""
 const v = parseFloat(cb_obj.value);
 if (isNaN(v)) return;
 console.log('[visplot colormap] sending:', {{{field_key}: v}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1352,7 +1408,7 @@ comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
                 args={"paired_input": paired_input},
                 code="""
 if (cb_obj.location == null || isNaN(cb_obj.location)) return;
-paired_input.value = cb_obj.location.toFixed(6);
+paired_input.value = String(parseFloat(Number(cb_obj.location).toPrecision(6)));
 """,
             )
 
@@ -1373,14 +1429,19 @@ paired_input.value = cb_obj.location.toFixed(6);
             `location` above."""
             return CustomJS(
                 args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
-                      "paired_input": paired_input},
+                      "paired_input": paired_input, "cmap_sync": cmap_sync},
                 code=f"""
 if (cb_obj.dragging) return;  // only act when the drag just ENDED
 const v = cb_obj.location;
 if (v == null || isNaN(v)) return;
-paired_input.value = v.toFixed(6);
+paired_input.value = String(parseFloat(Number(v).toPrecision(6)));
 console.log('[visplot colormap] sending (span release):', {{{field_key}: v}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1393,13 +1454,18 @@ comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
             is a standard widget event, already confirmed reachable."""
             return CustomJS(
                 args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
-                      "paired_span": paired_span},
+                      "paired_span": paired_span, "cmap_sync": cmap_sync},
                 code=f"""
 const v = parseFloat(cb_obj.value);
 if (isNaN(v)) return;
 paired_span.location = v;
 console.log('[visplot colormap] sending (field submit):', {{{field_key}: v}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1421,14 +1487,16 @@ comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
             args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                   "min_span": min_span, "max_span": max_span,
                   "min_input": min_input, "max_input": max_input,
-                  "hist_lo": hist_lo, "hist_hi": hist_hi},
+                  "hist_source": hist_source, "cmap_sync": cmap_sync},
             code=f"""
-min_span.location = hist_lo;
-max_span.location = hist_hi;
-min_input.value = hist_lo.toFixed(6);
-max_input.value = hist_hi.toFixed(6);
+{_csync.RESET_EDGES_JS}
 console.log('[visplot colormap] sending (reset):', {{reset_range: true}});
+{_CV_SET_BUSY_JS}
+// Busy until the reply lands (2026-11-18): live scaling changes
+// used to show no busy state, inviting more changes mid-flight.
+window.__cvSetBusy(true);
 comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
+window.__cvSetBusy(false);
 {_apply_image_js}
 }});
 """,
@@ -1438,7 +1506,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         return controls
 
     def _panel_spec(self) -> PanelSpec:
-        """Describe this raster: one colour band, the quantity.
+        """Describe this raster: one color band, the quantity.
 
         ``status`` is ``"empty"`` whenever ``_render()`` took its
         degenerate branch — a deferred panel, a sub-2-cell agg, an
@@ -1541,18 +1609,20 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         ``color_mode`` decides the reference exactly as in ``_shade_agg``:
         ``"global"`` anchors to ``self._agg`` (the full cached
-        aggregation) so colours stay put under zoom; ``"local"`` anchors
+        aggregation) so colors stay put under zoom; ``"local"`` anchors
         to the viewport crop.  A manual ``vmin``/``vmax`` override wins
         over both, again matching the shade.
         """
         from dataclasses import replace
-        from .colormap_scaling import ScalarMapping
+        from ..gridplot.colormap_scaling import ScalarMapping
 
         if self._agg is None or not spec.bands:
             return spec.bands
         crop = self._crop_agg(viewport) if viewport is not None else self._agg
         values = np.asarray((crop if crop is not None else self._agg).values)
-        reference = (np.asarray(self._agg.values)
+        shared = self._shared_reference
+        reference = (shared if shared is not None and shared.size
+                     else np.asarray(self._agg.values)
                      if self._color_mode == "global" else None)
         m = ScalarMapping.from_values(
             values, self._scaling,
@@ -1576,6 +1646,13 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             return None
 
     _QUERY_PATH = "raster"
+
+    _shared_reference: "Optional[np.ndarray]" = None
+    """Values this panel's colors are scaled against with others', or
+    ``None`` (its own).  Set by a grid (``VisGridSource``) whose cells
+    share a color range: the range, and for ``eq_hist`` the curve, come
+    from it -- a common scale needs common normalisation, not only a
+    common vmin/vmax.  A manual vmin/vmax still wins."""
 
     _degenerate_reason: "Optional[str]" = None
     """Why the last render produced a blank image, or ``None``.
@@ -1685,7 +1762,10 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             # change (neither touches either). Skipped under `defer`
             # since there's nothing to warm for a panel that isn't
             # even shown yet.
-            self._ensure_identity_tables(polarization=self._polarization)
+            # (Not for a grid's color sample, gridplot G3: it is never
+            # shown or probed, only its values are pooled.)
+            if not getattr(self, "_values_only", False):
+                self._ensure_identity_tables(polarization=self._polarization)
             # Elapsed-time labels count from the first cell's centre.
             self._x_origin, self._y_origin = float(x_range[0]), float(y_range[0])
             # Baselines side by side in this panel's order, then ranges
@@ -2289,7 +2369,12 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         Returns the raw Datashader ``Image`` (not yet converted to
         ``uint32``) — callers apply ``_img_to_uint32`` themselves.
         """
-        if self._color_mode == "global" and self._agg is not None:
+        shared = self._shared_reference
+        if shared is not None and shared.size:
+            # a grid's shared color range: the values of the cells
+            # colored together (finite already), whatever color_mode says
+            vmin, vmax = float(shared.min()), float(shared.max())
+        elif self._color_mode == "global" and self._agg is not None:
             finite = self._agg.values[np.isfinite(self._agg.values)]
             vmin = float(finite.min()) if finite.size else None
             vmax = float(finite.max()) if finite.size else None
@@ -2316,7 +2401,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         if self._scaling == "eq_hist":
             reference = (
-                self._agg.values
+                shared if shared is not None and shared.size
+                else self._agg.values
                 if self._color_mode == "global" and self._agg is not None
                 else None
             )
@@ -2407,7 +2493,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
     ) -> np.ndarray:
         """Draw a viewport from what is held: the detail aggregate when
         it covers the viewport and is fine enough for it, otherwise the
-        full one.  Colours are anchored to the full aggregate either
+        full one.  Colors are anchored to the full aggregate either
         way (``_shade_agg``), so they do not shift between the two."""
         x0, x1 = x_range
         y0, y1 = y_range
@@ -2602,6 +2688,10 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             "scaling_gamma": self._scaling_gamma,
             "scaling_vmin":  self._scaling_vmin,
             "scaling_vmax":  self._scaling_vmax,
+            # The controls follow from this (colormap_sync): a Reset on
+            # a Z-Score threshold, say, comes back with the automatic
+            # cutoff rather than the histogram's edge.
+            "cmap":          self.colormap_state(),
             "image":         src["image"][0],
             "x0":            src["x"][0],
             "x1":            src["x"][0] + src["dw"][0],

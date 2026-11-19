@@ -41,7 +41,7 @@ pipelines or custom tools:
 
 ``ScatterLayer``
     Dataclass specifying one scatter layer (y-axis, polarization,
-    colour map, alpha, scaling).
+    color map, alpha, scaling).
 
 ``FlagDB``
     In-memory flag accumulation layer.  ``append()`` / ``pop()`` /

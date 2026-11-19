@@ -150,7 +150,7 @@ Not done: B4 (an image of the panel in the page); the hotkey (C list).
 - PNG export: every categorical label up to 30 (antenna matrix, small
   arrays), upright when longer than 3 characters, as in the browser; the
   footer wraps between its fields (it was cut off in Over / Under);
-  colour-bar labels get as many significant digits as needed to differ
+  color-bar labels get as many significant digits as needed to differ
   (`0.001` was printed twice); the scatter legend's peak density shows
   decimals below 10 (`<=0 pts/px` for averaged points).
 - Not done from B2: the preset name in the footer (the summary page has
@@ -374,9 +374,9 @@ Decided with Darrell: every layout is a grid (One 1 x 1, Side by Side
 1 x 2, Over / Under 2 x 1, later 2 x 2), sized by rows and columns;
 `plot_width` / `plot_height` removed, no aliases (they applied only at
 startup and the first layout click reset them). A size is the plot's
-figure (plot with axes, title, toolbar), not the readout and colour bars
+figure (plot with axes, title, toolbar), not the readout and color bars
 under it. Fit is an option, not the Over / Under default: on a 1000 px
-window the two panels' readouts and colour bars take ~360 px, so a fit
+window the two panels' readouts and color bars take ~360 px, so a fit
 gives ~220 px rows; Fit has a 250 px floor and the plot area scrolls.
 
 - `panel_sizes.py`: `parse_size` (None, `"fit"`, number, list of up to
@@ -391,7 +391,7 @@ gives ~220 px rows; Fit has a 250 px floor and the plot area scrolls.
 - Browser: `_SIZES_JS` init script defines `window.__cvApplySizes`
   (heights per screen position on both kinds, widths when numeric; fit
   measured per panel block, re-fitted on window resize and every second
-  as colour bars change). Layout buttons, both preset kinds and Swap call
+  as color bars change). Layout buttons, both preset kinds and Swap call
   it (the old fixed sizes stay as the fallback). *Height* menu
   (`_row_height_sel`, toolbar beside the layout buttons): "Height:
   default", "Height: fit", 200-900 px, plus the constructor's value if not listed
@@ -420,9 +420,9 @@ layout of 2026-09). Two fixes:
 
 - **Stray overflow with default sizes.** The page was 2 px too wide (the
   toolbar's last button, its border past the window edge) and the plot
-  area 5 px (each readout / colour-bar strip had `width: 100%` plus
+  area 5 px (each readout / color-bar strip had `width: 100%` plus
   Bokeh's default 5 px margin). Strips are now `calc(100% - 10px)`
-  (keeping the 2026-09 guard against a colour bar narrower than its
+  (keeping the 2026-09 guard against a color bar narrower than its
   plot); the toolbar row has 6 px right padding. Page and plot area are
   exactly the window's width at 900, 1100, 1280 and 1400 px, in all
   three layouts.

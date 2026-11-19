@@ -536,7 +536,7 @@ def test_per_polarization_separate_canvas():
     """
     Separate Datashader canvas per polarization.
 
-    VisibilityPlotter renders each polarization as a separate colour layer.
+    VisibilityPlotter renders each polarization as a separate color layer.
     This test verifies that each polarization produces an independent valid
     uint8 image and that the images differ (different polarizations have
     different data).
@@ -600,7 +600,7 @@ def test_canvas_resolution():
 def test_count_aggregation():
     """
     ds_agg.count() aggregation — used for density/occupancy plots where
-    the colour encodes how many visibility samples fell in each pixel.
+    the color encodes how many visibility samples fell in each pixel.
     This is an alternative to mean() for some msvis display modes.
     """
     _require_datashader()

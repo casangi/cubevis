@@ -38,7 +38,7 @@ exclude already-flagged samples from its own statistics).
 
 The Flagging panel lists a curated set (``FlagFilter.gui``; 2026-10-09,
 HRS H5 slice 2): All selected, Value range (on the quantity the panel
-shows), Outlier from neighbours (running median along time or channel),
+shows), Outlier from neighbors (running median along time or channel),
 Z-Score, Amplitude outlier (MAD), Phase deviation, Grow around flags --
 each with at most two controls.  The reference population is chosen
 automatically ("auto") and is no longer a control.
@@ -54,7 +54,7 @@ Scope
     returns small statistics, then ``mask(ds, stats, **params)``.  The
     reference population is chosen by the framework so that it matches
     what the user looked at: the whole current data selection of the
-    baselines/correlations involved (as the scatter Z-Score colouring
+    baselines/correlations involved (as the scatter Z-Score coloring
     does), or per spectral window (as the raster Z-Score does).
 
 Parameters
@@ -499,7 +499,7 @@ _REFERENCE_PARAM = ParamSpec(
     choices=("auto", "selection", "spw"), gui=False,
     help="'auto': match the panel being flagged. 'selection': per baseline and "
          "correlation over the whole current data selection (as the scatter "
-         "Z-Score colouring); 'spw': per spectral window as well (as the raster "
+         "Z-Score coloring); 'spw': per spectral window as well (as the raster "
          "Z-Score).")
 
 # ---------------------------------------------------------------------- #
@@ -508,7 +508,7 @@ _REFERENCE_PARAM = ParamSpec(
 #
 # AIPS's clip, CASA's flagdata mode='clip': flag samples whose value lies
 # in a range.  It works on the quantity the panel shows, so the numbers
-# typed are the numbers on the colour bar or the axis.  Either bound may
+# typed are the numbers on the color bar or the axis.  Either bound may
 # be left empty: "Low" alone flags everything at or above it, "High"
 # alone everything at or below it.
 
@@ -737,7 +737,7 @@ VALUE_RANGE = _register_builtin(FlagFilter(
     "value_range", _value_range_mask,
     params=(ParamSpec("low", "float", None, "Low",
                       help="Flag samples at or above this value; empty for no lower "
-                           "bound. In the units of the colour bar or axis."),
+                           "bound. In the units of the color bar or axis."),
             ParamSpec("high", "float", None, "High",
                       help="Flag samples at or below this value; empty for no upper "
                            "bound. Low and High together: the samples between them."),
@@ -754,13 +754,13 @@ OUTLIER = _register_builtin(FlagFilter(
                       choices=("time", "channel"),
                       help="time: each sample against the integrations before and "
                            "after it (spikes in time, brief interference); channel: "
-                           "against the neighbouring channels (narrow-band "
+                           "against the neighboring channels (narrow-band "
                            "interference, a bad channel)."),
             ParamSpec("nsigma", "float", 5.0, "Cutoff (sigma)", min=0.0,
-                      help="How far from its neighbours a sample must be, in robust "
+                      help="How far from its neighbors a sample must be, in robust "
                            "standard deviations of the baseline's scatter about them. "
                            "Lower takes more.")),
-    label="Outlier from neighbours",
+    label="Outlier from neighbors",
     description="Amplitudes far from the running median of the "
                 f"{RUNNING_WINDOW} samples around them, per baseline and correlation, "
                 "within each scan. Finds spikes that a smooth change in gain or a "
@@ -774,13 +774,13 @@ ZSCORE = _register_builtin(FlagFilter(
                       choices=("auto", "sample", "cell"),
                       help="'sample': each sample against the cutoff. 'cell': a whole "
                            "raster cell (max over its reduced dimensions, Sidak-"
-                           "corrected cutoff) as the raster colouring shows it. "
+                           "corrected cutoff) as the raster coloring shows it. "
                            "'auto': 'cell' on a raster showing Z-Score, else 'sample'."),
             _REFERENCE_PARAM,
             ParamSpec("cell_dims", "any", ("frequency",), "Cell dimensions", gui=False)),
     label="Z-Score above cutoff",
     description="Robust per-baseline joint (real, imag) Z-Score, as the Z-Score "
-                "colouring computes it: what the Z-Score view shows bright."))
+                "coloring computes it: what the Z-Score view shows bright."))
 
 AMPLITUDE_MAD = _register_builtin(FlagFilter(
     "amplitude_mad", _mad_mask, scope="reference", prepare_fn=_mad_prepare,

@@ -87,18 +87,18 @@ class Slide:
         self.add(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" fill="{fill}" '
                  f'stroke="{stroke}" stroke-width="{sw}" {extra}/>')
 
-    def card(self, x, y, w, h, title, colour, sub=None):
-        """White card with a coloured header band, like a process box on the architecture slides."""
-        self.rect(x, y, w, h, stroke=colour, sw=2.5)
-        self.add(f'<path d="M{x} {y+44} V{y+10} a10 10 0 0 1 10 -10 H{x+w-10} a10 10 0 0 1 10 10 V{y+44} Z" fill="{colour}"/>')
+    def card(self, x, y, w, h, title, color, sub=None):
+        """White card with a colored header band, like a process box on the architecture slides."""
+        self.rect(x, y, w, h, stroke=color, sw=2.5)
+        self.add(f'<path d="M{x} {y+44} V{y+10} a10 10 0 0 1 10 -10 H{x+w-10} a10 10 0 0 1 10 10 V{y+44} Z" fill="{color}"/>')
         self.text(x + 18, y + 30, title, size=21, weight="bold", fill="white")
         if sub:
             self.text(x + w - 18, y + 30, sub, size=16, fill="white", anchor="end")
 
-    def pill(self, x, y, s, colour, size=15, anchor="start"):
+    def pill(self, x, y, s, color, size=15, anchor="start"):
         w = len(s) * size * 0.58 + 22
         x0 = x - w if anchor == "end" else x
-        self.rect(x0, y, w, size + 13, fill=colour, stroke=colour, rx=(size + 13) / 2)
+        self.rect(x0, y, w, size + 13, fill=color, stroke=color, rx=(size + 13) / 2)
         self.text(x0 + w / 2, y + size + 2, s, size=size, weight="bold", fill="white", anchor="middle")
         return w
 
@@ -257,7 +257,7 @@ notes = [
     ("Presets", "One button sets both panels and plots: vplot, radplot, waterfalls, phase RMS, Ant×Ant, Spectrum …"),
     ("Selection", "CASA syntax for field, spw, antenna, scan, timerange, uvrange; Prev / Next buttons step through fields, SPWs, antennas, baselines."),
     ("Raster", "Every sample binned into cells; scan and SPW gaps stay blank. Pan and zoom resample the cached image."),
-    ("Scatter", "Several correlations or quantities as layers; colour by axis (antenna, scan, field …) or by Z-Score."),
+    ("Scatter", "Several correlations or quantities as layers; color by axis (antenna, scan, field …) or by Z-Score."),
     ("Readout", "Names the cell or point under the cursor: value, baseline, time, scan, field."),
     ("Status", "Says what is drawn and what is not yet; the Plot button turns orange until changes are plotted."),
 ]
@@ -282,7 +282,7 @@ presets = [
     ("radplot", "Same raster · scatter Amplitude vs UV distance", "Source structure: flat for a point source, falling for a resolved one", "UVPLT", "plotms amp vs uvdist"),
     ("Waterfall", "Raster Time × Channel amplitude, one baseline · Amplitude vs Time", "Interference narrow in frequency or short in time", "SPFLG", "msview raster"),
     ("All-BL", "Raster Time × Channel, largest amplitude over all baselines · Amplitude vs Channel", "Interference common to many baselines", "FTFLG", "—"),
-    ("Z-Score", "Raster Baseline × Time coloured by Z-Score · Amplitude vs Time", "Samples unusual for their own baseline", "—", "—"),
+    ("Z-Score", "Raster Baseline × Time colored by Z-Score · Amplitude vs Time", "Samples unusual for their own baseline", "—", "—"),
     ("φrms·t", "Phase RMS: raster Baseline × Time · scatter vs Time", "Phase stability across the band, per integration", "—", "—"),
     ("φrms·ν", "Phase RMS: raster Baseline × Channel · scatter vs Channel", "Phase stability per channel; band edges", "—", "—"),
     ("φrms·uv", "Phase RMS raster · scatter vs UV distance", "Atmosphere (rises with length) or one bad antenna", "—", "—"),
@@ -386,7 +386,7 @@ down(470, 267, 297)
 layer(L, 297, R - L, 62, "VisibilityPlotter", "presets, selection, flagging (FlagDB), plot summary, PNG export",
       fill="#EEF3FA", stroke=BLUE)
 down(470, 359, 389)
-layer(L, 389, R - L, 62, "Image building", "scatter: Datashader bins points · raster: cells drawn to pixels · both: Datashader colours")
+layer(L, 389, R - L, 62, "Image building", "scatter: Datashader bins points · raster: cells drawn to pixels · both: Datashader colors")
 down(470, 451, 481)
 layer(L, 481, R - L, 62, "XArrayReader", "one interface: scatter samples, raster cells (averaged here), statistics")
 down(270, 543, 573)

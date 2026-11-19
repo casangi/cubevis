@@ -44,6 +44,7 @@ Package location
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import NamedTuple, Optional
 
@@ -70,11 +71,13 @@ try:
 except ImportError:
     HAS_SCIPY = False
 
-from .. import colormap_scaling as _cms
+from ...gridplot import colormap_scaling as _cms
 from .reader import (ScatterLayerSpec, ScatterLayerRender, ScatterLayerReference,
                      AntennaZScoreSummary,
                      COLORIZE_AXIS_COLUMNS,
                      OTHER_CATEGORY_LABEL, OTHER_CATEGORY_COLOR, OTHER_CATEGORY_ALPHA)
+
+log = logging.getLogger(__name__)
 
 # Mirrors VisibilityScatter._MIN_ALPHA -- see that module's docstring
 # for the measured rationale (Datashader's min_alpha=40 default makes a
@@ -763,6 +766,39 @@ def _compute_id_grid_impl(
     return out
 
 
+
+def _manual_span(lyr, auto_span):
+    """The value span a continuous layer is shaded over: *auto_span*
+    (the automatic global/local range, or ``None``) with the layer's
+    manual ``scaling_vmin`` / ``scaling_vmax`` put in, EACH ON ITS OWN.
+
+    Until 2026-11-18 the override applied only when both were set (or,
+    for threshold, vmin), so dragging one histogram line -- which sets
+    one bound -- re-shaded the picture exactly as before: the min/max
+    controls seemed to restrict nothing (pre-preview feedback, a sqrt
+    scatter on TW Hya).  The raster has always taken each bound on its
+    own (``VisibilityRaster._shade_agg``); this matches it.
+
+    A threshold uses only its cutoff (vmin); its upper bound is the
+    automatic one.  Bounds that cross (min dragged past max) leave the
+    automatic span rather than shading over an empty or inverted range.
+    """
+    vmin, vmax = lyr.scaling_vmin, lyr.scaling_vmax
+    if vmin is None and vmax is None:
+        return auto_span
+    lo, hi = (auto_span if auto_span is not None else (None, None))
+    if vmin is not None:
+        lo = float(vmin)
+    if vmax is not None and lyr.scaling != "threshold":
+        hi = float(vmax)
+    if lo is None:
+        return auto_span
+    if lyr.scaling == "threshold":
+        return [lo, hi if hi is not None and hi > lo else lo + 1.0]
+    if hi is None or not hi > lo:
+        return auto_span
+    return [lo, hi]
+
 def render_layer(
     df: Optional[pd.DataFrame], lyr: ScatterLayerSpec,
     x0: float, x1: float, y0: float, y1: float,
@@ -918,20 +954,8 @@ def render_layer(
             span = [float(full_color_range[0]), float(full_color_range[1])]
             eq_reference = df[agg_column].to_numpy()
 
-        if lyr.scaling_vmin is not None and lyr.scaling_vmax is not None:
-            span = [lyr.scaling_vmin, lyr.scaling_vmax]
-        elif lyr.scaling == "threshold" and lyr.scaling_vmin is not None:
-            # Part 6 (2026-09): unlike every other scaling above, whose
-            # override needs BOTH vmin and vmax set together, a
-            # threshold's cutoff needs only vmin -- it has one
-            # meaningful boundary, not a range, and its upper bound is
-            # irrelevant to its own classification (see
-            # colormap_scaling.apply_explicit_scaling's threshold
-            # branch). Keeps whichever upper bound span already
-            # computed (the local/global auto-range above) rather than
-            # requiring the caller to also supply a vmax that would
-            # never actually be used.
-            span = [lyr.scaling_vmin, span[1] if span is not None else lyr.scaling_vmin + 1.0]
+        # Manual min/max: each bound on its own (_manual_span).
+        span = _manual_span(lyr, span)
 
         cmap = list(lyr.cmap)
         if lyr.scaling in _cms.DATASHADER_HOW:
@@ -1352,7 +1376,7 @@ def _resample_interpolate(
     ``VisibilityRaster._resample_method`` exactly (see that method's
     docstring for the "why nearest" rationale: an interpolated image
     shows fabricated intermediate values a probe cannot back up, while a
-    smoothed gradient's displayed colour varies even though every probe
+    smoothed gradient's displayed color varies even though every probe
     returns the same underlying number).
     """
     x0, x1 = x_range
@@ -1488,15 +1512,13 @@ def resample_layer_reference(
     ds_agg_resampled = cvs.raster(ref.ref_agg, interpolate=interpolate)
     values = ds_agg_resampled.values
 
+    # Manual min/max, each bound on its own (_manual_span); the bound
+    # not set comes from the reference's own range, which is what
+    # Datashader's automatic span would have used.
     span = None
-    if lyr.scaling_vmin is not None and lyr.scaling_vmax is not None:
-        span = [lyr.scaling_vmin, lyr.scaling_vmax]
-    elif lyr.scaling == "threshold" and lyr.scaling_vmin is not None:
-        # Part 6 (2026-09): mirrors render_layer's identical branch
-        # above -- see that one's comment for the full rationale (a
-        # threshold's cutoff needs only vmin, unlike every other
-        # scaling's vmin+vmax-together override).
-        span = [lyr.scaling_vmin, span[1] if span is not None else lyr.scaling_vmin + 1.0]
+    if lyr.scaling_vmin is not None or lyr.scaling_vmax is not None:
+        fin = values[np.isfinite(values)]
+        span = _manual_span(lyr, [float(fin.min()), float(fin.max())] if fin.size else None)
 
     if lyr.scaling in _cms.DATASHADER_HOW:
         shade_kwargs = dict(

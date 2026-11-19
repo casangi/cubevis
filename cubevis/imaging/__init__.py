@@ -35,7 +35,11 @@ iclean_imaging_layer_design.md``).
   mask editing (``edit_mask``: one call per edit, ``_masks``), in numpy,
   over an ``ImageStore``.
 * ``ImageStore`` (protocol) -- primitive image access for one format;
-  ``CasatoolsImageStore`` for CASA images.
+  ``XarrayImageStore`` (CASA images through arcae, xradio images in Zarr;
+  no casatools) by default, ``CasatoolsImageStore`` with
+  ``CUBEVIS_IMAGE_STORE=casatools`` (``image_store``).
+* ``ImageReader`` -- an image as planes, spectra and plain values whatever
+  holds it; what ``XarrayImageStore`` is written against.
 * ``Deconvolver`` (protocol) -- the gclean surface.
 * the coordinate description (``_coordinates``): ``ImageStore.coordinates()``,
   ``from_casa_coordsys``, ``astropy_wcs``.
@@ -49,14 +53,16 @@ from ._protocols import CycleResult, Deconvolver, ImageStore, ImagingSession
 from ._protocols import ImageCube as ImageCubeProtocol
 from ._image_cube import ImageCube, quantize
 from ._casatools_store import CasatoolsImageStore
-from ._session import LocalImagingSession, resolve_deconvolver, as_imaging_session, open_image_cube
+from .reader import ImageReader, ImageInfo
+from ._xarray_store import XarrayImageStore
+from ._session import LocalImagingSession, resolve_deconvolver, as_imaging_session, open_image_cube, image_store, image_store_name
 from ._coordinates import astropy_wcs, from_casa_coordsys
 from ._masks import polygon_pixels
 from ._progress import CycleProgress, describe as describe_progress
 from ._remote_session import RemoteImagingSession, RemoteImageCube
 
 __all__ = ['CycleResult', 'Deconvolver', 'ImageStore', 'ImagingSession', 'ImageCubeProtocol',
-           'ImageCube', 'quantize', 'CasatoolsImageStore', 'LocalImagingSession',
-           'resolve_deconvolver', 'as_imaging_session', 'open_image_cube',
+           'ImageCube', 'quantize', 'CasatoolsImageStore', 'XarrayImageStore', 'ImageReader', 'ImageInfo', 'image_store', 'image_store_name',
+           'LocalImagingSession', 'resolve_deconvolver', 'as_imaging_session', 'open_image_cube',
            'astropy_wcs', 'from_casa_coordsys', 'polygon_pixels',
            'RemoteImagingSession', 'RemoteImageCube', 'CycleProgress', 'describe_progress']

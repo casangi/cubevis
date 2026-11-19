@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Write redirect pages for Read the Docs (see .readthedocs.yaml).
+
+    python docs/rtd_redirect.py OUTDIR [SITE]
+
+For every page of the documentation (each .md or .rst under docs/source
+that Sphinx builds) this writes OUTDIR/<page>.html, a page that forwards
+to SITE/<page>.html.  SITE defaults to https://casangi.github.io/cubevis.
+Pages that Read the Docs published before the documentation was
+reorganised are listed in MOVED, so their links keep working too, and
+OUTDIR/404.html (which Read the Docs serves for any other address)
+forwards to the front page.
+
+Standard library only.
+"""
+import sys
+from pathlib import Path
+
+SITE = "https://casangi.github.io/cubevis"
+SOURCE = Path(__file__).resolve().parent / "source"
+SKIP = ("_static", "_templates", "extensions", "links")
+SKIP_UNDER = ("historical/python", "historical/notebooks")
+
+# old page -> where it is now (both without .html)
+MOVED = {
+    "applications/intro": "index",
+    "applications/interactive_clean": "applications/iclean_starting",
+    "design/intro": "historical/intro",
+    "design/boundary": "historical/boundary",
+    "design/applications/interactive_clean": "historical/applications/interactive_clean",
+    "design/components/cube_mask": "historical/components/cube_mask",
+}
+
+PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>cubevis documentation has moved</title>
+<link rel="canonical" href="{url}">
+<meta http-equiv="refresh" content="0; url={url}">
+<script>location.replace("{url}" + location.hash);</script>
+</head><body>
+<p>The cubevis documentation has moved to <a href="{url}">{url}</a>.
+The casagui package that it once described is no longer developed;
+cubevis replaces it.</p>
+</body></html>
+"""
+
+
+def pages():
+    for path in sorted(SOURCE.rglob("*")):
+        rel = path.relative_to(SOURCE)
+        if (path.suffix in (".md", ".rst") and rel.parts[0] not in SKIP
+                and not rel.as_posix().startswith(SKIP_UNDER)):
+            yield rel.with_suffix("").as_posix()
+
+
+def main(argv):
+    if len(argv) < 2:
+        sys.exit(__doc__)
+    out, site = Path(argv[1]), (argv[2] if len(argv) > 2 else SITE).rstrip("/")
+    targets = {p: p for p in pages()}
+    targets.update(MOVED)
+    for page, target in sorted(targets.items()):
+        dest = out / f"{page}.html"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        url = f"{site}/" if target == "index" else f"{site}/{target}.html"
+        dest.write_text(PAGE.format(url=url), encoding="utf-8")
+    (out / "404.html").write_text(PAGE.format(url=f"{site}/"), encoding="utf-8")
+    print(f"{len(targets)} redirect pages and 404.html written to {out}")
+
+
+if __name__ == "__main__":
+    main(sys.argv)

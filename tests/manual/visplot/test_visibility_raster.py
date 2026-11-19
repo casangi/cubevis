@@ -36,7 +36,7 @@ Tests
 4. _viewport_selection time, frequency, baseline axis viewport narrowing
 5. probe (static)      _handle_probe via _data_to_pixel→_probe_raster_pixel_local
 6. rerender            programmatic re-render updates source in place
-7. Datashader          rendered agg shape, finite pixels, colourmap
+7. Datashader          rendered agg shape, finite pixels, colormap
 8. Timing              full raster pipeline < 8s end-to-end
 
 Also covered further down (added after this list was last updated):
@@ -946,7 +946,7 @@ class TestDatashadedOutput:
         The fact the whole export path rests on -- matplotlib's imshow
         takes ``img32.view(np.uint8).reshape(h, w, 4)`` with no channel
         permutation, and that is correct only if this holds.  Uses a
-        two-colour cmap because a symmetric palette cannot distinguish R
+        two-color cmap because a symmetric palette cannot distinguish R
         from B, which is exactly how the transposition above survived.
         """
         import xarray as xr
@@ -1032,7 +1032,7 @@ class TestDatashadedOutput:
         assert img_tiny.shape == (PLOT_H, PLOT_W)
 
         # The two images must differ — the tiny upsampled view will show
-        # a different colour distribution than the full downsampled view.
+        # a different color distribution than the full downsampled view.
         # (If they were identical something is wrong with the viewport logic.)
         assert not np.array_equal(img_full, img_tiny), (
             "Full-view and sub-cell-viewport images are identical — "
@@ -1352,7 +1352,7 @@ class TestDeferredConstruction:
 
 
 # ---------------------------------------------------------------------------
-# 9b. ColorMode — global/local colour mapping
+# 9b. ColorMode — global/local color mapping
 # ---------------------------------------------------------------------------
 
 class TestColorMode:
@@ -1424,7 +1424,7 @@ class TestColorMode:
         is exercised separately rather than folded into this test. The
         explicit scalings (sqrt/square/gamma/power) do have a genuine
         global/local distinction at the value-domain level, but whether
-        that distinction survives 8-bit colour quantization into a
+        that distinction survives 8-bit color quantization into a
         *visibly different* image is data- and seed-dependent — see
         TestColormapScaling.test_explicit_scaling_color_mode_changes_value_domain
         for a test of the underlying logic rather than pixel output.
@@ -1443,7 +1443,7 @@ class TestColorMode:
         assert img_global.dtype == np.uint32
         assert img_local.dtype  == np.uint32
         assert not np.array_equal(img_global, img_local), (
-            "global and local colour modes must produce different images "
+            "global and local color modes must produce different images "
             "for a sub-range viewport under linear scaling"
         )
 
@@ -1461,7 +1461,7 @@ class TestColorMode:
 class TestColormapScaling:
     """Tests for the Phase 0 colormap/pseudocolor fidelity refactor.
 
-    Background: linear value-to-colour mapping was found to saturate
+    Background: linear value-to-color mapping was found to saturate
     badly on real visibility data (a small high-amplitude population
     dominates the colormap while the populous low-amplitude region
     collapses to a featureless gradient — observed directly during
@@ -1521,9 +1521,9 @@ class TestColormapScaling:
 
     def test_eq_hist_resolves_more_structure_than_linear(self):
         """The core fix under test: on real (right-skewed) visibility
-        amplitude data, eq_hist must show more colour variation than
+        amplitude data, eq_hist must show more color variation than
         linear, since linear saturates the populous low-amplitude region
-        into a near-uniform colour."""
+        into a near-uniform color."""
         vr = _make_vr(self.backend, self.sel, quantity=Axis.AMPLITUDE)
 
         def _distinct_colors(img32):
@@ -1538,8 +1538,8 @@ class TestColormapScaling:
         n_eq_hist = _distinct_colors(vr._image_source.data["image"][0])
 
         assert n_eq_hist >= n_linear, (
-            f"eq_hist ({n_eq_hist} colours) should resolve at least as "
-            f"much structure as linear ({n_linear} colours) on real "
+            f"eq_hist ({n_eq_hist} colors) should resolve at least as "
+            f"much structure as linear ({n_linear} colors) on real "
             f"visibility amplitude data"
         )
 
@@ -1608,7 +1608,7 @@ class TestColormapScaling:
         the y-axis (e.g. TIME, in MJD seconds ~5e9) differs from the
         rendered quantity (e.g. AMPLITUDE, ~0-100) — passing the axis
         range as the value-clip range silently collapsed every pixel to
-        a single colour bin."""
+        a single color bin."""
         vr = _make_vr(
             self.backend, self.sel,
             y_dim=Axis.TIME, x_dim=Axis.BASELINE, quantity=Axis.AMPLITUDE,
@@ -1619,7 +1619,7 @@ class TestColormapScaling:
         rgb = img & 0x00FFFFFF
         n_colors = len(np.unique(rgb[alpha > 0]))
         assert n_colors > 1, (
-            "gamma scaling collapsed to a single colour — vmin/vmax are "
+            "gamma scaling collapsed to a single color — vmin/vmax are "
             "likely being derived from the y-axis range instead of the "
             "agg's own value range"
         )
@@ -1662,9 +1662,9 @@ class TestColormapScaling:
         colormap_scaling.equalize_histogram(), which accepts a separate
         *reference* array to build the equalization curve from:
         "global" mode passes the full cached agg as the reference (so
-        colours stay anchored to the full data's distribution regardless
+        colors stay anchored to the full data's distribution regardless
         of zoom — useful when zoomed in and wanting flagging-stable
-        colours), "local" mode passes None (equalize against the crop
+        colors), "local" mode passes None (equalize against the crop
         itself, matching Datashader's native behaviour). This restores
         the global/local feature for eq_hist, which is the default
         scaling, rather than leaving it as a silent no-op.

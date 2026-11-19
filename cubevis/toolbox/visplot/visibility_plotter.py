@@ -89,7 +89,7 @@ from uuid import uuid4
 
 import websockets
 
-from bokeh.events import MouseEnter, MouseLeave
+from bokeh.events import MouseEnter, MouseLeave, ValueSubmit
 from bokeh.layouts import column, row
 from bokeh.models import (
     Button, CheckboxGroup, ColumnDataSource, CustomAction, CustomJS,
@@ -109,10 +109,14 @@ from .axes import Axis
 from .selection import (
     SelectionSpec, normalize_averaging, normalize_baseline_combine,
 )
-from .raster_grid import normalize_baseline_order
+from ..gridplot.raster_grid import normalize_baseline_order
 from .data._raster_stats import normalize_chan_window, normalize_time_window
 from .data._scatter_average import normalize_avg_chan, normalize_avg_time
 from . import antenna_baseline_select as _abs
+from . import colormap_sync as _cms_sync
+from . import help_text as _helptext
+from . import iteration_subset as _itsub
+from .iteration_subset import ITER_SUBSET_JS as _ITER_SUBSET_JS
 from .antenna_baseline_select import SELECTION_PAYLOAD_JS as _SELECTION_PAYLOAD_JS
 from .data_format import MSV2 as _MSV2, detect_data_format, resolve_data_args
 from .selection_text import (SelectionTextError, parse_scan_text, parse_field_text,
@@ -125,7 +129,7 @@ from .visibility_plot import (
     _CV_SET_BUSY_JS, CURSOR_PLACEHOLDER_HTML, TITLE_FONT_SIZE,
     TITLE_FONT_SIZE_TWO_LINE,
 )
-from . import palettes as _palettes
+from ..gridplot import palettes as _palettes
 from .scaling_memory import RasterScalingUnit
 from .view_state import ApplyReport, StateRegistry
 from .refresh import RefreshLevel as _RefreshLevel
@@ -157,7 +161,13 @@ _PANEL_HEIGHT_OVER = 280    # each panel height in over/under mode
 
 _SECTION_DARK      = "#cdd6f4"
 _SECTION_LIGHT     = "#1e293b"
-"""Sidebar section-heading colours.
+
+# Muted text in the color-scaling controls (the equation label).  Dark
+# keeps the tone the label always had; light is a mid-dark grey that
+# reads as secondary on the light sidebar.
+_CMAP_TEXT_DARK    = "#a6adc8"
+_CMAP_TEXT_LIGHT   = "#4c4f69"
+"""Sidebar section-heading colors.
 
 Previously hardcoded inline at construction with nothing able to change
 them, so the headings stayed dark-blue on a light sidebar and read as
@@ -200,6 +210,49 @@ _SIDEBAR_WIDTH_COL = 268    # column width including padding
 # of help text at 12 px.  Fixed, so showing help never moves anything.
 _STATUS_HEIGHT     = 96
 
+# Showing and hiding status-area help (2026-11-18).  Help takes the
+# status row's place -- except that a warning (a notify message with ⚠,
+# e.g. "Scan: '2-15' ..." from Plot or from Return in the Scan box) stays
+# on its own line above the help, which then gets the rest of the area.
+# Before, any hover hid the warning, so it could be seen only with the
+# pointer on the edge of a control.  Args: hint, status_row, status_div,
+# notify_div, and optionally all_hints (the others to hide).
+_HINT_ALERT_ROW_PX = 26
+_SHOW_HINT_JS = f"""
+if (typeof all_hints !== 'undefined' && all_hints)
+    for (const h of all_hints) {{ if (h !== hint) h.visible = false; }}
+const _alert = !!(notify_div && /\u26a0/.test(notify_div.text || ''));
+if (status_div) status_div.visible = !_alert;
+status_row.visible = _alert;
+// With the summary hidden, the warning has the row: start it at the left,
+// beside the sidebar, rather than at the far right edge.
+if (notify_div) notify_div.styles = Object.assign({{}}, notify_div.styles,
+    {{'text-align': _alert ? 'left' : 'right'}});
+hint.styles = Object.assign({{}}, hint.styles,
+    {{'max-height': (_alert ? {_STATUS_HEIGHT - _HINT_ALERT_ROW_PX} : {_STATUS_HEIGHT}) + 'px'}});
+hint.visible = true;
+"""
+# The notify text changed (a Plot reply, Return in the Scan box) while a
+# help is showing: lay the status area out again, so a new warning
+# appears above the help at once and a cleared one gives the help back
+# its room.  Args: all_hints, status_row, status_div; cb_obj the notify Div.
+_NOTIFY_CHANGED_JS = f"""
+const _shown = all_hints.find(h => h.visible);
+if (!_shown) return;
+const _alert = /\u26a0/.test(cb_obj.text || '');
+status_div.visible = !_alert;
+status_row.visible = _alert;
+cb_obj.styles = Object.assign({{}}, cb_obj.styles, {{'text-align': _alert ? 'left' : 'right'}});
+_shown.styles = Object.assign({{}}, _shown.styles,
+    {{'max-height': (_alert ? {_STATUS_HEIGHT - _HINT_ALERT_ROW_PX} : {_STATUS_HEIGHT}) + 'px'}});
+"""
+_HIDE_HINT_JS = """
+hint.visible = false;
+if (notify_div) notify_div.styles = Object.assign({}, notify_div.styles, {'text-align': 'right'});
+if (status_div) status_div.visible = true;
+status_row.visible = true;
+"""
+
 # Status-area help with fixed text: name -> HTML, created as
 # ``self._hint_<name>`` in _build_status_bar and attached with _hover().
 # " | " separates the points; keep each to what the control does and
@@ -207,38 +260,55 @@ _STATUS_HEIGHT     = 96
 _STATIC_HINTS = {
     "col": "<b>Data column</b> \u2014 which visibilities are plotted  | <b>DATA</b>: as observed  | <b>CORRECTED_DATA</b>: after calibration has been applied  | <b>MODEL_DATA</b>: what the calibration model predicts  | Only the columns this dataset has are listed",
     # ---- raster gear tab
-    "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: one cell per baseline over time and channels, mirrored, so a bad antenna is a whole row and column (the Ant\u00d7Ant preset); the two Antenna axes only go together  | Y and X must differ  | Which correlation is shown: <b>Correlation shown</b>, below",
-    "r_qty": "<b>Raster quantity</b> \u2014 what the colour shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
-    "scaling": "<b>Colour scaling</b> \u2014 how values are spread over the colours; changes the picture, never the data  | <b>eq_hist</b> uses every colour equally and shows faint structure, but distances between colours mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
-    "bcombine": "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Median</b>: the middle baseline at each cell: what most baselines share, unmoved by a few bad ones. A feature that shows in Maximum but not in Median is on a few baselines (find and flag those); one in both is on most of them  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Coherent</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low  | Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline",
-    "border": "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out; the baselines that have data are drawn side by side either way  | <b>By number</b>: in the order of the Baseline table; baselines to one antenna sit together  | <b>By length</b>: shortest first, and the ticks read the length. Trouble that grows along the axis is then about distance (atmosphere, a source that is resolved); trouble in scattered columns is about particular antennas  | The cursor readout names the baseline and its length in both",
+    "r_axes": (
+        "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: a bad antenna is a whole row and column  | Y and X must differ" + _helptext.MORE_CUE,
+        _helptext.points_html("<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: one cell per baseline over time and channels, mirrored, so a bad antenna is a whole row and column (the Ant\u00d7Ant preset); the two Antenna axes only go together  | Y and X must differ  | Which correlation is shown: <b>Correlation shown</b>, below")),
+    "r_qty": "<b>Raster quantity</b> \u2014 what the color shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
+    "scaling": (
+        "<b>Color scaling</b> \u2014 how values are spread over the colors; changes the picture, never the data  | <b>eq_hist</b>: every color used equally; shows faint structure  | <b>linear</b>: honest about size  | <b>log / sqrt</b>: in between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights above a cutoff" + _helptext.MORE_CUE,
+        _helptext.points_html("<b>Color scaling</b> \u2014 how values are spread over the colors; changes the picture, never the data  | <b>eq_hist</b> uses every color equally and shows faint structure, but distances between colors mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap")),
+    "bcombine": (
+        "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines (a raster without Baseline on an axis). Averaging applies within each baseline; this is how the baselines are combined  | <b>Mean</b>: the general picture  | <b>Median</b>: what most baselines share  | <b>Maximum</b>: a problem shows even on one baseline  | <b>Vector (coherent)</b>: a complex sum, for a calibrated point source; Vector averaging only" + _helptext.MORE_CUE,
+        _helptext.points_html("<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Median</b>: the middle baseline at each cell: what most baselines share, unmoved by a few bad ones. A feature that shows in Maximum but not in Median is on a few baselines (find and flag those); one in both is on most of them  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Vector (coherent)</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low. Offered only with Vector averaging  | Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline")),
+    "border": (
+        "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out  | <b>By number</b>: the Baseline table\u2019s order; baselines to one antenna sit together  | <b>By length</b>: shortest first. Trouble that grows along the axis is about distance; trouble in scattered columns is about particular antennas" + _helptext.MORE_CUE,
+        _helptext.points_html("<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out; the baselines that have data are drawn side by side either way  | <b>By number</b>: in the order of the Baseline table; baselines to one antenna sit together  | <b>By length</b>: shortest first, and the ticks read the length. Trouble that grows along the axis is then about distance (atmosphere, a source that is resolved); trouble in scattered columns is about particular antennas  | The cursor readout names the baseline and its length in both")),
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
     # ---- scatter gear tab
     "s_x": "<b>Scatter X axis</b>  | <b>UV Distance</b>: baseline length; in wavelengths to compare across frequency  | <b>Time</b>: stability through the observation  | <b>Frequency / Channel</b>: the spectrum  | <b>U / V</b>: with V or U as Y, the uv coverage  | For Phase RMS and Coherence, X also decides what one point is (see the window controls)",
     "s_y": "<b>Scatter Y axis</b> \u2014 the value plotted for every sample  | <b>Amplitude / Phase / Real / Imaginary</b>: one point per visibility, drawn as density  | <b>Phase RMS / Coherence</b>: one point per window (per integration, channel or scan, depending on X)  | <b>Z-Score</b>: how unusual each sample is for its baseline",
-    "colorize": "<b>Layer colouring</b> \u2014 each ticked correlation is a layer with its own colours  | <b>Continuous</b>: density of points; scaling works as for the raster  | <b>Categorical</b>: colour by antenna, baseline, field, scan or SPW; tick which values to show  | <b>Statistical</b>: colour by Z-Score so outliers stand out  | <b>Layer</b> chooses which layer the controls below apply to",
+    "colorize": "<b>Layer coloring</b> \u2014 each ticked correlation is a layer with its own colors  | <b>Continuous</b>: density of points; scaling works as for the raster  | <b>Categorical</b>: color by antenna, baseline, field, scan or SPW; tick which values to show  | <b>Statistical</b>: color by Z-Score so outliers stand out  | <b>Layer</b> chooses which layer the controls below apply to",
     # ---- toolbar
-    "s_avg": "<b>Averaging (scatter)</b> \u2014 one point per baseline and correlation for each stretch of time and block of channels, instead of one per sample: what a spectrum or a time series needs  | <b>Average over time</b>: <i>Off</i> (every integration), <i>Scan</i> (a spectrum per scan, with X Frequency or Channel), or a length (from the start of each scan, never across a scan boundary)  | <b>Average over channels</b>: <i>Off</i>, a number of channels, or <i>All</i> (one point per spectral window: a time series, with X Time)  | <b>Vector</b>: average the complex visibilities, then take amplitude and phase; amplitude drops where the samples do not add up (noise, an uncalibrated phase, a delay across the averaged channels)  | <b>Scalar</b>: average the amplitudes  | Amplitude, Phase, Real and Imaginary only; flagged samples are left out; a flag box takes every sample behind the points it encloses",
+    "s_avg": (
+        "<b>Averaging (scatter)</b> \u2014 one point per baseline and correlation for each stretch of time and block of channels, instead of one per sample  | <b>Average over time</b>: <i>Off</i>, <i>Scan</i>, or a length  | <b>Average over channels</b>: <i>Off</i>, a number, or <i>All</i> (a time series)  | <b>Vector</b>: average the complex visibilities; <b>Scalar</b>: average the amplitudes" + _helptext.MORE_CUE,
+        _helptext.points_html("<b>Averaging (scatter)</b> \u2014 one point per baseline and correlation for each stretch of time and block of channels, instead of one per sample: what a spectrum or a time series needs  | <b>Average over time</b>: <i>Off</i> (every integration), <i>Scan</i> (a spectrum per scan, with X Frequency or Channel), or a length (from the start of each scan, never across a scan boundary)  | <b>Average over channels</b>: <i>Off</i>, a number of channels, or <i>All</i> (one point per spectral window: a time series, with X Time)  | <b>Vector</b>: average the complex visibilities, then take amplitude and phase; amplitude drops where the samples do not add up (noise, an uncalibrated phase, a delay across the averaged channels)  | <b>Scalar</b>: average the amplitudes  | Amplitude, Phase, Real and Imaginary only; flagged samples are left out; a flag box takes every sample behind the points it encloses")),
     # ---- Flagging panel (HRS H5, 2026-10-07)
     "flag_filter": "<b>Filter</b> \u2014 which of the samples inside a drawn box are flagged  | <b>All selected</b>: every sample in the box  | The others take only the samples that meet a condition, so a generous box can be drawn round a bad stretch and only the bad samples in it go  | The condition and its settings are described under the list",
     "flag_preview": "<b>Preview each proposal</b> \u2014 show what a box would flag (how many samples, on which baselines, antennas, windows and scans) and paint those samples on the plots before anything is recorded; then accept or reject  | Worth having on while the Flag reaches settings are wider than the box",
-    "flag_reach": "<b>Flag reaches</b> \u2014 how far each flag (or unflag) goes beyond the box that is drawn. The settings stay until changed; the line underneath turns amber while any is wider than the box  | <b>Baselines</b>: <i>As drawn</i>; or all baselines <i>to the antenna they share</i> (drag across two or more baselines of the bad antenna; refused if they do not share exactly one); or all <i>to every antenna drawn</i>; or <i>all baselines</i>  | <b>All channels</b>: the drawn time range over the whole band (a bad integration)  | <b>All selected spectral windows</b>: the same channels and times in every selected window  | <b>Whole scan</b>: every integration of the scans the box touches  | <b>All fields</b>: only matters on a plot without a Time axis  | <b>All correlations</b>: not just the one plotted  | Baselines, windows, scans and fields are extended for a raster box with the All selected filter; other boxes say so  | While any is wider, the box is outlined in amber as it is drawn  | For one box only, without changing these: <b>Shift</b> while dragging gives the full height of the plot as shown, <b>Alt</b> (<b>Option</b> on a Mac) the full width. A key held as the drag starts, or pressed during it, counts for the whole drag, even if let go first; <b>Esc</b> before letting go of the button drops the box",
+    "flag_reach": (
+        "<b>Flag reaches</b> \u2014 how far each flag (or unflag) goes beyond the box that is drawn: <b>Baselines</b>, <b>All channels</b>, <b>All selected spectral windows</b>, <b>Whole scan</b>, <b>All fields</b>, <b>All correlations</b>. The settings stay until changed; the line underneath and the box turn amber while any is wider than the box  | For one box only: <b>Shift</b> while dragging gives the full height, <b>Alt</b> (<b>Option</b>) the full width; <b>Esc</b> drops the box" + _helptext.MORE_CUE,
+        _helptext.points_html("<b>Flag reaches</b> \u2014 how far each flag (or unflag) goes beyond the box that is drawn. The settings stay until changed; the line underneath turns amber while any is wider than the box  | <b>Baselines</b>: <i>As drawn</i>; or all baselines <i>to the antenna they share</i> (drag across two or more baselines of the bad antenna; refused if they do not share exactly one); or all <i>to every antenna drawn</i>; or <i>all baselines</i>  | <b>All channels</b>: the drawn time range over the whole band (a bad integration)  | <b>All selected spectral windows</b>: the same channels and times in every selected window  | <b>Whole scan</b>: every integration of the scans the box touches  | <b>All fields</b>: only matters on a plot without a Time axis  | <b>All correlations</b>: not just the one plotted  | Baselines, windows, scans and fields are extended for a raster box with the All selected filter; other boxes say so  | While any is wider, the box is outlined in amber as it is drawn  | For one box only, without changing these: <b>Shift</b> while dragging gives the full height of the plot as shown, <b>Alt</b> (<b>Option</b> on a Mac) the full width. A key held as the drag starts, or pressed during it, counts for the whole drag, even if let go first; <b>Esc</b> before letting go of the button drops the box")),
     "flag_reason": "<b>Reason</b> \u2014 a few words on why, stored with every flag made from now on until the text is changed  | Shown in Describe pending flags, saved in the JSON, and written as the reason in exported flagdata commands, so flags can later be listed or undone by reason  | Leave empty for none",
-    "flag_display": "<b>Pending flags on the plots</b>  | <b>Hide flagged</b>: flagged samples disappear and colour scales and statistics are recomputed without them \u2014 flag, then look again  | <b>Show in colour</b>: the data stay as on disk and the samples the pending flags change are painted in the chosen colour, to see what has been marked",
-    "flag_shown": "<b>Show flagged data</b> \u2014 also draw samples that are flagged now, on disk or pending, in the chosen colour  | Needed to unflag: an Unflag box can only take what is drawn",
+    "flag_display": "<b>Pending flags on the plots</b>  | <b>Hide flagged</b>: flagged samples disappear and color scales and statistics are recomputed without them \u2014 flag, then look again  | <b>Show in color</b>: the data stay as on disk and the samples the pending flags change are painted in the chosen color, to see what has been marked",
+    "flag_shown": "<b>Show flagged data</b> \u2014 also draw samples that are flagged now, on disk or pending, in the chosen color  | Needed to unflag: an Unflag box can only take what is drawn",
     "flag_undo": "<b>Undo / Redo / Clear</b> \u2014 step back through the pending flags one box at a time, forward again, or drop them all  | Nothing here touches the data on disk",
     "flag_report": "<b>Describe pending flags</b> \u2014 open a page listing every pending flag in order: what it covers, how far it reached, its filter, its reason and how many samples it changes",
     "tb_sidebar": "<b>\u27e8 / \u27e9</b> \u2014 hide or show the configuration panel on the left, to give the plots the full width",
-    "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; colour scaling applies at once  | <b>Orange</b>: something has been changed since the last Plot and is not shown yet  | Pending flags are kept",
+    "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; color scaling applies at once  | <b>Orange</b>: something has been changed since the last Plot and is not shown yet  | Pending flags are kept",
     "tb_reload": "<b>Reload</b> \u2014 read the data again and redraw  | Use after something else has changed the data on disk  | <span style=\"color:#f38ba8\"><b>Discards pending (unapplied) flags</b></span>",
     "tb_layout": "<b>Layout</b> \u2014 one panel, or both: side by side or one above the other  | Side by side suits Baseline \u00d7 Time; one above the other gives a waterfall the full width  | Each preset switches to the layout that suits it, unless <b>Pin layout</b> (in the configuration panel) is ticked",
     "gear_pin": "<b>Pin</b> \u2014 keep this panel's configuration tab open after <b>Plot &#9654;</b>, to try one setting after another (the Ant\u00d7Ant quantities, say)  | Unticked, a successful Plot closes the tab  | \u2715 closes it either way",
+    "grid_panel": "<b>Grid panel</b> \u2014 the plot every cell of the grid repeats, apart from Panels A and B  | Starts as a copy of the first panel the first time Grid is shown  | Changes apply when you press <b>Plot &#9654;</b>  | Tapping a cell shows it in the first panel, set up as this one",
+    "grid_scaling": "<b>Grid color scaling</b> \u2014 how the cells spread their values over the colors, applied at <b>Plot &#9654;</b>  | <b>auto</b>: the quantity's own (Phase: linear \u2212180..180\u00b0; Z-Score: threshold)  | Min / max: empty is automatic  | <b>Color</b> above says which cells share one range",
     "pin_layout": "<b>Pin layout</b> \u2014 keep the panels arranged as they are now (One, Side by Side or Over / Under) when a preset is pressed  | Unticked, each preset switches to the arrangement that suits it (Spectrum and the waterfalls one above the other, the others side by side)  | Only the arrangement is kept: a preset still sets what each panel shows  | The Layout buttons in the toolbar change the arrangement either way",
-    "autocorr": "<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only. Autocorrelations can be hundreds of times larger (VLBI data before amplitude calibration) and flatten every plot of all baselines  | <b>Include</b>: both; the Ant\u00d7Ant matrix then has its diagonal  | <b>Only</b>: autocorrelations alone \u2014 the bandpass shape and interference at each station  | A baseline ticked by name (e.g. BR&amp;BR) is plotted whatever is chosen here  | Applied by Plot",
+    "autocorr": (
+        "<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only; autocorrelations can be far larger and flatten the plots  | <b>Include</b>: both  | <b>Only</b>: autocorrelations alone: bandpass shape and interference per station  | Applied by Plot" + _helptext.MORE_CUE,
+        _helptext.points_html("<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only. Autocorrelations can be hundreds of times larger (VLBI data before amplitude calibration) and flatten every plot of all baselines  | <b>Include</b>: both; the Ant\u00d7Ant matrix then has its diagonal  | <b>Only</b>: autocorrelations alone \u2014 the bandpass shape and interference at each station  | A baseline ticked by name (e.g. BR&amp;BR) is plotted whatever is chosen here  | Applied by Plot")),
     "time_labels": "<b>Time labels</b> \u2014 how every time axis and the cursor readout give time  | <b>UTC</b>: time of day, with the date in the axis label; when the data cross midnight the ticks read day/hh:mm:ss from the first day, as in AIPS. Matches observing logs, <tt>listobs</tt> and the Time range box  | <b>Elapsed</b>: minutes and seconds from the first sample shown  | Changes the labels only; nothing is read again",
-    "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, colour bars) to a PNG file where Python is running  | The path is reported in the status line",
-    "tb_row_height": "<b>Row height</b> \u2014 the height of each row of plots, in every layout  | <i>default</i>: 550 px for One and Side by Side, 280 px for Over / Under  | <i>fit</i>: the rows share the window's height, after the readouts and colour bars below each plot (never less than 250 px; the plot area scrolls instead)  | Takes effect at once, and stays when the layout changes  | <code>row_height=</code> sets it from Python (a number, \"fit\", or one height per row)",
+    "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, color bars) to a PNG file where Python is running  | The path is reported in the status line",
+    "tb_row_height": "<b>Row height</b> \u2014 the height of each row of plots, in every layout  | <i>default</i>: 550 px for One and Side by Side, 280 px for Over / Under  | <i>fit</i>: the rows share the window's height, after the readouts and color bars below each plot (never less than 250 px; the plot area scrolls instead)  | Takes effect at once, and stays when the layout changes  | <code>row_height=</code> sets it from Python (a number, \"fit\", or one height per row)",
     "tb_theme": "<b>Dark / Light</b> \u2014 switch the background  | The colormaps change with it so faint points stay visible; exported PNGs follow",
+    "tb_help": "<b>Help</b> \u2014 open the full explanations of the controls in a separate tab  | Over a control whose help ends in \u201cpress h for more\u201d, press <b>h</b> (or <b>?</b>) to open it at that control",
 }
 
 # Preset definitions: (raster_y, raster_x, raster_qty, scatter_x, scatter_y, layout)
@@ -351,8 +421,24 @@ def _NO_DATA_FORMATTER():
     current field / SPW selection (``has_data`` 0) is dimmed and marked
     (2026-10-10).  One instance per column: Bokeh models are not shared."""
     return HTMLTemplateFormatter(template=(
+        _itsub.MARKER_TEMPLATE +
         "<% if (has_data === 0) { %><span style=\"opacity:0.45\">"
         "<%- value %> (no data)</span><% } else { %><%- value %><% } %>"))
+
+
+#: "Baselines combined" choices (value, label).  "coherent" keeps its
+#: value (config, constructor, presets) under the clearer label.
+_BCOMBINE_OPTIONS = [("mean", "Mean"), ("median", "Median"),
+                     ("max", "Maximum"), ("coherent", "Vector (coherent)")]
+
+# Averaging changed (cb_obj, the Averaging Select): "Vector (coherent)" is
+# offered only with Vector averaging; a coherent choice falls back to Mean.
+_BCOMBINE_SCALAR_JS = """
+const scalar = (cb_obj.value === 'scalar');
+const opts = scalar ? all_opts.filter(o => o[0] !== 'coherent') : all_opts;
+if (scalar && rm_sel.value === 'coherent') rm_sel.value = 'mean';
+rm_sel.options = opts.map(o => [o[0], o[1]]);
+"""
 
 
 #: The Y axes of the two panels of a _PAIR_PRESETS view, slot A then B.
@@ -382,7 +468,7 @@ _PRESET_BUTTONS = (
     ("waterfall", "Waterfall", 78,
      "<b>Waterfall</b> \u2014 Time \u00d7 Channel amplitude, one panel above the other  | Scatter: Amplitude vs Time  | Shows interference: narrow in frequency, or short in time  | Tick one baseline (or step through them) to see it by itself; with several, the cell is the mean of their amplitudes (Baselines combined is set to Mean)"),
     ("zscore", "Z-Score", 70,
-     "<b>Z-Score</b> \u2014 how unusual each sample is for its own baseline  | Raster: Baseline \u00d7 Time coloured by Z-Score, to spot an outlier baseline at a glance  | Scatter: Amplitude vs Time, coloured the same way, to confirm what is there"),
+     "<b>Z-Score</b> \u2014 how unusual each sample is for its own baseline  | Raster: Baseline \u00d7 Time colored by Z-Score, to spot an outlier baseline at a glance  | Scatter: Amplitude vs Time, colored the same way, to confirm what is there"),
     ("phaserms-time", "\u03c6rms\u00b7t", 62,
      "<b>Phase RMS vs Time</b> \u2014 how steady the phase is, and when  | Raster: Baseline \u00d7 Time, phase scatter across the band in each integration  | Scatter: the same values against time, all baselines  | Low and flat is good; a rise shows when the phase became unstable. Slope and window controls are reset"),
     ("phaserms-freq", "\u03c6rms\u00b7\u03bd", 62,
@@ -390,11 +476,13 @@ _PRESET_BUTTONS = (
     ("phaserms-uvdist", "\u03c6rms\u00b7uv", 66,
      "<b>Phase RMS vs UV Distance</b> \u2014 does phase stability get worse on longer baselines?  | Raster: Baseline \u00d7 Time, Phase RMS  | Scatter: one point per baseline and scan against baseline length  | A rise with length is the atmosphere; one high baseline is an antenna. Slope and window controls are reset"),
     ("phase-waterfall", "\u03c6 Wfall", 68,
-     "<b>Phase waterfall</b> \u2014 Time \u00d7 Channel phase in a cyclic colormap (\u2212180\u00b0 and +180\u00b0 are the same colour)  | Scatter: Phase vs Time  | Stripes across frequency are a delay; stripes in time are a rate; uniform colour is calibrated  | Tick one baseline, or step through them"),
+     "<b>Phase waterfall</b> \u2014 Time \u00d7 Channel phase in a cyclic colormap (\u2212180\u00b0 and +180\u00b0 are the same color)  | Scatter: Phase vs Time  | Stripes across frequency are a delay; stripes in time are a rate; uniform color is calibrated  | Tick one baseline, or step through them"),
     ("waterfall-all", "All-BL", 62,
-     "<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG  | Each cell shows the largest amplitude among the baselines (Baselines combined is set to Maximum)  | Scatter: Amplitude vs Channel  | A quick survey for interference: one picture instead of one per baseline. A flag box here flags <b>every selected baseline</b>, and the message says how many  | What looks bad here may be on only a few baselines: tick antennas or baselines to find which before flagging them all"),
+     ("<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG; each cell shows the largest amplitude (Baselines combined: Maximum)  | A quick survey for interference. A flag box here flags <b>every selected baseline</b>" + _helptext.MORE_CUE,
+      _helptext.points_html("<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG  | Each cell shows the largest amplitude among the baselines (Baselines combined is set to Maximum)  | Scatter: Amplitude vs Channel  | A quick survey for interference: one picture instead of one per baseline. A flag box here flags <b>every selected baseline</b>, and the message says how many  | What looks bad here may be on only a few baselines: tick antennas or baselines to find which before flagging them all"))),
     ("antmatrix", "Ant\u00d7Ant", 68,
-     "<b>Antenna \u00d7 antenna</b> \u2014 one cell per baseline, averaged over time and channels, like AIPS LISTR\u2019s matrix  | The matrix is mirrored, so an antenna that is bad on every baseline shows as a whole row and column  | Hover a cell for its baseline; the diagonal holds the autocorrelations when Autocorrelations (Data section) is Include  | Scatter: Amplitude vs UV Distance, where that antenna\u2019s baselines stand apart  | Averaging (raster gear tab) applies: vector averaging over a long stretch reads low where the phase is not calibrated yet \u2014 use Scalar, or narrow the time range  | Flag on Baseline \u00d7 Time once the antenna is found"),
+     ("<b>Antenna \u00d7 antenna</b> \u2014 one cell per baseline, averaged over time and channels, like AIPS LISTR\u2019s matrix; mirrored, so an antenna bad on every baseline is a whole row and column  | Hover a cell for its baseline  | Scatter: Amplitude vs UV Distance, where that antenna\u2019s baselines stand apart  | Flag on Baseline \u00d7 Time once the antenna is found" + _helptext.MORE_CUE,
+      _helptext.points_html("<b>Antenna \u00d7 antenna</b> \u2014 one cell per baseline, averaged over time and channels, like AIPS LISTR\u2019s matrix  | The matrix is mirrored, so an antenna that is bad on every baseline shows as a whole row and column  | Hover a cell for its baseline; the diagonal holds the autocorrelations when Autocorrelations (Data section) is Include  | Scatter: Amplitude vs UV Distance, where that antenna\u2019s baselines stand apart  | Averaging (raster gear tab) applies: vector averaging over a long stretch reads low where the phase is not calibrated yet \u2014 use Scalar, or narrow the time range  | Flag on Baseline \u00d7 Time once the antenna is found"))),
     ("spectrum", "Spectrum", 74,
      "<b>Spectrum</b> \u2014 amplitude above phase against frequency, each scan averaged, like AIPS POSSM  | Both panels are scatter plots, one above the other  | Read one baseline at a time: tick one, or step with Baseline \u25c0 \u25b6 (or Antenna \u25c0 \u25b6 for every baseline to one antenna)  | Shows the bandpass shape, edge channels, and a phase slope across the band (a delay)  | Average over time is set to Scan; change it in either panel's gear tab"),
     ("timeseries", "Time series", 84,
@@ -706,7 +794,7 @@ _MORE_BELOW_JS = r"""
   function ensureChip() {
     if (chip) return chip;
     chip = document.createElement('div');
-    chip.textContent = '\u25BE more below \u2014 colour bars / info';
+    chip.textContent = '\u25BE more below \u2014 color bars / info';
     Object.assign(chip.style, {
       position: 'fixed', zIndex: 50, padding: '2px 12px', borderRadius: '10px',
       font: '12px system-ui, sans-serif', cursor: 'pointer', display: 'none',
@@ -747,7 +835,7 @@ _MORE_BELOW_JS = r"""
     }
   }
   window.addEventListener('resize', update);
-  setInterval(update, 700);   // content (colour bars, info items) changes size
+  setInterval(update, 700);   // content (color bars, info items) changes size
 })();
 """
 
@@ -832,7 +920,7 @@ _SIZES_JS = r"""
     return [s.raster_fig, s.scatter_fig];
   }
   // "fit": the plot area's visible height, less what is not a figure
-  // (each panel's readouts and colour bars), shared by the rows; never
+  // (each panel's readouts and color bars), shared by the rows; never
   // below FIT_MIN.  Measured per panel (its block less its figure): the
   // containers stretch with the window, so their height says nothing
   // about their contents.
@@ -866,7 +954,8 @@ _SIZES_JS = r"""
   }
   function setH(fig, h) { if (h && Math.abs((fig.height || 0) - h) > 3) fig.height = h; }
   function apply() {
-    const lay = layout_rbg.active;            // 0 one, 1 side, 2 over
+    const lay = layout_rbg.active;            // 0 one, 1 side, 2 over, 3 grid
+    if (lay === 3) return;                    // the grid sizes its own cells
     const sp = spec();
     const rh = (sp.row_height == null) ? ROW_DEFAULT[lay] : sp.row_height;
     const cw = sp.column_width;
@@ -894,12 +983,12 @@ _SIZES_JS = r"""
   }
   window.__cvApplySizes = apply;
   window.__cvSizeSpec = spec;
-  window.__cvLayoutName = function () { return ['one', 'side', 'over'][layout_rbg.active]; };
+  window.__cvLayoutName = function () { return ['one', 'side', 'over', 'grid'][layout_rbg.active]; };
   window.addEventListener('resize', function () {
     clearTimeout(window.__cvFitTimer);
     window.__cvFitTimer = setTimeout(refit, 200);
   });
-  // Readouts and colour bars change height after a Plot; follow them.
+  // Readouts and color bars change height after a Plot; follow them.
   setInterval(refit, 1000);
   setTimeout(apply, 300);
 })();
@@ -937,7 +1026,7 @@ label {
 }
 /* The blanket .bk-btn rule above is !important, so it also flattened the
    selected button of every RadioButtonGroup (Raster/Scatter, colorize
-   mode, ...) to the same colour as its unselected neighbours -- no way to
+   mode, ...) to the same color as its unselected neighbours -- no way to
    tell which mode was active.  More specific, so it wins. */
 .bk-btn.bk-active, .bk-btn.bk-active:hover {
     background:   #89b4fa !important;
@@ -995,7 +1084,7 @@ label {
 # survive a toggle at all — this way, sizing lives once, attached at
 # stylesheets[1] (see _field_prev_btn / _spw_prev_btn's construction in
 # _build_sidebar()), a slot the widgets loop never touches, while
-# stylesheets[0] still gets the normal dark/light colour swap like every
+# stylesheets[0] still gets the normal dark/light color swap like every
 # other themed sidebar widget. Same two-stylesheet shape as
 # self._spw_table's [dark, table_css_dark] — that pairing exists for a
 # different reason (SlickGrid needs its own sheet) but the mechanism is
@@ -2046,18 +2135,21 @@ class _IterButtons:
     BTN_DIMS: ClassVar[dict] = {"width": 24, "height": 24}
     # Two 24px buttons plus the 6px+2px gaps used between them and their
     # neighbour below -- _SIDEBAR_WIDTH minus exactly that footprint.
-    LABEL_WIDTH: ClassVar[int] = _SIDEBAR_WIDTH - (2 * 24 + 6 + 2)
+    # three buttons: Prev, All (✱, 2026-11-11), Next
+    LABEL_WIDTH: ClassVar[int] = _SIDEBAR_WIDTH - (3 * 24 + 6 + 2 + 2)
 
     def __post_init__(self):
         enabled = self.count > 1
         if enabled:
             prev_tip = f"Previous {self.axis_label} (wraps at the ends)"
             next_tip = f"Next {self.axis_label} (wraps at the ends)"
+            all_tip = (f"All {self.axis_label}s again, plotted at once (the "
+                       f"steppers' way back; the list waits for Plot)")
         else:
             why = (f"This dataset has only {self.count} "
                    f"{self.axis_label}{'s' if self.count != 1 else ''} "
                    "— nothing to iterate")
-            prev_tip = next_tip = why
+            prev_tip = next_tip = all_tip = why
 
         self.prev_btn = Button(
             label="◀", button_type="default",
@@ -2071,17 +2163,28 @@ class _IterButtons:
             disabled=not enabled,
             margin=(0, 0, 0, 0), **self.BTN_DIMS,
         )
+        # ✱: back to all of this axis and plot (Darrell, 2026-11-11: the
+        # steppers plot at once, so after stepping, picking "All fields" in
+        # the list -- which waits for Plot -- looked as if it had not taken)
+        self.all_btn = Button(
+            label="✱", button_type="default",
+            stylesheets=[self.dark, self.icon_btn_css],
+            disabled=not enabled,
+            margin=(0, 0, 0, 0), **self.BTN_DIMS,
+        )
         self.row = row(
             self.control,
             Tip(self.prev_btn, tooltip=self.tt(prev_tip),
                 margin=(self.vertical_nudge, 0, 0, 6), **self.BTN_DIMS),
+            Tip(self.all_btn, tooltip=self.tt(all_tip),
+                margin=(self.vertical_nudge, 0, 0, 2), **self.BTN_DIMS),
             Tip(self.next_btn, tooltip=self.tt(next_tip),
                 margin=(self.vertical_nudge, 0, 0, 2), **self.BTN_DIMS),
             align="center", margin=(0, 0, 0, 0),
         )
 
     def wire(self, plot_js_args: dict, do_plot_js: str, step_js: str,
-             fn_name: str) -> None:
+             fn_name: str, all_js: str = "") -> None:
         """Attach the Prev/Next click handlers. Call once, from
         ``_build_toolbar()``, after ``self._do_plot_js``/``_plot_js_args``
         exist -- see this class's own docstring for why construction and
@@ -2108,6 +2211,9 @@ class _IterButtons:
             The function name ``step_js`` defines, e.g.
             ``"doIterateField"`` -- called with ``-1``/``+1`` to build
             each button's full ``CustomJS`` code.
+        all_js : str
+            Statements that select all of this axis again (the ✱ button,
+            which then plots).
         """
         self.prev_btn.js_on_click(CustomJS(
             args=plot_js_args,
@@ -2117,6 +2223,9 @@ class _IterButtons:
             args=plot_js_args,
             code=step_js + do_plot_js + f"{fn_name}(1);\ndoPlot(false);",
         ))
+        if all_js:
+            self.all_btn.js_on_click(CustomJS(
+                args=plot_js_args, code=do_plot_js + all_js + "\ndoPlot(false);"))
 
 
 # ---------------------------------------------------------------------------
@@ -2179,6 +2288,87 @@ if (window.__cvConnPoll == null) {
 """
 
 
+# Orphaned-twin guard for text inputs (2026-11-18).  Adding a gear tab
+# makes Bokeh build two views of each widget in it; one is never
+# rendered (see the 2026-09 tabs-orphan notes at gear_click_js, and the
+# Select / RadioButtonGroup / CheckboxGroup / DataTable guards in
+# __cvInstallSelectViewGuard).  TextInput had no guard.  Its view's
+# connect_signals() (Bokeh 3.10, TextLikeInputView) installs
+# `() => this.input_el.value = this.model.value`, and input_el is only
+# made in render() -- so on the orphan, ANY write to a gear-tab text
+# field's value threw "Cannot set properties of undefined (setting
+# 'value')" and ended the CustomJS that wrote it.  Seen on TW Hya
+# (Bokeh 3.10): dragging a colormap line moved the line and sent the new
+# bound, but its min/max field never changed, and every reply that sets
+# the fields (colormap_sync) threw the same way.
+#
+# Same remedy as the CheckboxGroup guard: wrap connect_signals() so a
+# view with no input_el yet gets a detached placeholder <input> before
+# the handlers exist.  render() -> _render_input() assigns the real one,
+# so only the never-rendered view keeps the placeholder.  Patched on
+# TextLikeInputView's prototype (found through the model registry, so no
+# rendered instance is needed): TextInput, TextAreaInput, PasswordInput
+# and AutocompleteInput all inherit it.
+_TEXT_INPUT_VIEW_GUARD_JS = """
+if (!window.__cvTextInputViewGuarded) {
+    try {
+        const V = Bokeh.Models.get('TextInput').prototype.default_view;
+        const P = Object.getPrototypeOf(V.prototype);   // TextLikeInputView
+        const orig = P.connect_signals;
+        if (typeof orig === 'function') {
+            P.connect_signals = function() {
+                if (this.input_el == null) this.input_el = document.createElement('input');
+                return orig.apply(this, arguments);
+            };
+            window.__cvTextInputViewGuarded = true;
+        }
+    } catch (e) {
+        console.warn('[visplot] TextInput view guard not installed:', e);
+    }
+}
+"""
+
+
+# Once per page: any text input the pointer moves over or the keyboard
+# focus reaches gets autocomplete="off" (_install_no_autofill).  The
+# event's composedPath() starts at the <input> inside Bokeh's (open)
+# shadow roots.
+_NO_AUTOFILL_PAGE_JS = """
+if (!window.__cvNoAutofillPage) {
+    window.__cvNoAutofillPage = true;
+    const TEXTUAL = ['', 'text', 'number', 'search'];
+    const fix = (el) => {
+        if (el && el.tagName === 'INPUT'
+                && TEXTUAL.indexOf((el.getAttribute('type') || '').toLowerCase()) >= 0
+                && el.getAttribute('autocomplete') !== 'off') {
+            el.setAttribute('autocomplete', 'off');
+        }
+    };
+    const mark = (e) => {
+        try {
+            // The pointer usually enters the widget's own container (a
+            // DIV in its FIELDSET) rather than the <input>: look inside
+            // the first few elements of the path too, where a container
+            // holds only its one widget's inputs.
+            const path = e.composedPath ? e.composedPath() : [e.target];
+            for (const el of path.slice(0, 4)) {
+                if (!el || !el.tagName) continue;
+                if (el.tagName === 'INPUT') { fix(el); continue; }
+                const inner = el.querySelectorAll ? el.querySelectorAll('input') : [];
+                if (inner.length && inner.length <= 3) inner.forEach(fix);
+            }
+        } catch (_) { /* a missing nicety, never an error */ }
+    };
+    // pointerdown: the press that would open the browser's list (it
+    // reaches the <input> itself, before focus); mouseover and focusin
+    // mark earlier where they can (hover, keyboard Tab).
+    document.addEventListener('pointerdown', mark, true);
+    document.addEventListener('mouseover', mark, true);
+    document.addEventListener('focusin', mark, true);
+}
+"""
+
+
 _THEME_RESTYLE_JS = """
 // Each block below is wrapped by _step() so that one failure cannot
 // silently abort the rest.  This body has grown by accretion -- figures,
@@ -2194,7 +2384,7 @@ function _step(name, fn) {
 }
 
 // --- sidebar section headings ---------------------------------------
-// Their colour was baked into the Div's inline style at construction, so
+// Their color was baked into the Div's inline style at construction, so
 // nothing could change it and they stayed dark-blue on a light sidebar.
 _step('section headings', () => {
     if (typeof section_divs === 'undefined' || !section_divs) return;
@@ -2202,6 +2392,18 @@ _step('section headings', () => {
     for (const d of section_divs) {
         if (!d || !d.text) continue;
         d.text = d.text.replace(/color:#[0-9a-fA-F]{3,8}/, 'color:' + _sc);
+    }
+});
+
+// --- color-scaling equation labels (2026-11-18) ----------------------
+// Colored through Div.styles (not inline markup in .text, which the
+// scaling dropdown rewrites): see _style_cmap_column.
+_step('cmap equation labels', () => {
+    if (typeof cmap_text_divs === 'undefined' || !cmap_text_divs) return;
+    const _c = light ? cmap_text_light : cmap_text_dark;
+    for (const d of cmap_text_divs) {
+        if (!d) continue;
+        d.styles = Object.assign({}, d.styles || {}, {color: _c});
     }
 });
 
@@ -2307,7 +2509,7 @@ _step('info divs', () => {
         } catch(e) { console.error('[visplot theme] sidebar container failed:', e); }
     }
     // Page-level theme variables read by the info/legend/colorbar strips
-    // (VisibilityPlot._build: background var(--cv-info-bg), colour
+    // (VisibilityPlot._build: background var(--cv-info-bg), color
     // var(--cv-info-fg)).  Custom properties inherit into shadow DOM.
     try {
         document.documentElement.style.setProperty('--cv-info-bg', info_bg);
@@ -2458,6 +2660,276 @@ def kernel_code_check(remote) -> tuple:
         log.debug("kernel fingerprint check failed", exc_info=True)
     return versions, warning
 
+# Grid layout (gridplot G2) -------------------------------------------------
+#
+# window.__cvGridLayout(on): show the grid instead of the plot area (or the
+# reverse), called by the Layout buttons and the presets.  Showing it again
+# after a drill-down puts the sidebar back to the selection the grid was
+# drawn with, so the next Plot in Grid iterates over that, not the one cell.
+_GRID_LAYOUT_JS = """
+window.__cvGridLayout = function (on) {
+    if (on && grid_area.children.length === 0) grid_area.children = [grid_container];
+    grid_area.visible = !!on;
+    plot_area.visible = !on;
+    for (const p of grid_parts) p.visible = !!on;
+    if (!on) {
+        // playback is the grid's: it stops when the grid is left
+        for (const k in (window.__cvGrid || {})) if (window.__cvGrid[k].stop) window.__cvGrid[k].stop();
+        for (const k in (window.__cvGrid || {}))
+            if (window.__cvGrid[k].shown) window.__cvGrid[k].shown(false);
+        // Plots in Grid draw only the grid (gridplot G3): the panels are
+        // drawn now, for the selection the grid was drawn with.
+        if (window.__cvPanelsStale && window.__cvDoPlot) {
+            window.__cvPanelsStale = false;
+            setTimeout(() => window.__cvDoPlot(false), 0);
+        }
+        return;
+    }
+    // the grid's room is known now that it is shown: cells to fit it; then
+    // Python catches up with flags added or committed meanwhile (a cell
+    // drilled into) and the page is drawn again if it is out of date
+    setTimeout(() => {
+        for (const k in (window.__cvGrid || {})) {
+            window.__cvGrid[k].refit();
+            if (window.__cvGridDrawn && window.__cvGrid[k].shown) window.__cvGrid[k].shown(true);
+        }
+    }, 50);
+    // Nothing drawn in the grid yet: plot, as pressing Plot in Grid would
+    // (2026-11-11: Grid alone showed empty cells until Plot was pressed).
+    if (!window.__cvGridDrawn && grid_plot) {
+        window.__cvGridDrawn = true;
+        setTimeout(() => grid_plot.execute(grid_plot, {}), 0);
+    }
+    const sv = window.__cvGridSavedSel;
+    if (!sv) return;
+    window.__cvGridSavedSel = null;
+    try {
+        ant_src.selected.indices = sv.ant; bl_src.selected.indices = sv.bl;
+        spw_src.selected.indices = sv.spw;
+        if (field_sel) field_sel.value = sv.field;
+        if (scan_inp) scan_inp.value = sv.scan;
+        corr_cbg.active = sv.corr;
+        if (ant_mode && sv.mode != null) ant_mode.active = sv.mode;
+    } catch (e) { console.warn('grid: restoring the selection failed:', e); }
+};
+"""
+
+# A grid cell tapped (GridView's drill_js; after doPlot's code): the sidebar
+# set to the cell's selection -- as the Prev / Next steppers set it -- and
+# the cell plotted in the full panel, One layout.  cb_obj is the drill
+# response, {text, select}.
+_GRID_DRILL_JS = """
+const sel = cb_obj && cb_obj.select;
+if (sel) {
+    if (!window.__cvGridSavedSel) window.__cvGridSavedSel = {
+        ant: Array.from(ant_src.selected.indices || []),
+        bl: Array.from(bl_src.selected.indices || []),
+        spw: Array.from(spw_src.selected.indices || []),
+        field: field_sel ? field_sel.value : null,
+        scan: scan_inp ? scan_inp.value : '',
+        corr: Array.from(corr_cbg.active || []),
+        mode: ant_mode ? ant_mode.active : null};
+    if (sel.baselines) {
+        const a1 = bl_src.data['ant1'] || [], a2 = bl_src.data['ant2'] || [], rows = [];
+        for (const p of sel.baselines)
+            for (let i = 0; i < a1.length; i++)
+                if ((a1[i] === p[0] && a2[i] === p[1]) || (a1[i] === p[1] && a2[i] === p[0])) {
+                    rows.push(i); break;
+                }
+        bl_src.selected.indices = rows;
+        ant_src.selected.indices = [];
+    }
+    if (sel.antenna) {
+        const i = (ant_src.data['name'] || []).indexOf(sel.antenna);
+        ant_src.selected.indices = i >= 0 ? [i] : [];
+        bl_src.selected.indices = [];
+        if (ant_mode) ant_mode.active = 0;          // Either end
+    }
+    if (sel.spw != null) {
+        const ids = (spw_src.data['ident'] || []).map(String);
+        const i = ids.indexOf(String(sel.spw));
+        if (i >= 0) spw_src.selected.indices = [i];
+    }
+    if (sel.field && field_sel) field_sel.value = sel.field;
+    if (sel.scan && scan_inp) scan_inp.value = String(sel.scan);
+    if (sel.correlation) {
+        const i = corr_cbg.labels.indexOf(sel.correlation);
+        if (i >= 0) corr_cbg.active = [i];
+    }
+    // The panel One shows becomes the cell (gridplot G3): the grid's panel
+    // as last plotted, its color scaling sent with this Plot and shown in
+    // the panel's color controls (without sending: Plot applies it).
+    const _pi = (display_order_source.data['order'][0] || [0, 1])[0];
+    const _pw = panel_tabs[_pi];
+    if (cb_obj.panel) cvSetPanelTab(_pw, cb_obj.panel);
+    const _col = cb_obj.color;
+    if (_col && _col.scaling) {
+        window.__cvDrillColor = {id: [panel0_id, panel1_id][_pi], color: _col};
+        // Quietly (colormap_sync.quiet_set_js): a flag cleared in
+        // `finally` is already clear when the asynchronous CustomJS runs.
+        try { """ + _cms_sync.quiet_set_js("_pw.cm_scale", "_col.scaling") + """ } catch (e) {}
+        const _fmt = v => (v == null || !isFinite(v)) ? null : String(parseFloat(Number(v).toPrecision(6)));
+        for (const [k, v] of [['cm_alpha', _col.alpha], ['cm_gamma', _col.gamma],
+                              ['cm_min', _col.vmin], ['cm_max', _col.vmax]]) {
+            const t = _fmt(v);
+            if (_pw[k] && t != null) try { _pw[k].value = t; } catch (e) {}
+        }
+    }
+    window.__cvPanelsStale = false;               // this Plot draws them
+    layout_rbg.active = 0;                        // One: the cell, full size
+    doPlot(false);
+}
+"""
+
+
+# Play with every cell on one page (2026-11-13; Darrell: narrowed to one
+# plot, Play should play the baselines): GridView's ``play_outer`` hook.
+# What is played is the axis being stepped (see cvPlayAxis: the one with a
+# ▶, else the one with exactly one row ticked, else the most specific with
+# rows to step), each step its Next and a quiet Plot (doPlot with no busy
+# overlay, so Pause stays clickable).
+# Without Loop, playback stops at the last one and the sidebar is put back
+# as it was before that last step.  cb_obj is the grid's JS API.
+_GRID_PLAY_JS = """
+const LABELS = {baseline: 'baselines', antenna: 'antennas', spw: 'spectral windows',
+                field: 'fields'};
+function cvPlayOne(src) {
+    return !!(src && src.selected && (src.selected.indices || []).length === 1);
+}
+function cvPlayFields() {
+    return field_sel ? field_sel.options.slice(1).map(o => Array.isArray(o) ? o[0] : o)
+                       .filter(v => String(v).indexOf(',') < 0) : [];
+}
+// Which axis Play animates (2026-11-18, with the ▶ of iteration_subset):
+// Play does what Next would, again and again, so it continues the axis
+// being stepped --
+//   1. the axis with a ▶ (the most specific, if several have one);
+//   2. else the axis with exactly one row ticked (as before the ▶);
+//   3. else the most specific axis with more than one row to step
+//      through: two or more ticked, or (Antenna, Baseline) none ticked,
+//      which means all.
+const SRC = {baseline: bl_src, antenna: ant_src, spw: spw_src};
+function cvPlayCur(axis) {
+    return (typeof cvIterCurrent === 'function') ? cvIterCurrent(SRC[axis], axis) : null;
+}
+function cvPlayTicked(src) { return (src && src.selected && src.selected.indices || []).length; }
+function cvPlayRowsWithData(src) {
+    const has = (src.data && src.data['has_data']) || null;
+    const n = ((src.data && (src.data['name'] || src.data['ant1'])) || []).length;
+    let k = 0;
+    for (let i = 0; i < n; i++) if (!has || has[i] !== 0) k++;
+    return k;
+}
+function cvPlayAxis() {
+    for (const a of ['baseline', 'antenna', 'spw']) if (cvPlayCur(a) != null) return a;
+    if (cvPlayOne(bl_src)) return 'baseline';
+    if (cvPlayOne(ant_src)) return 'antenna';
+    if ((spw_src.data['ident'] || []).length > 1 && cvPlayOne(spw_src)) return 'spw';
+    const bt = cvPlayTicked(bl_src), at = cvPlayTicked(ant_src);
+    if (bt >= 2 || (bt === 0 && cvPlayRowsWithData(bl_src) > 1)) return 'baseline';
+    if (at >= 2 || (at === 0 && cvPlayRowsWithData(ant_src) > 1)) return 'antenna';
+    if (cvPlayTicked(spw_src) >= 2) return 'spw';
+    const f = cvPlayFields();
+    if (f.length > 1 && f.indexOf(field_sel.value) >= 0) return 'field';
+    return null;
+}
+// Where the axis is: its ▶ row, else its one ticked row; -1 before the
+// first step.  Rows are stepped in increasing order, so a smaller
+// position after a step means it wrapped past the last.
+function cvPlayPos(axis) {
+    if (axis === 'field') return cvPlayFields().indexOf(field_sel.value);
+    const c = cvPlayCur(axis);
+    if (c != null) return c;
+    const t = SRC[axis].selected.indices || [];
+    return t.length === 1 ? t[0] : -1;
+}
+function cvPlaySnapshot() {
+    return {ant: Array.from(ant_src.selected.indices || []),
+            bl: Array.from(bl_src.selected.indices || []),
+            spw: Array.from(spw_src.selected.indices || []),
+            field: field_sel ? field_sel.value : null,
+            cur: Object.assign({}, window.__cvIterCur || {})};
+}
+// Put back the ticks and the ▶ as they were before the last step:
+// without Loop, playback stops on the last row.
+function cvPlayRestore(s) {
+    const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+    for (const [axis, src, t] of [['antenna', ant_src, s.ant], ['baseline', bl_src, s.bl],
+                                  ['spw', spw_src, s.spw]]) {
+        if (!same(Array.from(src.selected.indices || []), t)) {
+            if (typeof cvIterSetTicks === 'function') cvIterSetTicks(src, axis, t);
+            else src.selected.indices = t;
+        }
+        if (typeof cvIterMark === 'function') cvIterMark(src, axis, s.cur[axis] == null ? null : s.cur[axis]);
+    }
+    if (field_sel && s.field != null) field_sel.value = s.field;
+    if (window.__cvPlotPending) window.__cvPlotPending(false);   // as last plotted
+}
+cb_obj.outer = {
+    label() { const a = cvPlayAxis(); return a ? LABELS[a] : null; },
+    step(loop) {
+        const axis = cvPlayAxis();
+        if (!axis) return Promise.resolve(false);
+        const before = cvPlaySnapshot(), pos = cvPlayPos(axis);
+        ({baseline: doIterateBaseline, antenna: doIterateAntenna,
+          spw: doIterateSpw, field: doIterateField})[axis](1);
+        const now = cvPlayPos(axis);
+        if (now === pos || (now < pos && !loop)) {     // one only, or past the last
+            cvPlayRestore(before);
+            return Promise.resolve(false);
+        }
+        return new Promise((res) => {
+            window.__cvQuietPlot = true; window.__cvPlayStepDone = res;
+            window.__cvPlotSent = false;
+            doPlot(false);
+            if (!window.__cvPlotSent) {                // refused before sending
+                window.__cvQuietPlot = false; window.__cvPlayStepDone = null;
+                res(false);
+            }
+        });
+    },
+};
+"""
+
+
+def fit_grid_shape(rows: int, cols: int, n: int) -> tuple:
+    """Rows x cols is the most a page holds: when all *n* cells fit on
+    one page the grid shrinks to fit them (one cell, one plot; four,
+    2 x 2; five, 2 x 3), as the browser's grid does (gridplot, 2026-11-12)."""
+    rows, cols = int(rows), int(cols)
+    if 0 < n < rows * cols:
+        rows = -(-n // min(cols, n))        # fewest rows, then fewest columns
+        cols = -(-n // rows)
+    return rows, cols
+
+
+def parse_exprange(value) -> object:
+    """``exprange=`` (gridplot G2): ``"current"`` (the first page),
+    ``"all"``, or 1-based page numbers (``"2"``, ``"1-3,5"``) as a sorted
+    list.  Raises ``ValueError`` on anything else."""
+    v = str(value if value is not None else "current").strip().lower()
+    if v in ("", "current", "first"):
+        return "current"
+    if v == "all":
+        return "all"
+    pages = set()
+    for part in v.replace(" ", "").split(","):
+        if not part:
+            continue
+        lo, _, hi = part.partition("-")
+        try:
+            a, b = int(lo), int(hi) if hi else int(lo)
+        except ValueError:
+            raise ValueError(f"exprange must be 'current', 'all' or page numbers "
+                             f"such as '1-3,5'; got {value!r}") from None
+        if a < 1 or b < a:
+            raise ValueError(f"exprange: bad page range {part!r} in {value!r}")
+        pages.update(range(a, b + 1))
+    if not pages:
+        raise ValueError(f"exprange: no pages in {value!r}")
+    return sorted(pages)
+
+
 class VisibilityPlotter:
     """Combined raster + scatter visibility inspection and flagging tool.
 
@@ -2598,14 +3070,17 @@ class VisibilityPlotter:
         ``scatter_avg_time``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
-        panels, side by side), or ``"over"`` (both panels, one above
-        the other). Default ``"side"``. ``"raster"``/``"scatter"`` are
+        panels, side by side), ``"over"`` (both panels, one above
+        the other), or ``"grid"`` (the first panel repeated once per
+        baseline, antenna, SPW, field, scan or correlation -- see
+        ``iterate_by``; a raster or a scatter). Default ``"side"``.
+        ``"raster"``/``"scatter"`` are
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
         an explicit, conflicting ``kind=`` raises ``ValueError``.
     row_height : int, str or list
         Height of each row of plots, in pixels: the plot with its axes,
-        not the readout and colour bars below it.  ``None`` (default):
+        not the readout and color bars below it.  ``None`` (default):
         550 for One and Side by Side, 280 for Over / Under.  ``"fit"``:
         the rows share the window's height (never less than 250 px).  A
         list gives one height per row (Over / Under has two).  The GUI's
@@ -2640,6 +3115,31 @@ class VisibilityPlotter:
         Start with "Pin layout" ticked: presets (this ``preset`` and the
         toolbar buttons) keep the current layout -- ``layout`` -- instead
         of switching to their own.  Default ``False``.
+    iterate_by : str
+        What the Grid layout makes one plot of each: ``"baseline"``
+        (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
+        ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
+        selection, as plotms's ``iteraxis``.  Two axes, outer first,
+        make one plot of each pair: ``"antenna,spw"`` is each antenna's
+        SPWs in turn (not both baseline and antenna).  Every plot is drawn
+        as the grid's own panel is (``grid_panel``).
+    gridrows : int
+        Rows of plots on a page of the Grid layout (1-8, default 3).
+    gridcols : int
+        Columns of plots on a page of the Grid layout (1-8, default 3).
+    gridcolor : str
+        The Grid layout's color range: ``"page"`` (default), one range
+        for the plots on a page; ``"grid"``, one for every plot in the
+        grid, so that pages compare (found cell by cell in the
+        background; until then a page is colored by its own range);
+        ``"cell"``, each plot its own.  With ``eq_hist`` the plots that
+        share a range share its curve too.
+    exprange : str
+        Which pages of the Grid layout ``plotfile=`` writes: ``"current"``
+        (default: the first page, as plotms), ``"all"``, or page numbers
+        such as ``"2"`` or ``"1-3,5"``.  Several pages are written to
+        ``plotfile`` with ``_page01``, ``_page02``, ... before the
+        extension, unless the name contains ``{page}``.
     panels : list[dict] | None
         Each panel's configuration, in screen order: ``[{...}, {...}]``,
         one dict per panel, so that a two-panel view can be written as
@@ -2651,7 +3151,7 @@ class VisibilityPlotter:
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
         ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
         ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
-        and ``vmax`` (its colour scale).  A key left out takes the value
+        and ``vmax`` (its color scale).  A key left out takes the value
         the flat argument (or ``preset``) gives that panel, so the flat
         arguments still describe the first panel; an unknown key raises.
         At most two panels for now.  ``layout`` still decides how many are
@@ -2662,6 +3162,19 @@ class VisibilityPlotter:
                     dict(kind="scatter", scatter_x="FREQUENCY",
                          scatter_y="PHASE", scatter_avg_time="scan")],
             layout="over"
+    grid_panel : dict | None
+        The Grid layout's own panel: what every plot of the grid is
+        drawn as, apart from the panels -- so ``layout="grid"`` can start
+        with both the grid and the panels set up.  The keys of one
+        ``panels`` entry; a key left out takes the first panel's value.
+        Without it the grid starts as a copy of the first panel, made
+        the first time Grid is shown.  In the GUI it is "Grid panel" in
+        the Grid section; a tapped plot is shown in the first panel set up
+        as this one.  A raster or a scatter.  Example::
+
+            layout="grid", iterate_by="antenna",
+            grid_panel=dict(raster_y="TIME", raster_x="BASELINE",
+                            raster_qty="PHASE")
     autocorr : str
         Autocorrelations (baselines from an antenna to itself):
         ``"exclude"`` (default; cross-correlations only), ``"include"``
@@ -2720,7 +3233,7 @@ class VisibilityPlotter:
         How pending flags are shown: ``"hide"`` (flagged points disappear,
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
-        Colour for pending flags when ``flag_display="color"``.
+        Color for pending flags when ``flag_display="color"``.
     flag_reach : str
         How far a flag box reaches beyond what is drawn, as the "Flag
         reaches" controls start: a comma-separated list of
@@ -2739,18 +3252,24 @@ class VisibilityPlotter:
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
         default; toggled in the Flagging controls.
     flag_flagged_color : str
-        Colour for flagged data when ``flag_show_flagged`` is on.
+        Color for flagged data when ``flag_show_flagged`` is on.
     frame_cache_mb : float | None
         Budget (MiB) of the cache of scatter frames -- the decoded samples a
         scatter panel draws, flags and probes.  When a selection's frames do
         not fit, every redraw and flag operation re-reads them from the data
         (an INFO/WARNING line says so).  ``None`` (default): the
         ``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` environment variable if set, else
-        a tenth of physical memory, clamped to 256 MiB .. 4 GiB.  Remote
-        sessions apply it in the worker, where the frames live.  Example:
-        TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
-        about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
-        and a flag box took 3.6 s instead of 0.5 s.
+        by the host: a tenth of memory below 12 GiB; a quarter, at most
+        half of what is free and 16 GiB, above; on a host with 48 GiB or
+        more free (a compute node) 40 % of what is free, up to 64 GiB.  The
+        budget chosen is logged (INFO).  Remote sessions apply it in the
+        worker, where the frames live.  The Grid layout's rows held in
+        memory count in it: while they are held, frames and rows may take
+        it past the budget by ``CUBEVIS_VISPLOT_GRID_OVERFLOW`` percent
+        (default 25), no more.  Example: TW Hya with all fields
+        (2 x 31 M samples, ~1.5 GiB per frame) needs about 3-4 GiB; on a 24
+        GB Mac the old 2.4 GiB default evicted frames and a flag box took
+        3.6 s instead of 0.5 s.
     plotfile : str | None
         Write a PNG of the plot to this path instead of opening the GUI
         (the ``visplot`` task then returns the path).  Implies
@@ -2822,9 +3341,15 @@ class VisibilityPlotter:
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
         pin_layout:       bool          = False,
+        iterate_by:       str           = "baseline",
+        gridrows:         int           = 3,
+        gridcols:         int           = 3,
+        gridcolor:       str           = "page",
+        exprange:         str           = "current",
         time_labels:      str           = "utc",
         autocorr:         str           = "exclude",
         panels:           Optional[list] = None,
+        grid_panel:       Optional[dict] = None,
         raster_y:         Optional[str] = None,
         raster_x:         Optional[str] = None,
         raster_qty:       Optional[str] = None,
@@ -2867,6 +3392,24 @@ class VisibilityPlotter:
         # the GUI -- what the visplot task's plotfile= means.
         self._plotfile = plotfile or None
         self._headless = bool(headless) or self._plotfile is not None
+        # The Grid layout (gridplot G2): what it iterates over, its page
+        # shape, and which pages plotfile= writes.  Validated now.
+        from .vis_grid_source import normalize_iterate_by
+        from ..gridplot.grid_view import MAX_POOL
+        self._iterate_by = normalize_iterate_by(iterate_by)
+        for _n, _v, _cap in (("gridrows", gridrows, MAX_POOL[0]),
+                             ("gridcols", gridcols, MAX_POOL[1])):
+            if not isinstance(_v, int) or isinstance(_v, bool) or not 1 <= _v <= _cap:
+                raise ValueError(f"{_n} must be an integer 1..{_cap}; got {_v!r}")
+        self._grid_shape = (int(gridrows), int(gridcols))
+        from .vis_grid_source import COLOR_SCOPES
+        if gridcolor not in COLOR_SCOPES:
+            raise ValueError(f"gridcolor must be one of {COLOR_SCOPES}; got {gridcolor!r}")
+        self._grid_color = gridcolor
+        self._exprange = parse_exprange(exprange)
+        self._grid_on = False          # set from layout= in _resolve_config
+        self._grid_source = None
+        self._grid_view = None
         # Presets keep the layout instead of setting their own (2026-10-10;
         # the "Pin layout" checkbox starts from this).
         self._pin_layout = bool(pin_layout)
@@ -2882,6 +3425,10 @@ class VisibilityPlotter:
         # Per-panel configuration (HRS A2, 2026-10-11); resolved in
         # _resolve_config into self._slot_cfg.
         self._panels_arg = panels
+        # The Grid layout's own panel (gridplot G3, 2026-11-13): what the
+        # grid repeats in every cell, apart from Panels A and B.  None: a
+        # copy of Panel A, made the first time Grid is shown.
+        self._grid_panel_arg = grid_panel
 
         # A failure once the data are open closes them (and a remote
         # kernel) here, not in __del__ at interpreter exit, where closing a
@@ -3039,7 +3586,7 @@ class VisibilityPlotter:
         return opts
 
     def _size_spec_json(self) -> str:
-        from .panel_sizes import size_value
+        from ..gridplot.panel_sizes import size_value
         return json.dumps({"row_height": size_value(self._row_height),
                            "column_width": size_value(self._column_width)})
 
@@ -3051,7 +3598,7 @@ class VisibilityPlotter:
         sizes = msg.get("sizes") if isinstance(msg, dict) else None
         if not isinstance(sizes, dict):
             return
-        from .panel_sizes import parse_size, SizeError
+        from ..gridplot.panel_sizes import parse_size, SizeError
         for key, attr in (("row_height", "_row_height"),
                           ("column_width", "_column_width")):
             if key in sizes:
@@ -3064,7 +3611,7 @@ class VisibilityPlotter:
         """``_plot_width`` / ``_plot_height``: the canvas each panel is
         first drawn at -- the first position's cell for the layout, from
         ``row_height`` / ``column_width`` (``panel_sizes.cell_sizes``)."""
-        from .panel_sizes import cell_sizes
+        from ..gridplot.panel_sizes import cell_sizes
         lay = self._layout if getattr(self, "_layout", None) in ("one", "side", "over") else "side"
         self._plot_width, self._plot_height = cell_sizes(
             self._row_height, self._column_width, lay)[0]
@@ -3165,6 +3712,12 @@ class VisibilityPlotter:
         # _build_panels' slot-kind assignment below) ever needs to know
         # the shortcut exists. See _normalize_layout_kind.
         self._layout, self._kind = _normalize_layout_kind(layout, kind)
+        # The Grid layout (gridplot G2, 2026-11-11) is a mode over the
+        # panel layouts: _layout keeps the panel arrangement a drill-down
+        # returns to (One), _grid_on says the grid is what is shown.
+        self._grid_on = self._layout == "grid"
+        if self._grid_on:
+            self._layout = "one"
         self._preset        = (preset.lower().replace("_", "-")
                                if preset else None)
         self._time_range    = time_range
@@ -3196,7 +3749,7 @@ class VisibilityPlotter:
         # stay as the canvas each panel is first drawn at: the first
         # position's cell for the layout (the browser then sends the real
         # size with every Plot and redraw).
-        from .panel_sizes import parse_size, cell_sizes, SizeError
+        from ..gridplot.panel_sizes import parse_size, cell_sizes, SizeError
         try:
             self._row_height   = parse_size("row_height", row_height)
             self._column_width = parse_size("column_width", column_width)
@@ -3285,7 +3838,8 @@ class VisibilityPlotter:
         _avail = _data_correlations(self._meta)
         for _i, _c in enumerate([self._raster_corr] + [
                 _normalize_raster_corr((d or {}).get("raster_corr"))
-                for d in (getattr(self, "_panels_arg", None) or [])
+                for d in (list(getattr(self, "_panels_arg", None) or [])
+                          + [getattr(self, "_grid_panel_arg", None)])
                 if isinstance(d, dict)]):
             if _c not in ("auto", "parallel") and _avail and _c not in _avail:
                 raise ValueError(
@@ -3415,11 +3969,11 @@ class VisibilityPlotter:
         # Per-panel configuration (HRS A2): what each slot is built from.
         # Defaults come from the flat arguments and the preset, exactly as
         # before; panels=[...] overrides them per slot.
-        self._slot_cfg = self._resolve_slot_configs(
-            getattr(self, "_panels_arg", None))
+        cfgs = self._resolve_slot_configs(getattr(self, "_panels_arg", None))
+        self._slot_cfg, self._grid_cfg = cfgs[:2], cfgs[2]
         self._kind = self._slot_cfg[0]["kind"]
 
-    # Keys a panels=[...] dict may hold (HRS A2).  Raster-only colour
+    # Keys a panels=[...] dict may hold (HRS A2).  Raster-only color
     # scale keys have no flat argument.
     _PANEL_KEYS = ("kind", "raster_y", "raster_x", "raster_qty", "averaging",
                    "raster_corr",
@@ -3430,7 +3984,9 @@ class VisibilityPlotter:
     MAX_PANELS = 2
 
     def _resolve_slot_configs(self, panels) -> list:
-        """One fully resolved settings dict per slot (A, B).
+        """One fully resolved settings dict per slot (A, B), and a third
+        for the Grid layout's own panel (G: Panel A's, then
+        ``grid_panel=``).
 
         Starts from what the flat arguments and ``preset`` give each slot
         -- slot A: the flat values; slot B: the complementary kind, or
@@ -3472,63 +4028,80 @@ class VisibilityPlotter:
         for i, d in enumerate(panels):
             if d is None:
                 continue
-            if not isinstance(d, dict):
-                raise ValueError(f"panels[{i}] must be a dict, not {type(d).__name__}")
-            bad = sorted(set(d) - set(self._PANEL_KEYS))
-            if bad:
-                raise ValueError(
-                    f"panels[{i}]: unknown key(s) {', '.join(bad)}; "
-                    f"allowed: {', '.join(self._PANEL_KEYS)}")
-            c = cfgs[i]
-            tag = f"panels[{i}]"
-            if "kind" in d:
-                if d["kind"] not in ("raster", "scatter"):
-                    raise ValueError(f"{tag}: kind must be 'raster' or 'scatter'")
-                c["kind"] = d["kind"]
-            for k, opts in (("raster_y", _RASTER_AXIS_OPTIONS),
-                            ("raster_x", _RASTER_AXIS_OPTIONS),
-                            ("raster_qty", _RASTER_QTY_OPTIONS),
-                            ("scatter_x", _SCATTER_X_OPTIONS),
-                            ("scatter_y", _SCATTER_Y_OPTIONS)):
-                if k in d:
-                    v = d[k]
-                    c[k] = (v if isinstance(v, Axis)
-                            else _resolve_axis_arg(v, opts, f"{tag}.{k}", c[k]))
-            norm = {"averaging": normalize_averaging,
-                    "raster_corr": _normalize_raster_corr,
-                    "baseline_order": normalize_baseline_order,
-                    "baseline_combine": normalize_baseline_combine,
-                    "stat_time_window": normalize_time_window,
-                    "stat_chan_window": normalize_chan_window,
-                    "scatter_avg_time": normalize_avg_time,
-                    "scatter_avg_chan": normalize_avg_chan}
-            for k, f in norm.items():
-                if k in d:
-                    try:
-                        c[k] = f(d[k])
-                    except ValueError as exc:
-                        raise ValueError(f"{tag}.{k}: {exc}") from None
-            if "detrend" in d:
-                c["detrend"] = bool(d["detrend"])
-            if any(k in d for k in ("detrend", "stat_time_window", "stat_chan_window")):
-                c["scatter_stat_own"] = True
-            if "scaling" in d:
-                from . import colormap_scaling as _cms
-                if d["scaling"] not in _cms.ALL_SCALINGS:
-                    raise ValueError(f"{tag}.scaling must be one of "
-                                     f"{', '.join(_cms.ALL_SCALINGS)}")
-                c["scaling"] = d["scaling"]
-            for k in ("vmin", "vmax"):
-                if k in d and d[k] is not None:
-                    c[k] = float(d[k])
-            if c["raster_y"] == c["raster_x"]:
-                raise ValueError(f"{tag}: raster_y and raster_x must differ")
+            self._apply_panel_dict(cfgs[i], d, f"panels[{i}]")
         for i, c in enumerate(cfgs):
             problem = (raster_axes_problem(c["raster_y"], c["raster_x"])
                        if c.get("kind") == "raster" else None)
             if problem:
                 raise ValueError(f"panel {'AB'[i]}: {problem}")
+        # The grid's own panel (gridplot G3): Panel A's settings, then
+        # grid_panel={...} on top -- the same keys as one panels= entry.
+        g = dict(cfgs[0])
+        grid_panel = getattr(self, "_grid_panel_arg", None)
+        if grid_panel is not None:
+            if not isinstance(grid_panel, dict):
+                raise ValueError("grid_panel must be a dict (the keys of one "
+                                 "panels= entry)")
+            self._apply_panel_dict(g, grid_panel, "grid_panel")
+            problem = (raster_axes_problem(g["raster_y"], g["raster_x"])
+                       if g.get("kind") == "raster" else None)
+            if problem:
+                raise ValueError(f"grid_panel: {problem}")
+        cfgs.append(g)
         return cfgs
+
+    def _apply_panel_dict(self, c: dict, d: dict, tag: str) -> None:
+        """Validate one ``panels=`` entry (or ``grid_panel=``) *d* and
+        apply it to the resolved settings *c*."""
+        if not isinstance(d, dict):
+            raise ValueError(f"{tag} must be a dict, not {type(d).__name__}")
+        bad = sorted(set(d) - set(self._PANEL_KEYS))
+        if bad:
+            raise ValueError(
+                f"{tag}: unknown key(s) {', '.join(bad)}; "
+                f"allowed: {', '.join(self._PANEL_KEYS)}")
+        if "kind" in d:
+            if d["kind"] not in ("raster", "scatter"):
+                raise ValueError(f"{tag}: kind must be 'raster' or 'scatter'")
+            c["kind"] = d["kind"]
+        for k, opts in (("raster_y", _RASTER_AXIS_OPTIONS),
+                        ("raster_x", _RASTER_AXIS_OPTIONS),
+                        ("raster_qty", _RASTER_QTY_OPTIONS),
+                        ("scatter_x", _SCATTER_X_OPTIONS),
+                        ("scatter_y", _SCATTER_Y_OPTIONS)):
+            if k in d:
+                v = d[k]
+                c[k] = (v if isinstance(v, Axis)
+                        else _resolve_axis_arg(v, opts, f"{tag}.{k}", c[k]))
+        norm = {"averaging": normalize_averaging,
+                "raster_corr": _normalize_raster_corr,
+                "baseline_order": normalize_baseline_order,
+                "baseline_combine": normalize_baseline_combine,
+                "stat_time_window": normalize_time_window,
+                "stat_chan_window": normalize_chan_window,
+                "scatter_avg_time": normalize_avg_time,
+                "scatter_avg_chan": normalize_avg_chan}
+        for k, f in norm.items():
+            if k in d:
+                try:
+                    c[k] = f(d[k])
+                except ValueError as exc:
+                    raise ValueError(f"{tag}.{k}: {exc}") from None
+        if "detrend" in d:
+            c["detrend"] = bool(d["detrend"])
+        if any(k in d for k in ("detrend", "stat_time_window", "stat_chan_window")):
+            c["scatter_stat_own"] = True
+        if "scaling" in d:
+            from ..gridplot import colormap_scaling as _cms
+            if d["scaling"] not in _cms.ALL_SCALINGS:
+                raise ValueError(f"{tag}.scaling must be one of "
+                                 f"{', '.join(_cms.ALL_SCALINGS)}")
+            c["scaling"] = d["scaling"]
+        for k in ("vmin", "vmax"):
+            if k in d and d[k] is not None:
+                c[k] = float(d[k])
+        if c["raster_y"] == c["raster_x"]:
+            raise ValueError(f"{tag}: raster_y and raster_x must differ")
 
     def _build_comm(self) -> None:
         """Phase 2a (GUI only): comm layer and reconnection handlers.
@@ -3768,7 +4341,7 @@ class VisibilityPlotter:
             else 2_000_000
         )
 
-        def _raster(c, wh, skip=False):
+        def _raster(c, wh, skip=False, grid=False):
             r = VisibilityRaster(
                 backend       = self._reader,
                 selection     = self._selection,
@@ -3784,12 +4357,12 @@ class VisibilityPlotter:
                 polarization  = _raster_polarization(c.get("raster_corr", "auto"), pols),
                 width         = wh[0],
                 height        = wh[1],
-                comm_mgr      = self._comm_mgr,
-                cursor_source = self._cursor_source,
-                enable_flagging = self._enable_flagging,
+                comm_mgr      = None if grid else self._comm_mgr,
+                cursor_source = None if grid else self._cursor_source,
+                enable_flagging = self._enable_flagging and not grid,
                 compact_toolbar = self._compact_toolbar,
-                defer_initial_render = (c["kind"] != "raster") or skip,
-                headless             = self._headless,
+                defer_initial_render = (c["kind"] != "raster") or skip or grid,
+                headless             = self._headless or grid,
                 cmap                 = raster_ramp,
                 max_cells            = _raster_max_cells,
                 **({"scaling": c["scaling"]} if c["scaling"] else {}),
@@ -3803,7 +4376,7 @@ class VisibilityPlotter:
 
         # One scatter layer per polarisation -- multi-layer compositing
         # naturally boosts density and visibility vs a single layer.
-        def _scatter(c, wh, skip=False):
+        def _scatter(c, wh, skip=False, grid=False):
             sc = VisibilityScatter(
                 backend       = self._reader,
                 selection     = self._selection,
@@ -3812,12 +4385,12 @@ class VisibilityPlotter:
                     c["scatter_y"], pols, cmaps=scatter_ramps),
                 width         = wh[0],
                 height        = wh[1],
-                comm_mgr      = self._comm_mgr,
-                cursor_source = self._cursor_source,
-                enable_flagging = self._enable_flagging,
+                comm_mgr      = None if grid else self._comm_mgr,
+                cursor_source = None if grid else self._cursor_source,
+                enable_flagging = self._enable_flagging and not grid,
                 compact_toolbar = self._compact_toolbar,
-                defer_initial_render = (c["kind"] != "scatter") or skip,
-                headless             = self._headless,
+                defer_initial_render = (c["kind"] != "scatter") or skip or grid,
+                headless             = self._headless or grid,
                 layer_cmaps          = scatter_ramps,
                 avg_time             = c["scatter_avg_time"],
                 avg_chan             = c["scatter_avg_chan"],
@@ -3835,16 +4408,20 @@ class VisibilityPlotter:
         # B raster.
         # Each slot drawn at its own cell (row_height / column_width,
         # 2026-10-13); "one" has a single cell, which slot B shares.
-        from .panel_sizes import cell_sizes
+        from ..gridplot.panel_sizes import cell_sizes
         _cells = cell_sizes(self._row_height, self._column_width, self._layout)
         _wh_a, _wh_b = _cells[0], _cells[min(1, len(_cells) - 1)]
         # A headless One-panel export draws only slot A, so slot B is not
         # rendered at all (2026-10-18: it read the whole selection for a
         # panel nobody sees -- on TW Hya, all of the memory of a raster
         # export went to slot B's scatter).
-        _skip_b = self._headless and self._layout == "one"
-        _slot_a_raster  = _raster(_ca, _wh_a)
-        _slot_a_scatter = _scatter(_ca, _wh_a)
+        _skip_b = self._headless and (self._layout == "one" or self._grid_on)
+        # A headless Grid export draws from the grid's own panel (gridplot
+        # G3): Panel A is not drawn either, only marked stale below, so a
+        # later export of the panels still brings it up to date.
+        _skip_a = self._headless and self._grid_on
+        _slot_a_raster  = _raster(_ca, _wh_a, skip=_skip_a)
+        _slot_a_scatter = _scatter(_ca, _wh_a, skip=_skip_a)
         _slot_b_scatter = _scatter(_cb, _wh_b, skip=_skip_b)
         _slot_b_raster  = _raster(_cb, _wh_b, skip=_skip_b)
 
@@ -3871,6 +4448,26 @@ class VisibilityPlotter:
         for _slot in self._slots:
             self._last_raster_selection_by_slot[_slot.id]  = self._selection
             self._last_scatter_selection_by_slot[_slot.id] = self._selection
+
+        # The Grid layout's own panel (gridplot G3, 2026-11-13): slot "G",
+        # outside self._slots (A / B, Swap, the layouts never see it).
+        # Both kinds headless and comm-free: it holds the configuration
+        # the grid repeats, and is never drawn itself -- the cells are
+        # VisGridSource's clones of it, and the grid's extent comes from
+        # the source's own union panel.  Built from grid_panel= (or Panel
+        # A's settings); without grid_panel= the browser's first Grid
+        # Plot replaces it with a copy of Panel A as it is then
+        # (_grid_tmpl_pending, _handle_plot).
+        _cg = self._grid_cfg
+        self._grid_slot = _PanelSlot(
+            id="G", kind=_cg["kind"],
+            raster=_raster(_cg, _wh_a, grid=True),
+            scatter=_scatter(_cg, _wh_a, grid=True))
+        self._grid_tmpl_pending = (getattr(self, "_grid_panel_arg", None) is None
+                                   and not self._grid_on and not self._headless)
+        if _skip_a:
+            self.__dict__.setdefault("_stale_after_selection", set()).update(
+                id(sl.active) for sl in self._slots)
 
         # Screen-position order, added 2026-07-31 alongside the Group 1/2
         # slot-indexed rework: self._slot_display_order[0] is whichever
@@ -3915,6 +4512,11 @@ class VisibilityPlotter:
         self._all_panels = [obj for slot in self._slots
                             for obj in (slot.raster, slot.scatter)]
         for _p in self._all_panels:
+            _p._time_labels = self._time_labels
+        # The grid's panel follows the theme and time labels too (its
+        # clones copy both), but is not one of the four.
+        for _p in (self._grid_slot.raster, self._grid_slot.scatter):
+            _p._theme = self._theme
             _p._time_labels = self._time_labels
         self._flags.init_panels()
 
@@ -4048,7 +4650,7 @@ class VisibilityPlotter:
         if not self._scatter_cmap_user_set:
             self._scatter_cmap_name = _palettes.default_for("scatter", theme)
             changed = True
-        # Even a user-set *name* resolves to different colours per theme,
+        # Even a user-set *name* resolves to different colors per theme,
         # because condition() trims against the background -- so the
         # ramps are recomputed either way.
         self._raster_ramp = _palettes.raster_cmap(self._raster_cmap_name,
@@ -4070,6 +4672,23 @@ class VisibilityPlotter:
         log.debug("set_theme(%r): %s re-shade of %d panels (defaults %s)",
                   theme, RefreshLevel.SHADE.name, len(self._all_panels),
                   "re-resolved" if changed else "kept (user-set)")
+        # The grid's own panel (never drawn): its palette, which the cells
+        # it makes from now on copy.
+        gs = getattr(self, "_grid_slot", None)
+        if gs is not None:
+            gs.raster._theme = gs.scatter._theme = theme
+            gs.raster._cmap = self._raster_ramp
+            try:
+                gs.scatter.set_layer_cmaps(self._scatter_ramps,
+                                           statistical_cmap=self._raster_ramp)
+            except Exception:                                # noqa: BLE001
+                log.debug("grid panel scatter re-color failed", exc_info=True)
+        # The Grid layout's cells copy the template's palette: re-color the
+        # ones kept (no re-query) -- gridplot G2
+        if getattr(self, "_grid_source", None) is not None:
+            self._grid_source.set_theme(theme, self._raster_ramp)
+        if getattr(self, "_grid_view", None) is not None:
+            self._grid_view.set_theme(theme)
 
     def _connection_text(self) -> str:
         '''What the busy chip says about a remote session's connection:
@@ -4107,6 +4726,71 @@ class VisibilityPlotter:
             curdoc().js_on_event(DocumentReady, cb)
         except Exception as exc:                      # noqa: BLE001 -- a missing nicety
             log.debug("connection status in the busy chip not installed: %s", exc)
+
+    def _help_entries(self) -> list:
+        """The help page's entries (help_text.py): every status-area hint
+        with a long form, in the order the hints were made.  ``div`` lets
+        the key handler find the one showing."""
+        out = []
+        for k, d in vars(self).items():
+            if not (k.startswith("_hint_") and isinstance(d, Div)):
+                continue
+            long_html = next((t.get("cv_long_help") for t in (d.tags or [])
+                              if isinstance(t, dict) and t.get("cv_long_help")), None)
+            if long_html:
+                name = k[len("_hint_"):]
+                out.append({"id": f"help-{name}", "title": _helptext.title_of(d.text, name),
+                            "long": long_html, "div": d})
+        return out
+
+    def _help_button(self, theme_btn):
+        """The toolbar's Help button, and the page-wide h / ? key
+        (help_text.py), installed once at page load."""
+        entries = self._help_entries()
+        btn = Button(label="? Help", button_type="default", width=70)
+        args = {"entries": entries, "theme_btn": theme_btn}
+        btn.js_on_click(CustomJS(args=args, code=_helptext.HELP_BUTTON_JS))
+        try:
+            from bokeh.events import DocumentReady
+            from bokeh.io import curdoc
+            curdoc().js_on_event(DocumentReady, CustomJS(args=args, code=_helptext.KEY_HANDLER_JS))
+        except Exception as exc:                      # noqa: BLE001
+            log.debug("help key not installed: %s", exc)
+        return btn
+
+    def _install_text_input_view_guard(self) -> None:
+        """Guard text-input views that Bokeh builds but never renders
+        (``_TEXT_INPUT_VIEW_GUARD_JS``), once per page, at load -- before
+        any gear tab is added, which is when such views are made.
+        Non-fatal if unavailable."""
+        try:
+            from bokeh.events import DocumentReady
+            from bokeh.io import curdoc
+            from bokeh.models import CustomJS
+            curdoc().js_on_event(DocumentReady, CustomJS(code=_TEXT_INPUT_VIEW_GUARD_JS))
+        except Exception as exc:                      # noqa: BLE001
+            log.debug("text input view guard not installed: %s", exc)
+
+    def _install_no_autofill(self) -> None:
+        """Stop the browser offering its form history ("80", "90", ...) in
+        every text field of the page (pre-preview feedback, 2026-11-18).
+
+        Bokeh's ``TextInput`` has no property for the ``<input>``'s
+        ``autocomplete`` attribute, and the inputs live in shadow roots
+        built when each widget is first shown (gear tabs add theirs
+        later), so per-widget wiring at construction cannot reach them
+        all; ``antenna_baseline_select.NO_AUTOFILL_JS`` did it for the
+        three selection text boxes only.  This installs, once per page,
+        two capturing listeners (``_NO_AUTOFILL_PAGE_JS``) that mark any
+        text input the pointer or the keyboard focus reaches, before the
+        browser decides to show its list.  Non-fatal if unavailable."""
+        try:
+            from bokeh.events import DocumentReady
+            from bokeh.io import curdoc
+            from bokeh.models import CustomJS
+            curdoc().js_on_event(DocumentReady, CustomJS(code=_NO_AUTOFILL_PAGE_JS))
+        except Exception as exc:                      # noqa: BLE001 -- a missing nicety
+            log.debug("page-wide autocomplete=off not installed: %s", exc)
 
     def _apply_startup_theme(self, layout) -> None:
         """Run the theme restyle once at document load, if starting light.
@@ -4226,6 +4910,8 @@ for (const dt of other.tools) {
         # Last, so every model the restyle touches already exists.
         self._apply_startup_theme(inner_layout)
         self._install_connection_status()
+        self._install_no_autofill()
+        self._install_text_input_view_guard()
 
     # ====================================================================== #
     # Stage 1b.5 — slot lookup + Stage 1b compatibility properties           #
@@ -4433,7 +5119,7 @@ for (const dt of other.tools) {
 
     def __call__(self, exec_context=None, task_id=None, *,
                  plotfile=None, nrows=None, ncols=None,
-                 theme=None, dpi=100, layout=None, **selection):
+                 theme=None, dpi=100, layout=None, exprange=None, **selection):
         """Do the thing — display in a GUI, or write a PNG.
 
         The two modes are disjoint, so one verb serves both: a plotter
@@ -4477,7 +5163,12 @@ for (const dt of other.tools) {
             Scales the chrome; the data area stays at the panel's canvas
             size.  See ``png_export``.
         layout:
-            Override the constructor's layout for this call only.
+            Override the constructor's layout for this call only
+            (``"grid"`` writes Grid layout pages).
+        exprange:
+            Grid layout: which pages to write, for this call only (see the
+            constructor's ``exprange``).  The return is then a list of
+            paths when several pages are written.
         **selection:
             Any ``SelectionSpec`` field (``spw``, ``field_names``,
             ``scan``, ``time_range``, ``freq_range``, ``correlation``,
@@ -4499,10 +5190,11 @@ for (const dt of other.tools) {
         return self._export_png(
             plotfile=plotfile, nrows=nrows, ncols=ncols,
             theme=theme, dpi=dpi, layout=layout, selection=selection,
+            exprange=exprange,
         )
 
     def _export_png(self, *, plotfile=None, nrows=None, ncols=None,
-                    theme=None, dpi=100, layout=None, selection=None):
+                    theme=None, dpi=100, layout=None, selection=None, exprange=None):
         """Render the current configuration to a PNG; return its path.
 
         Re-queries only when *selection* actually changes something --
@@ -4510,9 +5202,13 @@ for (const dt of other.tools) {
         repeatedly with no selection change re-uses the cached
         aggregations and costs only the shade.
         """
-        from .png_export import export_png
+        from ..gridplot.png_export import export_png
 
-        lay = (layout or self._layout).lower()
+        lay = (layout or ("grid" if self._grid_on else self._layout)).lower()
+        if lay == "grid":
+            return self._export_grid_png(plotfile=plotfile, nrows=nrows, ncols=ncols,
+                                         theme=theme, dpi=dpi, selection=selection,
+                                         exprange=exprange)
         if nrows is None or ncols is None:
             nrows, ncols = {"one": (1, 1), "side": (1, 2),
                             "over": (2, 1)}.get(lay, (1, 2))
@@ -4556,7 +5252,7 @@ for (const dt of other.tools) {
         # its own size.  The panels were drawn at these cells for the
         # constructor's layout, so the image stays 1:1; a layout= given
         # here only for this call scales the image into its cells.
-        from .panel_sizes import cell_sizes, GRID
+        from ..gridplot.panel_sizes import cell_sizes, GRID
         sizes = {}
         if (nrows, ncols) == GRID.get(lay):
             cells = cell_sizes(self._row_height, self._column_width, lay)
@@ -4570,6 +5266,240 @@ for (const dt of other.tools) {
         )
         log.info("wrote %s", out)
         return out
+
+    #: a grid cell's plot area for plotfile=, px, when row_height /
+    #: column_width do not give one
+    GRID_CELL = (300, 200)
+
+    # ------------------------------------------------------------------ #
+    # The Grid layout's own panel (gridplot G3, 2026-11-13)                 #
+    # ------------------------------------------------------------------ #
+    def grid_panel_settings(self) -> dict:
+        """The ``grid_panel=`` dict that reproduces the panel the grid
+        repeats: the keys of one ``panels=`` entry, with the color
+        scaling and range only where they are not the quantity's
+        default."""
+        from .plot_summary import _slot_settings
+        from .scaling_memory import default_scaling_settings
+        d = _slot_settings(self, self._grid_slot)
+        if d.get("kind") == "raster":
+            r = self._grid_slot.raster
+            dflt = default_scaling_settings(r._quantity)
+            if d.get("scaling") == dflt.scaling:
+                d.pop("scaling", None)
+            for k in ("vmin", "vmax"):
+                if k in d and d[k] == getattr(dflt, k):
+                    d.pop(k)
+        return d
+
+    def set_grid_panel(self, settings: dict) -> None:
+        """Make the panel the grid repeats *settings* (the keys of one
+        ``panels=`` entry) on top of Panel A's defaults -- the color
+        scaling and range are the quantity's defaults unless given.
+        Validated as ``grid_panel=`` is; nothing is drawn (the grid draws
+        its cells from it at the next Plot)."""
+        base = dict(self._grid_cfg, scaling=None, vmin=None, vmax=None)
+        c = dict(base)
+        self._apply_panel_dict(c, dict(settings), "grid panel")
+        if c.get("kind") == "raster":
+            problem = raster_axes_problem(c["raster_y"], c["raster_x"])
+            if problem:
+                raise ValueError(f"grid panel: {problem}")
+        self._grid_cfg = c
+        self._configure_grid_slot(c)
+        self._grid_tmpl_pending = False
+
+    def _configure_grid_slot(self, c: dict) -> None:
+        """Set slot G's two (never drawn) panels from the resolved
+        settings *c*, without a query: VisGridSource copies them into
+        each cell."""
+        from .axes import AxisInfo
+        from .scaling_memory import default_scaling_settings
+        gs = self._grid_slot
+        gs.kind = c["kind"]
+        pols = self._selection.correlation or ["XX"]
+        r = gs.raster
+        r._y_dim, r._x_dim = c["raster_y"], c["raster_x"]
+        r._y_info, r._x_info = AxisInfo.direct(r._y_dim), AxisInfo.direct(r._x_dim)
+        r._quantity = c["raster_qty"]
+        r._scaling_owner = r._quantity
+        r._averaging = c["averaging"]
+        r._baseline_order = c["baseline_order"]
+        r._baseline_combine = c["baseline_combine"]
+        r._detrend = bool(c["detrend"])
+        r._stat_time_window = c["stat_time_window"]
+        r._stat_chan_window = c["stat_chan_window"]
+        r._corr_choice = c.get("raster_corr", "auto")
+        r._polarization = _raster_polarization(r._corr_choice, pols)
+        r._selection = self._selection
+        st = default_scaling_settings(r._quantity,
+                                      getattr(r, "_scaling_alpha_default", r._scaling_alpha),
+                                      getattr(r, "_scaling_gamma_default", r._scaling_gamma))
+        r._load_scaling_settings(st)
+        if c.get("scaling"):
+            r._scaling = c["scaling"]
+        if c.get("vmin") is not None:
+            r._scaling_vmin, r._zscore_vmin_auto = float(c["vmin"]), False
+        if c.get("vmax") is not None:
+            r._scaling_vmax = float(c["vmax"])
+        sc = gs.scatter
+        sc._x_dim = c["scatter_x"]
+        sc._layers = sc._with_default_cmaps(_make_scatter_layers(
+            c["scatter_y"], pols, cmaps=self._scatter_ramps))
+        sc._avg_time, sc._avg_chan = c["scatter_avg_time"], c["scatter_avg_chan"]
+        sc._averaging = c["averaging"]
+        if c.get("scatter_stat_own"):
+            sc._detrend = bool(c["detrend"])
+            sc._stat_time_window = c["stat_time_window"]
+            sc._stat_chan_window = c["stat_chan_window"]
+        sc._selection = self._selection
+
+    def _grid_panel_from(self, slot) -> dict:
+        """*slot*'s settings as a ``grid_panel=`` dict -- both kinds, so
+        the grid's tab has both to show (the copy of Panel A)."""
+        from .plot_summary import _slot_settings
+        from .scaling_memory import default_scaling_settings
+        kind = slot.kind
+        try:
+            slot.kind = "raster"
+            d = _slot_settings(self, slot)
+            slot.kind = "scatter"
+            d.update({k: v for k, v in _slot_settings(self, slot).items()
+                      if k not in ("kind", "averaging")})
+        finally:
+            slot.kind = kind
+        d["kind"] = kind
+        r = slot.raster
+        if r._quantity is not None:
+            dflt = default_scaling_settings(r._quantity)
+            if d.get("scaling") == dflt.scaling:
+                d.pop("scaling", None)
+            for k in ("vmin", "vmax"):
+                if k in d and d[k] == getattr(dflt, k):
+                    d.pop(k)
+        return d
+
+    @staticmethod
+    def _apply_drill_color(panel, col: dict) -> None:
+        """Give a raster the grid panel's color scaling (a drill-down):
+        scaling, alpha, gamma, and the range -- ``None`` is automatic."""
+        from .scaling_memory import ScalingSettings
+        cur = panel._current_scaling_settings()
+        def num(v, dflt):
+            try:
+                return dflt if v is None else float(v)
+            except (TypeError, ValueError):
+                return dflt
+        panel._load_scaling_settings(ScalingSettings(
+            scaling=col.get("scaling") or cur.scaling,
+            alpha=num(col.get("alpha"), cur.alpha),
+            gamma=num(col.get("gamma"), cur.gamma),
+            vmin=num(col.get("vmin"), None), vmax=num(col.get("vmax"), None)))
+        panel._reshade_image()
+
+    def _grid_tab_values(self) -> dict:
+        """What the grid's tab shows for slot G's settings (the copy of
+        Panel A is made in Python, so the browser is told)."""
+        c = self._grid_cfg
+        return {
+            "kind": c["kind"],
+            "ry": c["raster_y"].name, "rx": c["raster_x"].name,
+            "rq": c["raster_qty"].name, "rk": c.get("raster_corr", "auto"),
+            "ra": c["averaging"], "rb": c["baseline_order"],
+            "rm": c["baseline_combine"],
+            "rd": "remove" if c["detrend"] else "keep",
+            "rt": _window_value(c["stat_time_window"]),
+            "rc": _window_value(c["stat_chan_window"]),
+            "sx": c["scatter_x"].name, "sy": c["scatter_y"].name,
+            "sat": _window_value(c["scatter_avg_time"]),
+            "sac": _window_value(c["scatter_avg_chan"]),
+            "sam": c["averaging"],
+            "scaling": c.get("scaling") or "auto",
+            "vmin": "" if c.get("vmin") is None else f"{c['vmin']:.6g}",
+            "vmax": "" if c.get("vmax") is None else f"{c['vmax']:.6g}",
+        }
+
+    def _grid_cell_size(self) -> tuple:
+        w, h = self.GRID_CELL
+        if isinstance(self._column_width, int) and not isinstance(self._column_width, bool):
+            w = self._column_width
+        if isinstance(self._row_height, int) and not isinstance(self._row_height, bool):
+            h = self._row_height
+        return int(w), int(h)
+
+    def _grid(self):
+        """The grid's source, configured from the grid's own panel (slot
+        G, gridplot G3) and the selection as they are now."""
+        from .vis_grid_source import VisGridSource
+        if self._grid_source is None:
+            self._grid_source = VisGridSource(self, self._iterate_by)
+        gs = self._grid_slot
+        gs.raster._selection = gs.scatter._selection = self._selection
+        return self._grid_source.configure(template=gs.active, iterate_by=self._iterate_by)
+
+    def _export_grid_png(self, *, plotfile=None, nrows=None, ncols=None, theme=None,
+                         dpi=100, selection=None, exprange=None):
+        """The Grid layout's pages as PNG files (gridplot G2): the pages
+        ``exprange`` names, each a ``png_export`` page of the first panel
+        once per baseline / antenna / ... (``iterate_by``).  Returns the
+        path, or the list of paths when several pages are written."""
+        import math
+        import re
+        from ..gridplot.png_export import export_png
+        if selection:
+            # nothing is drawn for the grid but its cells: the panels are
+            # marked stale (gridplot G3: the grid has its own panel)
+            self._apply_selection_overrides(selection, panels=[])
+        if theme is not None and theme != self._theme:
+            self.set_theme(theme)
+        src = self._grid()
+        rows = int(nrows or self._grid_shape[0])
+        cols = int(ncols or self._grid_shape[1])
+        labels = src.labels()
+        rows, cols = fit_grid_shape(rows, cols, len(labels))   # as the browser shows it
+        per = rows * cols
+        n_pages = max(1, math.ceil(len(labels) / per))
+        want = parse_exprange(exprange) if exprange is not None else self._exprange
+        if want == "current":
+            pages = [1]
+        elif want == "all":
+            pages = list(range(1, n_pages + 1))
+        else:
+            pages = [p for p in want if p <= n_pages]
+            if len(pages) < len(want):
+                log.warning("exprange: only %d page(s) at %d x %d; pages %s skipped",
+                            n_pages, rows, cols, [p for p in want if p > n_pages])
+            if not pages:
+                raise ValueError(f"exprange: no page of {n_pages} is in {want}")
+        base = (str(plotfile or "").strip() or (getattr(self, "_plotfile", None) or "")
+                or self._default_plotfile())
+        root, ext = os.path.splitext(base)
+        ext = ext or ".png"
+        vp = src.extent()
+        size = self._grid_cell_size()
+        footer = self._status_text()
+        color = self._grid_color
+        if color == "grid":
+            src.wait_for_grid_range()
+        out = []
+        for page in pages:
+            idx = list(range((page - 1) * per, min(len(labels), page * per)))
+            rendered = src.render(idx, vp, size, color=color) if idx else []
+            first = re.sub(r"[^\w.+-]+", "_", labels[idx[0]]) if idx else "empty"
+            if "{page}" in base or "{value}" in base:
+                path = base.replace("{page}", f"{page:02d}").replace("{value}", first)
+            elif len(pages) > 1:
+                path = f"{root}_page{page:02d}{ext}"
+            else:
+                path = base
+            used_rows = max(1, math.ceil(max(1, len(rendered)) / cols))
+            # a cell with axes of its own (an axes override) labels them
+            own = any(getattr(rp, "own_scale", False) for rp in rendered)
+            out.append(export_png(rendered, path, nrows=used_rows, ncols=cols,
+                                  footer=footer, theme=self._theme, dpi=dpi,
+                                  axes="each" if own else "outer"))
+            log.info("wrote %s (grid page %d of %d)", out[-1], page, n_pages)
+        return out[0] if len(out) == 1 else out
 
     def _apply_selection_overrides(self, overrides: dict, panels=None) -> None:
         """Update ``_selection`` in place and re-render the panels -- all of
@@ -4669,7 +5599,7 @@ for (const dt of other.tools) {
         fresh query that might differ.
         """
         import os
-        from .png_export import export_png
+        from ..gridplot.png_export import export_png
 
         panels_msg = msg.get("panels") or []
         if msg.get("layout") in ("one", "side", "over"):
@@ -4769,6 +5699,9 @@ for (const dt of other.tools) {
         self._time_labels = mode
         for panel in self._all_panels:
             panel.set_time_labels(mode)
+        gs = getattr(self, "_grid_slot", None)
+        if gs is not None:
+            gs.raster._time_labels = gs.scatter._time_labels = mode
 
     def describe(self, slot: str = "A", viewport=None, html: bool = False):
         """What panel *slot* shows and how it was made, and the
@@ -4915,6 +5848,121 @@ for (const dt of other.tools) {
         return out
 
     async def _handle_plot(self, msg, context=None):
+        """Plot ▶ (and Reload, presets, steppers).  In the Grid layout
+        the grid's own panel (slot G, gridplot G3) takes the request's
+        ``panels["G"]``, the selection is updated, and the grid's source
+        is configured from them; Panels A and B are not drawn (they are
+        drawn when shown again: the response says ``panels_stale``).  The
+        browser draws page 1 on the response's ``grid``.
+
+        The first Plot in Grid without ``grid_panel=`` makes the grid's
+        panel a copy of the panel shown first (Panel A, unless swapped),
+        as it is then, and sends the grid's tab its values
+        (``grid_template``)."""
+        from .vis_grid_source import GridTemplateError, normalize_iterate_by
+        grid = msg.get("layout") == "grid"
+        if "layout" in msg:
+            self._grid_on = grid
+        if not grid:
+            return await self._handle_plot_panels(msg, context)
+
+        msg = dict(msg)
+        msg["layout"] = self._layout
+        gmsg = (msg.get("panels") or {}).get(self._grid_slot.id)
+        msg["panels"] = {}                     # A and B are not drawn in Grid
+        try:
+            r, c = (int(v) for v in msg.get("grid_shape") or ())
+            if 1 <= r <= 8 and 1 <= c <= 8:
+                self._grid_shape = (r, c)          # for plotfile= and the summary
+        except (TypeError, ValueError):
+            pass
+        if msg.get("grid_color") in ("cell", "page", "grid"):
+            self._grid_color = msg["grid_color"]
+
+        def _error(text, **extra):
+            text = f"⚠ {text}"
+            self._notify(text)
+            return dict({"status": "error", "status_text": text,
+                         "notify_text": text, "notify_color": "#f38ba8"}, **extra)
+
+        if msg.get("iterate_by"):
+            try:
+                self._iterate_by = normalize_iterate_by(msg["iterate_by"])
+            except ValueError as exc:
+                return _error(exc)
+        resp = await self._handle_plot_panels(msg, context)
+        if not isinstance(resp, dict) or resp.get("status") != "ok":
+            return resp
+        copied = False
+        try:
+            if self._grid_tmpl_pending:
+                try:
+                    src_slot = self._slot_by_id(msg.get("grid_slot"))
+                except ValueError:
+                    src_slot = self._slots[self._slot_display_order[0]]
+                self.set_grid_panel(self._grid_panel_from(src_slot))
+                copied = True
+            elif gmsg:
+                self.set_grid_panel(self._grid_panel_from_msg(gmsg))
+            else:
+                self._configure_grid_slot(self._grid_cfg)    # the new selection
+        except ValueError as exc:
+            return _error(f"Grid panel: {exc}", failed_slot=self._grid_slot.id)
+        try:
+            from .vis_grid_source import VisGridSource
+            if self._grid_source is None:
+                self._grid_source = VisGridSource(self, self._iterate_by)
+            src = await asyncio.to_thread(self._grid)
+        except GridTemplateError as exc:
+            return dict(_error(exc), failed_slot=self._grid_slot.id,
+                        **({"grid_template": self._grid_tab_values()} if copied else {}))
+        resp["grid"] = {"n_cells": len(src.labels()), "iterate_by": self._iterate_by}
+        resp["panels_stale"] = True
+        if copied:
+            resp["grid_template"] = self._grid_tab_values()
+        resp["status_text"] = self._status_text()
+        return resp
+
+    def _grid_panel_from_msg(self, m: dict) -> dict:
+        """The grid's tab as Plot sends it -- ``{kind, raster: {...},
+        scatter: {...}, color: {...}}`` -- as a ``grid_panel=`` dict.
+        Both kinds' choices are kept (the tab shows both); the shared
+        keys (averaging, slope, windows) come from the kind shown.
+        Staged color: ``scaling`` "auto" and empty min / max are the
+        quantity's defaults."""
+        kind = m.get("kind") or "raster"
+        ra, sc = m.get("raster") or {}, m.get("scatter") or {}
+        d = {"kind": kind}
+        for key, k in (("raster_y", "y"), ("raster_x", "x"), ("raster_qty", "qty"),
+                       ("baseline_order", "baseline_order"),
+                       ("baseline_combine", "baseline_combine"),
+                       ("raster_corr", "raster_corr")):
+            if ra.get(k):
+                d[key] = ra[k]
+        for key, k in (("scatter_x", "x"), ("scatter_y", "y"),
+                       ("scatter_avg_time", "avg_time"), ("scatter_avg_chan", "avg_chan")):
+            if sc.get(k):
+                d[key] = sc[k]
+        own = ra if kind == "raster" else sc
+        for key, k in (("averaging", "averaging"), ("stat_time_window", "twin"),
+                       ("stat_chan_window", "cwin")):
+            if own.get(k):
+                d[key] = own[k]
+        if own.get("detrend") in ("remove", "keep"):
+            d["detrend"] = own["detrend"] == "remove"
+        col = m.get("color") or {}
+        if col.get("scaling") not in (None, "", "auto"):
+            d["scaling"] = col["scaling"]
+        for k in ("vmin", "vmax"):
+            v = col.get(k)
+            if v not in (None, ""):
+                try:
+                    d[k] = float(v)
+                except (TypeError, ValueError):
+                    raise ValueError(f"{k} must be a number, not {v!r}") from None
+        return d
+
+    async def _handle_plot_panels(self, msg, context=None):
         # Validation-error auto-switch-to-tab (added 2026-08-03) — the
         # last piece of decision 9's originally-settled gear/Tabs design
         # never built. Every error return below now includes
@@ -5263,6 +6311,13 @@ for (const dt of other.tools) {
                             )
                         self._last_raster_selection_by_slot[slot.id] = self._selection
                     panel._corr_choice = rk
+                    # A drill-down from the grid (gridplot G3) brings the
+                    # grid panel's color scaling with it.
+                    col = panel_msg.get("color")
+                    if isinstance(col, dict) and col.get("scaling"):
+                        async with panel._render_lock:
+                            await asyncio.to_thread(
+                                self._apply_drill_color, panel, col)
                 except Exception as exc:
                     log.error("_handle_plot: panel %s raster update_axes "
                               "failed: %s", slot.id, exc, exc_info=True)
@@ -5305,6 +6360,10 @@ for (const dt of other.tools) {
                                if axes_changed else None,
                     "title":   panel._effective_title() if axes_changed else None,
                     "state":   panel._state_data()      if axes_changed else None,
+                    # The color-scaling controls follow the picture
+                    # (colormap_sync, 2026-11-18): always sent, since the
+                    # histogram changes with the data, not only the axes.
+                    "cmap":    self._cmap_states(panel),
                 }
 
             else:  # kind == "scatter"
@@ -5515,6 +6574,9 @@ for (const dt of other.tools) {
                     # the gear tab's selectors (info_panel.py).
                     "legend_html":   panel._legend_content.text,
                     "colorbar_html": panel._update_colorbar(),
+                    # One entry per layer (colormap_sync): see the raster
+                    # branch.
+                    "cmap":          self._cmap_states(panel),
                 }
 
         # Part 5d: a categorical layer whose every value is unchecked draws
@@ -5735,8 +6797,11 @@ window.__cvPlotPending(true);
         skip = {"status_div", "notify_div", "plot_btn", "reload_btn", "sidebar",
                 "toggle_btn", "gear_tabs", "layout_rbg", "panel_a_pin", "panel_b_pin"}
         seen = set()
-        for name, w in js_args.items():
-            if name in skip or w is None or id(w) in seen:
+        # The grid's tab (gridplot G3) is staged like a gear tab.
+        items = list(js_args.items()) + [
+            (f"grid_tmpl.{k}", v) for k, v in (js_args.get("grid_tmpl") or {}).items()]
+        for name, w in items:
+            if name in skip or w is None or isinstance(w, (dict, list)) or id(w) in seen:
                 continue
             seen.add(id(w))
             if isinstance(w, (Select, TextInput)):
@@ -5778,12 +6843,12 @@ window.__cvPlotPending(true);
         if getattr(widget, "width", None) is not None:
             kw["width"] = widget.width
         wrap = EvHover(child=widget, **kw)
-        args = {"hint": hint, "status_row": row, "all_hints": self._hint_divs()}
-        wrap.js_on_event(MouseEnter, CustomJS(args=args, code=(
-            "for (const h of all_hints) { if (h !== hint) h.visible = false; } "
-            "status_row.visible = false; hint.visible = true;")))
-        wrap.js_on_event(MouseLeave, CustomJS(args=args, code=(
-            "hint.visible = false; status_row.visible = true;")))
+        args = {"hint": hint, "status_row": row, "all_hints": self._hint_divs(),
+                "status_div": getattr(self, "_status_div", None),
+                "notify_div": getattr(self, "_notify_div", None)}
+        # A warning stays visible above the help (_SHOW_HINT_JS).
+        wrap.js_on_event(MouseEnter, CustomJS(args=args, code=_SHOW_HINT_JS))
+        wrap.js_on_event(MouseLeave, CustomJS(args=args, code=_HIDE_HINT_JS))
         return wrap
 
     def _tick_text_input(self, placeholder: str, dark):
@@ -5925,6 +6990,8 @@ cvApplySelectionText(
         fname        = os.path.basename(self._source_path)
         layout_label = {"one": "One panel", "side": "Side by Side",
                         "over": "Over / Under"}.get(self._layout, self._layout)
+        if getattr(self, "_grid_on", False):
+            layout_label = "Grid by " + ", then ".join(self._iterate_by.split(","))
 
         # I-1 (Phase 2.5): once a single field/SPW is selected -- via
         # Prev/Next or a manual pick, the two are indistinguishable here
@@ -6012,6 +7079,291 @@ cvApplySelectionText(
     # Layout construction                                                      #
     # ====================================================================== #
 
+    #: labels of the Grid layout's "Iterate by" menu
+    _GRID_ITERATE_LABELS = {"baseline": "Baseline", "antenna": "Antenna", "spw": "SPW",
+                            "field": "Field", "scan": "Scan", "correlation": "Correlation"}
+    #: the area a grid page fills in the GUI, px
+    GRID_AREA = (_PANEL_WIDTH_FULL, 640)
+
+    def _build_grid(self) -> None:
+        """The Grid layout (gridplot G2): a ``GridView`` of a
+        ``VisGridSource``, its "Iterate by" menu, and the container the
+        Layout buttons show.  Built with the rest of the GUI (no Bokeh
+        server: every model exists before the page does); drawn on the
+        first Plot in Grid, or at once when the plotter starts in it."""
+        from bokeh.models import CustomJS, Select
+        from ..gridplot.grid_view import GridView, MAX_POOL
+        from .vis_grid_source import GridTemplateError, ITERATE_BY, VisGridSource
+        if self._grid_source is None:
+            self._grid_source = VisGridSource(self, self._iterate_by)
+        autoload = False
+        if self._grid_on:
+            try:
+                self._grid()
+                autoload = True
+            except GridTemplateError as exc:
+                self._notify(f"⚠ {exc}")
+        from .vis_grid_source import iterate_axes
+        axes = iterate_axes(self._iterate_by)
+        self._grid_iter_sel = Select(
+            title="Iterate by", value=axes[0], width=110,
+            options=[(k, self._GRID_ITERATE_LABELS[k]) for k in ITERATE_BY])
+        # compound iteration (gridplot G3 item 4, 2026-11-14): "Antenna,
+        # then SPW" -- each antenna's SPWs in turn
+        self._grid_then_sel = Select(
+            title="then", value=axes[1] if len(axes) > 1 else "", width=110,
+            options=[("", "—")] + [(k, self._GRID_ITERATE_LABELS[k]) for k in ITERATE_BY])
+        # filled in by _wire_grid, once doPlot exists
+        self._grid_drill_js = CustomJS(code="")
+        # Back to Grid (or away from it) by the Layout buttons: the status
+        # line from Python (_grid_shown); filled in by _wire_grid
+        self._grid_shown_js = CustomJS(code="")
+        # Play with every cell on one page steps the sidebar's stepper
+        # (2026-11-13); filled in by _wire_grid, once the steppers exist
+        self._grid_play_js = CustomJS(code="")
+        rows, cols = self._grid_shape
+        pool = (min(MAX_POOL[0], max(6, rows)), min(MAX_POOL[1], max(6, cols)))
+        # The grid's gear (gridplot G3, 2026-11-13): as each panel's gear
+        # opens its tab, this opens the grid's panel in the sidebar.  Its
+        # callback's arguments are filled in by _place_grid_controls, once
+        # the tab exists.
+        from bokeh.models import CustomAction
+        self._grid_gear_js = CustomJS(code="")
+        self._grid_gear = CustomAction(icon=_GEAR_ICON_DATA_URI,
+                                       description="Configure the grid's panel",
+                                       callback=self._grid_gear_js)
+        self._grid_view = GridView(
+            self._grid_source, self._comm_mgr, rows=rows, cols=cols, pool=pool,
+            area=self.GRID_AREA, theme=self._theme, on_drill=self._grid_drill,
+            drill_js=self._grid_drill_js, play_outer=self._grid_play_js, autoload=autoload,
+            on_shown=self._grid_shown, shown_js=self._grid_shown_js,
+            app_context=self._app_context, embedded=True, color=self._grid_color,
+            extra_tools=[self._grid_gear],
+            idle_text="Press <b>Plot &#9654;</b> to draw the grid")
+        self._place_grid_controls()
+        self._grid_container = column(self._grid_view.layout)
+        # Empty until Grid is first shown (window.__cvGridLayout attaches the
+        # grid): the browser builds a view for every cell of a layout even
+        # when it is hidden -- 1.4 s more at every page load for a 6 x 6
+        # pool (2026-11-11) -- and the models are in the document anyway,
+        # through __cvGridLayout's arguments.
+        self._grid_area = column(*([self._grid_container] if self._grid_on else []),
+                                 sizing_mode="stretch_both", styles={"overflow": "auto"},
+                                 visible=self._grid_on)
+        # cells sized to the room the window gives the grid (a 1 x 1 page
+        # fills it), GRID_AREA until the browser has measured it
+        self._grid_view.fit_to(self._grid_area)
+
+    def _place_grid_controls(self) -> None:
+        """The grid's controls where visplot's own are (Darrell, 2026-11-11:
+        the grid's control row took the plots' room): what is drawn -- Iterate
+        by, Rows, Cols, Scale, Color, Pages/s, Loop -- in a Grid section at the top
+        of the sidebar; paging and Play in the toolbar; the "drawn in" line
+        and the cursor readout above the status bar.  Each is shown only in
+        Grid (``window.__cvGridLayout``)."""
+        from bokeh.models import Div
+        w = self._grid_view.widgets
+        sel_rows, sel_cols, sel_scale = w["shape"]
+        b_play, sel_speed, cb_loop = w["play"]
+        self._grid_iter_sel.width = 125
+        self._grid_then_sel.width = 110
+        sel_scale.width = 110
+        sel_rows.width = sel_cols.width = 62
+        sel_speed.width = 76
+        sel_color = w["color"]
+        sel_color.width = 100
+        side = [self._grid_iter_sel, self._grid_then_sel, sel_scale, sel_rows, sel_cols,
+                sel_color, sel_speed, cb_loop]
+        for x in side:
+            # visplot's widget sheet first: the theme restyle swaps sheet 0
+            x.stylesheets = [self._dark()] + list(x.stylesheets)
+        self._grid_sidebar_widgets = side
+        head = Div(text=f"<span style='color:{_SECTION_DARK};font-weight:bold'>Grid</span>",
+                   width=_SIDEBAR_WIDTH)
+        head.tags = ["section-label", "Grid"]
+        self._section_divs.append(head)
+        # The grid's own panel (gridplot G3): a tab of its own, opened by
+        # its button (there is no panel figure in Grid to carry a gear).
+        from bokeh.models import Button, CustomJS
+        dark = self._dark()
+        self._grid_tab, self._grid_tab_widgets = self._build_grid_panel_tab(dark)
+        self._grid_tab_btn = Button(label="\u2699 Grid panel \u25b8", width=_SIDEBAR_WIDTH,
+                                    button_type="default", stylesheets=[dark])
+        self._grid_tab_btn.js_on_click(CustomJS(
+            args={"tab": self._grid_tab, "btn": self._grid_tab_btn},
+            code="""
+tab.visible = !tab.visible;
+btn.label = '\u2699 Grid panel ' + (tab.visible ? '\u25be' : '\u25b8');
+"""))
+        # The toolbar's gear: the sidebar shown, the tab open, and the
+        # sidebar scrolled to it (the Grid section is at the top, but the
+        # sidebar may have been scrolled down to the selection).
+        self._grid_gear_js.args = {"tab": self._grid_tab, "btn": self._grid_tab_btn,
+                                   "sidebar": self._sidebar_col,
+                                   "toggle_btn": getattr(self, "_sidebar_toggle_btn", None)}
+        self._grid_gear_js.code = """
+if (!sidebar.visible) {
+    sidebar.visible = true;
+    if (toggle_btn) toggle_btn.label = '\u27e8';
+}
+tab.visible = true;
+btn.label = '\u2699 Grid panel \u25be';
+setTimeout(function () {
+    const v = Bokeh.index.find_one_by_id(btn.id);
+    if (v && v.el) v.el.scrollIntoView({block: 'start', behavior: 'smooth'});
+}, 60);
+"""
+        side += [self._grid_tab_btn] + [w for w in self._grid_tab_widgets.values()
+                                        if w not in side]
+        self._grid_section = column(
+            head, row(self._grid_iter_sel, self._grid_then_sel),
+            row(sel_rows, sel_cols, sel_scale), row(sel_color, sel_speed, cb_loop),
+            self._hover(self._grid_tab_btn, "grid_panel"),
+            self._grid_tab, visible=self._grid_on, width=_SIDEBAR_WIDTH,
+            margin=(0, 0, 10, 0), styles={"max-height": "none"})   # as the other sections
+        kids = list(self._sidebar_col.children)
+        self._sidebar_col.children = kids[:1] + [self._grid_section] + kids[1:]
+        self._grid_nav = row(*w["nav"], b_play, visible=self._grid_on)
+        w["status"].width = 160
+        w["probe"].width = 1100
+        self._grid_readout = row(w["status"], w["probe"], visible=self._grid_on,
+                                 margin=(2, 0, 0, 10))
+
+    def _panel_tab_widgets(self, slot) -> dict:
+        """*slot*'s gear-tab widgets under the grid tab's keys (gridplot G3:
+        a drill-down sets them with ``cvSetPanelTab``), with its raster's
+        color controls (``cm_*``) for the copied color scaling."""
+        r = self._panel_axis_widgets[slot.id]["raster"]
+        sc = self._panel_axis_widgets[slot.id]["scatter"]
+        w = {"kind": self._panel_kind_switch[slot.id],
+             "ry": r["y_sel"], "rx": r["x_sel"], "rq": r["q_sel"], "rk": r["corr_sel"],
+             "ra": r["avg_sel"], "rm": r["bcombine_sel"], "rb": r["border_sel"],
+             "rd": r["detrend_sel"], "rt": r["twin_sel"], "rc": r["cwin_sel"],
+             "sx": sc["x_sel"], "sy": sc["y_sel"], "sat": sc["avg_time_sel"],
+             "sac": sc["avg_chan_sel"], "sam": sc["avg_mode_sel"],
+             "sd": sc["detrend_sel"], "st": sc["twin_sel"], "sc": sc["cwin_sel"]}
+        w.update({k: v for k, v in r.get("cmap_parts", {}).items() if v is not None})
+        return w
+
+    def _build_grid_panel_tab(self, dark):
+        """The grid's own panel tab (gridplot G3, 2026-11-13): the pickers
+        of a panel's gear tab, for slot G, with a staged color scaling
+        (applied at Plot, like the axes: the grid's panel is never drawn,
+        so the panels' live color controls have nothing to act on).
+        Returns ``(column, widgets)``; ``widgets`` is what doPlot reads
+        (``grid_tmpl``) and the drill-down copies from."""
+        from bokeh.models import Div, RadioButtonGroup, Select, TextInput, CustomJS
+        from ..gridplot import colormap_scaling as _cms
+        gs = self._grid_slot
+        rp = self._raster_pickers(gs, dark)
+        sp = self._scatter_pickers(gs, dark)
+        c = self._grid_cfg
+        kind = RadioButtonGroup(labels=["Raster", "Scatter"],
+                                active=0 if gs.kind == "raster" else 1,
+                                width=120, stylesheets=[dark])
+        scale = Select(title="Color scaling", value=c.get("scaling") or "auto",
+                       options=["auto"] + list(_cms.ALL_SCALINGS),
+                       width=_SIDEBAR_WIDTH, stylesheets=[dark])
+        vmin = TextInput(title="min", width=110, stylesheets=[dark],
+                         value="" if c.get("vmin") is None else f"{c['vmin']:.6g}",
+                         placeholder="auto")
+        vmax = TextInput(title="max", width=110, stylesheets=[dark],
+                         value="" if c.get("vmax") is None else f"{c['vmax']:.6g}",
+                         placeholder="auto")
+        # Another quantity: its own color scaling (Phase's fixed range,
+        # Z-Score's threshold), as a panel's per-quantity memory gives it.
+        rp["rq_sel"].js_on_change("value", CustomJS(
+            args={"scale": scale, "vmin": vmin, "vmax": vmax},
+            code="scale.value = 'auto'; vmin.value = ''; vmax.value = '';"))
+        raster = column(
+            self._hover(column(rp["ry_sel"], rp["rx_sel"], width=_SIDEBAR_WIDTH), "r_axes"),
+            self._hover(rp["rq_sel"], "r_qty"),
+            rp["rk_box"], rp["ra_box"], rp["rm_box"], rp["rb_box"], rp["rd_box"],
+            rp["rt_box"], rp["rc_box"], rp["conflict_div"],
+            self._hover(column(scale, row(vmin, vmax), width=_SIDEBAR_WIDTH), "grid_scaling"),
+            visible=gs.kind == "raster", width=_SIDEBAR_WIDTH)
+        scatter = column(
+            Div(text="<i>Each cell is shaded by its own density: Color (page / grid) "
+                     "applies to rasters.</i>",
+                width=_SIDEBAR_WIDTH - 10, stylesheets=[dark], margin=(0, 0, 4, 5)),
+            self._hover(sp["sx_sel"], "s_x"), self._hover(sp["sy_sel"], "s_y"),
+            sp["savg_box"], sp["sd_box"], sp["st_box"], sp["sc_box"],
+            visible=gs.kind == "scatter", width=_SIDEBAR_WIDTH)
+        kind.js_on_change("active", CustomJS(
+            args={"raster": raster, "scatter": scatter},
+            code="raster.visible = (cb_obj.active === 0); scatter.visible = (cb_obj.active === 1);"))
+        note = Div(text="<i>What every plot of the grid repeats.  Changes apply when "
+                        "you press <b>Plot &#9654;</b></i>",
+                   width=_SIDEBAR_WIDTH - 10, stylesheets=[dark], margin=(2, 0, 4, 5))
+        body = column(note, kind, raster, scatter, width=_SIDEBAR_WIDTH, visible=False,
+                      margin=(0, 0, 0, 0))
+        widgets = {"kind": kind, "ry": rp["ry_sel"], "rx": rp["rx_sel"], "rq": rp["rq_sel"],
+                   "rk": rp["rk_sel"], "ra": rp["ra_sel"], "rm": rp["rm_sel"],
+                   "rb": rp["rb_sel"], "rd": rp["rd_sel"], "rt": rp["rt_sel"],
+                   "rc": rp["rc_sel"], "sx": sp["sx_sel"], "sy": sp["sy_sel"],
+                   "sat": sp["sat_sel"], "sac": sp["sac_sel"], "sam": sp["sam_sel"],
+                   "sd": sp["sd_sel"], "st": sp["st_sel"], "sc": sp["sc_sel"],
+                   "scaling": scale, "vmin": vmin, "vmax": vmax}
+        for k, w in widgets.items():
+            w.tags = ["grid-tab", k]
+        return body, widgets
+
+    def _wire_grid(self) -> None:
+        """Connect the grid to doPlot (after ``_build_toolbar``): a
+        drill-down sets the sidebar to the cell's selection and plots it in
+        One; changing "Iterate by" in Grid plots again."""
+        from bokeh.models import CustomJS
+        args = dict(self._plot_js_args)
+        self._grid_drill_js.args = args
+        self._grid_drill_js.code = self._do_plot_js + _GRID_DRILL_JS
+        if getattr(self, "_status_div", None) is not None:
+            self._grid_shown_js.args = {"status_div": self._status_div}
+            self._grid_shown_js.code = (
+                "if (cb_obj && cb_obj.status_text) status_div.text = cb_obj.status_text;")
+        self._grid_play_js.args = args
+        self._grid_play_js.code = ("".join(self._iterate_js.values()) + self._do_plot_js
+                                   + _GRID_PLAY_JS)
+        replot = CustomJS(
+            args=args, code=self._do_plot_js + "if (layout_rbg.active === 3) doPlot(false);")
+        self._grid_iter_sel.js_on_change("value", replot)
+        self._grid_then_sel.js_on_change("value", replot)
+        self._grid_restore_args = {k: args[k] for k in (
+            "ant_src", "bl_src", "spw_src", "field_sel", "scan_inp", "corr_cbg", "ant_mode")}
+        self._grid_restore_args["grid_plot"] = CustomJS(
+            args=args, code=self._do_plot_js + "doPlot(false);")
+
+    def _grid_shown(self, on: bool) -> dict:
+        """The Layout buttons showed the grid (*on*) or left it, without a
+        Plot: what the status line says follows (2026-11-17; it said "One
+        panel" after Back to Grid until the next Plot).  ``GridView.shown``
+        has brought the cells up to the flags already."""
+        self._grid_on = bool(on)
+        try:
+            text = self._status_text()
+        except Exception:                                   # noqa: BLE001
+            log.debug("grid: status text failed", exc_info=True)
+            return {}
+        return {"status_text": text}
+
+    def _grid_drill(self, index: int, label: str) -> dict:
+        """A grid cell tapped: what the browser selects to show it in a
+        full panel (``_GRID_DRILL_JS``)."""
+        try:
+            target = self._grid_source.drill_target(index)
+        except (IndexError, KeyError):
+            return {"text": ""}
+        # The cell's configuration goes to the panel shown in One (gridplot
+        # G3): the grid's panel as last plotted -- not its tab, which may
+        # hold edits not yet plotted -- and its color scaling, which the
+        # browser sends back with that panel's Plot.
+        r = self._grid_slot.raster
+        color = {"scaling": r._scaling, "alpha": r._scaling_alpha,
+                  "gamma": r._scaling_gamma, "vmin": r._scaling_vmin,
+                  "vmax": r._scaling_vmax}
+        return {"text": f"{label}: shown in the full panel (One), set up as the "
+                        f"grid's panel.  Grid returns to the grid and its selection.",
+                "select": target, "panel": self._grid_tab_values(), "color": color}
+
     def _build_layout(self):
         """Build the full layout.
 
@@ -6098,7 +7450,10 @@ html, body { height: 100%; margin: 0; }
                          getattr(panel, "_unflag_tool", None)):
                 if tool is not None:
                     tool.response_callback = _flag_resp_cb
+        self._sidebar_toggle_btn = toggle_btn     # the grid's gear opens the sidebar
+        self._build_grid()
         toolbar                  = self._build_toolbar(toggle_btn)
+        self._wire_grid()
         side_container, over_container = self._build_plot_area()
 
         # Both containers always in the document; only one visible.
@@ -6150,6 +7505,24 @@ html, body { height: 100%; margin: 0; }
             sizing_mode="stretch_both",
             styles={"overflow-y": "auto"},
             css_classes=["cv-plot-area"],
+            visible=not self._grid_on,
+        )
+        # The Grid layout (gridplot G2) takes the plot area's place in the
+        # body rather than sitting inside it: nested in the plot area's
+        # stretch columns, Bokeh 3.10 never lays out the grid's cells (their
+        # frames stay 0 x 0 -- found 2026-11-11), while beside it they are
+        # laid out as in a page of their own.  window.__cvGridLayout swaps
+        # the two.
+        self._plot_area = plot_area
+        self._grid_area.visible = self._grid_on
+        # window.__cvGridLayout(on), called by the Layout buttons and the
+        # presets.
+        self._app_context.add_init_script(
+            code=_GRID_LAYOUT_JS,
+            args=dict(self._grid_restore_args, grid_area=self._grid_area,
+                      grid_container=self._grid_container, plot_area=plot_area,
+                      grid_parts=[self._grid_section, self._grid_nav, self._grid_readout]),
+            description="grid layout",
         )
         # "More below" cue (2026-09-28): when the plots plus their info /
         # colorbar strips are taller than the window, the plot area
@@ -6173,12 +7546,26 @@ html, body { height: 100%; margin: 0; }
             description="busy cursor helper",
         )
         body = row(
-            sidebar_col, plot_area,
+            sidebar_col, plot_area, self._grid_area,
             sizing_mode="stretch_both",
         )
-        return column(_css_div, toolbar, body, status_bar,
+        return column(_css_div, toolbar, body, self._grid_readout, status_bar,
                       self._flag_preview_box,
                       sizing_mode="stretch_both")
+
+    @staticmethod
+    def _cmap_states(panel) -> list:
+        """*panel*'s color-scaling control states for a Plot response
+        (``colormap_sync``): a list, one per set of controls -- one for a
+        raster, one per layer for a scatter.  Never raises: a failure
+        here must not cost the plot, only the controls' refresh."""
+        try:
+            if hasattr(panel, "colormap_states"):
+                return panel.colormap_states()
+            return [panel.colormap_state()]
+        except Exception:                                   # noqa: BLE001
+            log.debug("colormap state failed", exc_info=True)
+            return []
 
     def _style_cmap_column(self, cmap_col, dark_stylesheet) -> tuple:
         """Apply dark styling to every themeable element in a colormap column.
@@ -6287,11 +7674,25 @@ html, body { height: 100%; margin: 0; }
                 # re-wrapped in an outer span each time this method
                 # runs (styling is reapplied on every dark/light toggle
                 # and every rebuild, not just once at construction).
+                #
+                # 2026-11-18 (pre-preview feedback): plain-text Divs (the
+                # equation label) are colored through the Div's own
+                # ``styles`` rather than an inline <span> in ``.text``.
+                # The scaling dropdown's CustomJS rewrites
+                # ``equation.text`` with the bare equation string on every
+                # change, which dropped the span -- and its color -- so
+                # the label fell back to the page's default black on the
+                # dark sidebar.  ``styles`` sits on the host element and
+                # survives any ``.text`` assignment; the theme restyle
+                # updates it (``cmap_text_divs``).
                 if node.text and not node.text.startswith(("<span", "<div", "<i")):
-                    node.text = (
-                        f"<span style='color:#a6adc8;font-size:11px'>"
-                        f"{node.text}</span>"
-                    )
+                    node.styles = {**dict(node.styles or {}),
+                                   "color": _CMAP_TEXT_DARK,
+                                   "font-size": "11px"}
+                    if not hasattr(self, "_cmap_text_divs"):
+                        self._cmap_text_divs = []
+                    if node not in self._cmap_text_divs:
+                        self._cmap_text_divs.append(node)
             # Walk children of layout containers
             children = getattr(node, "children", None)
             if children:
@@ -6338,25 +7739,9 @@ html, body { height: 100%; margin: 0; }
     # hardcoded per-slot calls) specifically so a third slot, whenever
     # that's supported, is a non-event here — build for N, ship for 2.
 
-    def _build_raster_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
-        """Build one slot's raster config panel: Y/X/quantity + colormap.
-
-        Wired to ``slot.raster`` — that slot's own, already-constructed
-        ``VisibilityRaster`` object — via ``colormap_controls()``, so
-        scaling/min/max controls are genuinely independent per slot, not
-        shared. The Y/X/quantity ``Select`` widgets are plain pickers with
-        no live wiring of their own; they're read at Plot-press time by
-        ``_handle_plot()``'s rewrite (piece 3, not yet built), same as the
-        old global controls were.
-
-        Returns
-        -------
-        panel : Bokeh column
-        widgets : dict
-            ``y_sel``, ``x_sel``, ``q_sel``, ``conflict_div``,
-            ``cmap_widgets``, ``cmap_figs``, ``cmap_icons`` — stored by
-            the caller in ``self._panel_axis_widgets[slot.id]["raster"]``.
-        """
+    def _raster_pickers(self, slot: "_PanelSlot", dark) -> dict:
+        """A slot's raster axis and plot-time pickers (no color controls):
+        shared by the panels' gear tabs and the grid's own tab."""
         ry_sel = Select(
             title="Raster Y axis", value=(slot.raster._y_dim or self._raster_y).name,
             options=[(k, v) for k, v in _RASTER_Y_OPTIONS],
@@ -6393,12 +7778,26 @@ html, body { height: 100%; margin: 0; }
         # Baselines combined (HRS H4, 2026-10-07): what a cell does
         # with several baselines when Baseline is not a plot axis.  Per
         # slot, read at Plot-press time.
+        #
+        # "Vector (coherent)" (2026-11-18, pre-preview feedback): named
+        # for what it is -- the samples of every baseline averaged
+        # together by the Averaging rule.  That is a coherent sum only
+        # with Vector averaging; with Scalar it is a plain mean of
+        # amplitudes, so the choice is withdrawn while Averaging is
+        # Scalar (_BCOMBINE_SCALAR_JS).  The data layer still accepts
+        # the combination from Python (test_baseline_combine pins what
+        # it computes); only the GUI stops offering it.
+        _rm_opts = list(_BCOMBINE_OPTIONS)
+        if slot.raster.averaging == "scalar" and slot.raster.baseline_combine != "coherent":
+            _rm_opts = [o for o in _rm_opts if o[0] != "coherent"]
         rm_sel = Select(
             title="Baselines combined", value=slot.raster.baseline_combine,
-            options=[("mean", "Mean"), ("median", "Median"),
-                     ("max", "Maximum"), ("coherent", "Coherent")],
+            options=_rm_opts,
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        ra_sel.js_on_change("value", CustomJS(
+            args={"rm_sel": rm_sel, "all_opts": [list(o) for o in _BCOMBINE_OPTIONS]},
+            code=_BCOMBINE_SCALAR_JS))
         # Slope removal (HRS H2, 2026-10) for Phase RMS / Coherence:
         # take out the residual delay / rate before measuring scatter,
         # or leave it in to see it.  Same arrangement as ra_sel: per
@@ -6482,7 +7881,43 @@ conflict_div.text = m ? '⚠ ' + m : '';
         ry_sel.js_on_change("value", conflict_js)
         rx_sel.js_on_change("value", conflict_js)
 
+        return dict(ry_sel=ry_sel, rx_sel=rx_sel, rq_sel=rq_sel, ra_sel=ra_sel, rb_sel=rb_sel, rm_sel=rm_sel, rd_sel=rd_sel, rt_sel=rt_sel, rc_sel=rc_sel, rk_sel=rk_sel, rk_box=rk_box, ra_box=ra_box, rb_box=rb_box, rm_box=rm_box, rd_box=rd_box, rt_box=rt_box, rc_box=rc_box, conflict_div=conflict_div)
+
+    def _build_raster_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
+        """Build one slot's raster config panel: Y/X/quantity + colormap.
+
+        Wired to ``slot.raster`` — that slot's own, already-constructed
+        ``VisibilityRaster`` object — via ``colormap_controls()``, so
+        scaling/min/max controls are genuinely independent per slot, not
+        shared. The Y/X/quantity ``Select`` widgets are plain pickers with
+        no live wiring of their own; they're read at Plot-press time by
+        ``_handle_plot()``'s rewrite (piece 3, not yet built), same as the
+        old global controls were.
+
+        Returns
+        -------
+        panel : Bokeh column
+        widgets : dict
+            ``y_sel``, ``x_sel``, ``q_sel``, ``conflict_div``,
+            ``cmap_widgets``, ``cmap_figs``, ``cmap_icons`` — stored by
+            the caller in ``self._panel_axis_widgets[slot.id]["raster"]``.
+        """
+        _pk = self._raster_pickers(slot, dark)
+        (ry_sel, rx_sel, rq_sel, ra_sel, rb_sel, rm_sel, rd_sel, rt_sel, rc_sel, rk_sel, rk_box, ra_box, rb_box, rm_box, rd_box, rt_box, rc_box, conflict_div) = (
+            _pk["ry_sel"], _pk["rx_sel"], _pk["rq_sel"], _pk["ra_sel"], _pk["rb_sel"], _pk["rm_sel"], _pk["rd_sel"], _pk["rt_sel"], _pk["rc_sel"], _pk["rk_sel"], _pk["rk_box"], _pk["ra_box"], _pk["rb_box"], _pk["rm_box"], _pk["rd_box"], _pk["rt_box"], _pk["rc_box"], _pk["conflict_div"])
+
         raster_cmap  = slot.raster.colormap_controls()
+        # Its color controls by name (gridplot G3: a drill-down shows the
+        # grid panel's color scaling in them): see colormap_controls()'s
+        # layout -- scaling, equation, (alpha, gamma), histogram, (reset,
+        # min, max).
+        try:
+            _cmk = raster_cmap.children
+            cmap_parts = {"cm_scale": _cmk[0], "cm_alpha": _cmk[2].children[0],
+                          "cm_gamma": _cmk[2].children[1],
+                          "cm_min": _cmk[4].children[1], "cm_max": _cmk[4].children[2]}
+        except (AttributeError, IndexError):
+            cmap_parts = {}
         cmap_widgets, cmap_figs, cmap_icons, _no_tables = self._style_cmap_column(raster_cmap, dark)
 
         # What the permanent info block (left panel) shows for this
@@ -6514,6 +7949,7 @@ conflict_div.text = m ? '⚠ ' + m : '';
             "corr_sel": rk_sel,
             "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
+            "cmap_parts": cmap_parts,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
             # Always empty for raster -- no colorize-by-axis checklist
             # exists here -- but present so the generic "flatten
@@ -6523,59 +7959,9 @@ conflict_div.text = m ? '⚠ ' + m : '';
         }
         return panel, widgets
 
-    def _build_scatter_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
-        """Build one slot's scatter config panel: X/Y + per-layer controls.
-
-        Same reasoning as ``_build_raster_config_panel`` above — see that
-        docstring. No Y/X conflict check here: scatter's X and Y axes
-        aren't drawn from the same shared vocabulary the way raster's are,
-        so the same-value conflict this class checks for raster doesn't
-        apply.
-
-        Part 4 (colorize-by-axis UI wiring): every layer's scaling AND
-        colorize controls are built up front — ``build for N, ship for
-        2`` applied one level down, same precedent already established
-        for the two per-slot config panels themselves (see this
-        method's own history). A ``layer_select`` picks which single
-        layer's combined column is visible; switching it is purely
-        client-side (a ``CustomJS`` toggling ``.visible`` on each
-        pre-built column, mirroring the Raster/Scatter ``kind_switch``
-        pattern below), never a comm round trip — the controls
-        themselves already send their own backend messages the moment
-        the user touches them, independent of which one happens to be
-        on screen.
-
-        Mutual exclusivity (design doc Sec 4.3) between a layer's
-        scaling controls and its colorize controls is wired here, not
-        inside ``colorize_controls()``: that method manages its own
-        axis-picker/checklist visibility, but has no reference to the
-        sibling ``colormap_controls()`` column it needs to hide. Found
-        by class (``RadioButtonGroup``) among ``_style_cmap_column``'s
-        already-flattened widget list — ``colorize_controls()`` does
-        return a handles dict now (Part 5, 2026-09: ``doPlot()`` needs
-        direct references to its ``mode_group``/``axis_select``/
-        ``checklists`` to read their staged values from), but this
-        mutual-exclusivity lookup predates that and stays as it was —
-        a ``RadioButtonGroup`` only ever appears in this tree as that
-        method's own mode switch, so the by-class lookup is no less
-        precise than threading the same reference through a second
-        path would be.
-
-        Returns
-        -------
-        panel : Bokeh column
-        widgets : dict
-            ``x_sel``, ``y_sel``, ``layer_select`` (``None`` for a
-            single-layer scatter), ``layer_columns``, ``cmap_widgets``,
-            ``cmap_figs``, ``cmap_icons`` — the last three flattened
-            across every layer, not just the visible one, so the dark/
-            light toggle recolors all of them regardless of which is
-            currently shown. Also ``colorize_handles`` (Part 5, 2026-09)
-            — one entry per layer, each ``colorize_controls()``'s own
-            returned handles dict, for ``doPlot()``'s payload-building
-            JS to read staged colorize state from. Stored by the caller
-            in ``self._panel_axis_widgets[slot.id]["scatter"]``.
-        """
+    def _scatter_pickers(self, slot: "_PanelSlot", dark) -> dict:
+        """A slot's scatter axis and plot-time pickers (no color or
+        colorize controls): shared by the gear tabs and the grid's tab."""
         sx_sel = Select(
             title="Scatter X axis", value=(slot.scatter._x_dim or self._scatter_x).name,
             options=[(k, v) for k, v in _SCATTER_X_OPTIONS],
@@ -6646,6 +8032,65 @@ conflict_div.text = m ? '⚠ ' + m : '';
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
         savg_box = self._hover(column(sat_sel, sac_sel, sam_sel, width=_SIDEBAR_WIDTH), "s_avg")
+
+        return dict(sx_sel=sx_sel, sy_sel=sy_sel, sd_sel=sd_sel, st_sel=st_sel, sc_sel=sc_sel, sd_box=sd_box, st_box=st_box, sc_box=sc_box, sat_sel=sat_sel, sac_sel=sac_sel, sam_sel=sam_sel, savg_box=savg_box)
+
+    def _build_scatter_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
+        """Build one slot's scatter config panel: X/Y + per-layer controls.
+
+        Same reasoning as ``_build_raster_config_panel`` above — see that
+        docstring. No Y/X conflict check here: scatter's X and Y axes
+        aren't drawn from the same shared vocabulary the way raster's are,
+        so the same-value conflict this class checks for raster doesn't
+        apply.
+
+        Part 4 (colorize-by-axis UI wiring): every layer's scaling AND
+        colorize controls are built up front — ``build for N, ship for
+        2`` applied one level down, same precedent already established
+        for the two per-slot config panels themselves (see this
+        method's own history). A ``layer_select`` picks which single
+        layer's combined column is visible; switching it is purely
+        client-side (a ``CustomJS`` toggling ``.visible`` on each
+        pre-built column, mirroring the Raster/Scatter ``kind_switch``
+        pattern below), never a comm round trip — the controls
+        themselves already send their own backend messages the moment
+        the user touches them, independent of which one happens to be
+        on screen.
+
+        Mutual exclusivity (design doc Sec 4.3) between a layer's
+        scaling controls and its colorize controls is wired here, not
+        inside ``colorize_controls()``: that method manages its own
+        axis-picker/checklist visibility, but has no reference to the
+        sibling ``colormap_controls()`` column it needs to hide. Found
+        by class (``RadioButtonGroup``) among ``_style_cmap_column``'s
+        already-flattened widget list — ``colorize_controls()`` does
+        return a handles dict now (Part 5, 2026-09: ``doPlot()`` needs
+        direct references to its ``mode_group``/``axis_select``/
+        ``checklists`` to read their staged values from), but this
+        mutual-exclusivity lookup predates that and stays as it was —
+        a ``RadioButtonGroup`` only ever appears in this tree as that
+        method's own mode switch, so the by-class lookup is no less
+        precise than threading the same reference through a second
+        path would be.
+
+        Returns
+        -------
+        panel : Bokeh column
+        widgets : dict
+            ``x_sel``, ``y_sel``, ``layer_select`` (``None`` for a
+            single-layer scatter), ``layer_columns``, ``cmap_widgets``,
+            ``cmap_figs``, ``cmap_icons`` — the last three flattened
+            across every layer, not just the visible one, so the dark/
+            light toggle recolors all of them regardless of which is
+            currently shown. Also ``colorize_handles`` (Part 5, 2026-09)
+            — one entry per layer, each ``colorize_controls()``'s own
+            returned handles dict, for ``doPlot()``'s payload-building
+            JS to read staged colorize state from. Stored by the caller
+            in ``self._panel_axis_widgets[slot.id]["scatter"]``.
+        """
+        _pk = self._scatter_pickers(slot, dark)
+        (sx_sel, sy_sel, sd_sel, st_sel, sc_sel, sd_box, st_box, sc_box, sat_sel, sac_sel, sam_sel, savg_box) = (
+            _pk["sx_sel"], _pk["sy_sel"], _pk["sd_sel"], _pk["st_sel"], _pk["sc_sel"], _pk["sd_box"], _pk["st_box"], _pk["sc_box"], _pk["sat_sel"], _pk["sac_sel"], _pk["sam_sel"], _pk["savg_box"])
 
         layers = slot.scatter.layers
         cmap_widgets: list = []
@@ -6921,7 +8366,10 @@ for (let i = 0; i < cols.length; i++) {
         self._spw_table = DataTable(
             source          = self._spw_source,
             columns         = [
-                TableColumn(field="name",  title="Spectral window", width=180),
+                TableColumn(field="name",  title="Spectral window", width=180,
+                            # ▶ on the SPW being iterated (iteration_subset.py)
+                            formatter=HTMLTemplateFormatter(template=(
+                                _itsub.MARKER_TEMPLATE + "<%- value %>"))),
                 TableColumn(field="freq",  title="GHz",             width=96),
                 TableColumn(field="nchan", title="Ch",              width=44),
             ],
@@ -7138,14 +8586,11 @@ for (let i = 0; i < cols.length; i++) {
             halves of the status row hide together rather than just
             _status_div — otherwise the red flag-notification half would
             keep showing alongside a hint, cramping it."""
-            show = CustomJS(
-                args={"hint": hint_div, "status_row": self._status_row},
-                code="status_row.visible = false; hint.visible = true;",
-            )
-            hide = CustomJS(
-                args={"hint": hint_div, "status_row": self._status_row},
-                code="hint.visible = false; status_row.visible = true;",
-            )
+            # A warning stays visible above the help (_SHOW_HINT_JS).
+            args = {"hint": hint_div, "status_row": self._status_row,
+                    "status_div": self._status_div, "notify_div": self._notify_div}
+            show = CustomJS(args=args, code=_SHOW_HINT_JS)
+            hide = CustomJS(args=args, code=_HIDE_HINT_JS)
             widget.js_on_event(MouseEnter, show)
             widget.js_on_event(MouseLeave, hide)
 
@@ -7160,6 +8605,27 @@ for (let i = 0; i < cols.length; i++) {
             return inp
 
         scan_inp    = _stub_input("Scan",       self._scan_str,      self._hint_scan)
+        # Checked when Return is pressed (2026-11-18), not only at Plot:
+        # an error shows at once in the notify area (where it stays while
+        # help is showing), and clears once the text is valid.
+        # Also whenever the value changes -- leaving the box (a click
+        # elsewhere, a scroll, Esc: help_text.LEAVE_FIELD_JS) commits it,
+        # and is checked the same way.
+        from .selection_text import SCAN_TEXT_JS
+        _scan_check = CustomJS(
+            args={"notify_div": self._notify_div, "scans": [int(x) for x in scan_ids
+                                                              if str(x).lstrip("-").isdigit()]},
+            code=SCAN_TEXT_JS + """
+const r = cvParseScanText(cb_obj.value, scans);
+if (!r.ok) {
+    notify_div.text = '\u26a0 ' + r.error;
+    notify_div.styles = Object.assign({}, notify_div.styles, {color: '#f38ba8'});
+} else if ((notify_div.text || '').indexOf('\u26a0 Scan:') === 0) {
+    notify_div.text = '';
+}
+""")
+        scan_inp.js_on_event(ValueSubmit, _scan_check)
+        scan_inp.js_on_change("value", _scan_check)
         time_inp    = _stub_input("Time range", self._timerange_str, self._hint_time)
         uv_inp      = _stub_input("UV range",   self._uvrange_str,   self._hint_uvrange)
         # Read by doPlot() (HRS A1): their text goes with every Plot.
@@ -8334,9 +9800,10 @@ if (sidebarEl && prevScrollTop !== null) {
         # hidden slot's panel and a single-panel view turns into two
         # (stakeholder report, 2026-10).
         layout_rbg = RadioButtonGroup(
-            labels = ["One", "Side by Side", "Over / Under"],
-            active = {"one": 0, "side": 1, "over": 2}.get(self._layout, 1),
-            width  = 320,
+            labels = ["One", "Side by Side", "Over / Under", "Grid"],
+            active = (3 if self._grid_on
+                      else {"one": 0, "side": 1, "over": 2}.get(self._layout, 1)),
+            width  = 380,
         )
         self._layout_rbg = layout_rbg
 
@@ -8365,7 +9832,7 @@ if (sidebarEl && prevScrollTop !== null) {
         # (A bare module-level name rather than _abs.SELECTION_PAYLOAD_JS:
         # test_checkbox_guard.py reads this expression from the source
         # and resolves names, not attribute lookups.)
-        _do_plot_js = _CV_SET_BUSY_JS + _SELECTION_PAYLOAD_JS + """
+        _do_plot_js = _CV_SET_BUSY_JS + _SELECTION_PAYLOAD_JS + _ITER_SUBSET_JS + """
 // Shared with gear_click_js (a separate, non-concatenated CustomJS
 // string, hence a global rather than a local function) -- defining it
 // here too, identically, since switchToTab() below can be the very
@@ -8605,6 +10072,32 @@ function cvSetBusy(on) {
     window.__cvSetBusy(on);
 }
 
+// A panel's tab (or the grid's) set to *vals* (gridplot G3): the copy of
+// Panel A into the grid's tab, and of the grid's panel into the panel a
+// drill-down shows.  Keys as VisibilityPlotter._grid_tab_values; a Select
+// whose view does not exist yet throws on a value change (see the presets),
+// so each is set on its own.
+function cvSetPanelTab(w, vals) {
+    if (!w || !vals) return;
+    if (w.kind && vals.kind) {
+        try { w.kind.active = (vals.kind === 'raster') ? 0 : 1; } catch (e) {}
+    }
+    for (const k of ['ry', 'rx', 'rq', 'rk', 'ra', 'rm', 'rb', 'rd', 'rt', 'rc',
+                     'sx', 'sy', 'sat', 'sac', 'sam', 'sd', 'st', 'sc']) {
+        if (!w[k] || vals[k] == null) continue;
+        try {
+            const opts = (w[k].options || []).map(o => Array.isArray(o) ? String(o[0]) : String(o));
+            if (opts.length && opts.indexOf(String(vals[k])) < 0) continue;
+            w[k].value = String(vals[k]);
+        } catch (e) {}
+    }
+    // after the quantity: its change resets the grid tab's color to auto
+    for (const k of ['scaling', 'vmin', 'vmax']) {
+        if (!w[k] || vals[k] == null) continue;
+        try { w[k].value = String(vals[k]); } catch (e) {}
+    }
+}
+
 function doPlot(reload) {
     // Group 3 piece 3 / Chunk 1 (added 2026-07-31): request/response are
     // now per-slot (panels: {id: {...}}) instead of flat raster_y/
@@ -8710,17 +10203,39 @@ function doPlot(reload) {
     // for this specific error — same underlying UX problem as that
     // feature was built for, just reached via a different, client-only
     // path. Fixed by calling the same switchToTab() helper here too.
-    if (rasterConflict(panel0_kind_switch, panel0_ry_sel, panel0_rx_sel)) {
+    // Grid (gridplot G3): only the grid's own panel is sent -- its tab
+    // is what Plot reads; Panels A and B are drawn when shown again.
+    const _inGrid = (layout_rbg.active === 3) && (typeof grid_tmpl !== 'undefined') && !!grid_tmpl;
+    window.__cvDoPlot = doPlot;
+    if (_inGrid && rasterConflict(grid_tmpl.kind, grid_tmpl.ry, grid_tmpl.rx)) {
+        if (grid_tab) grid_tab.visible = true;
+        if (notify_div) notify_div.text = '<b>Grid panel:</b> ' + rasterAxesProblem(grid_tmpl.ry.value, grid_tmpl.rx.value);
+        return;
+    }
+    if (!_inGrid && rasterConflict(panel0_kind_switch, panel0_ry_sel, panel0_rx_sel)) {
         switchToTab(panel_a_tab, gear_tabs, sidebar, toggle_btn);
         return;
     }
-    if (rasterConflict(panel1_kind_switch, panel1_ry_sel, panel1_rx_sel)) {
+    if (!_inGrid && rasterConflict(panel1_kind_switch, panel1_ry_sel, panel1_rx_sel)) {
         switchToTab(panel_b_tab, gear_tabs, sidebar, toggle_btn);
         return;
     }
 
     const corr = corr_cbg.labels.filter((_, i) => corr_cbg.active.includes(i));
     const panels = {};
+    if (_inGrid) {
+        const g = grid_tmpl;
+        panels[grid_id] = {
+            kind: g.kind.active === 0 ? 'raster' : 'scatter',
+            raster: {y: g.ry.value, x: g.rx.value, qty: g.rq.value, raster_corr: g.rk.value,
+                     averaging: g.ra.value, baseline_combine: g.rm.value,
+                     baseline_order: g.rb.value, detrend: g.rd.value,
+                     twin: g.rt.value, cwin: g.rc.value},
+            scatter: {x: g.sx.value, y: g.sy.value, avg_time: g.sat.value,
+                      avg_chan: g.sac.value, averaging: g.sam.value,
+                      detrend: g.sd.value, twin: g.st.value, cwin: g.sc.value},
+            color: {scaling: g.scaling.value, vmin: g.vmin.value, vmax: g.vmax.value}};
+    } else {
     panels[panel0_id] = buildPanelPayload(
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
         panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel,
@@ -8743,6 +10258,12 @@ function doPlot(reload) {
         // known yet, so a redraw follows a resize (visibility_plot.py).
         if (f && f.inner_width > 0 && f.inner_height > 0) { e[0].w = f.inner_width; e[0].h = f.inner_height; }
     });
+    // A drill-down from the grid (gridplot G3) brings the grid panel's
+    // color scaling to the panel it is shown in.
+    const _dc = window.__cvDrillColor;
+    if (_dc && panels[_dc.id] && panels[_dc.id].kind === 'raster') panels[_dc.id].color = _dc.color;
+    window.__cvDrillColor = null;
+    }
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
 
@@ -8751,7 +10272,9 @@ function doPlot(reload) {
     // spectral-window name containing a comma would break -- and the
     // identity is deliberately opaque (int or name), so text is the
     // wrong carrier for it.
-    const _spw_idx = spw_src.selected.indices || [];
+    // The SPW being iterated, when there is one, else the ticks
+    // (iteration_subset.py).
+    const _spw_idx = cvIterEffective(spw_src, 'spw');
     const spw_ids = _spw_idx.map(i => spw_src.data['ident'][i]);
     if (spw_src.data['ident'].length && spw_ids.length === 0) {
         // Empty is a real state, not a synonym for "all" -- which is
@@ -8779,7 +10302,10 @@ function doPlot(reload) {
     // antenna_baseline_select.SELECTION_PAYLOAD_JS.  Empty lists mean
     // "nothing ticked", which the server reads as "all": no guard here,
     // unlike the SPW table above.
-    const _ab = cvAntennaBaselineSelection(ant_src, bl_src,
+    // The Antenna / Baseline rows being iterated, when there are any
+    // (iteration_subset.py), else the ticks.
+    const [_ant_eff, _bl_eff] = cvIterAntBl(ant_src, bl_src);
+    const _ab = cvAntennaBaselineSelection(_ant_eff, _bl_eff,
                                            ant_mode && ant_mode.active === 1);
     if (_ab.none) {
         // "Both ends" with antennas that share no baseline (typically a
@@ -8791,7 +10317,12 @@ function doPlot(reload) {
         return;
     }
 
-    cvSetBusy(true);
+    // A playback step (Play with every cell on one page, 2026-11-13): no
+    // busy overlay, so Pause stays clickable; the step's caller is told
+    // when the page is drawn (or the Plot failed).
+    const _quiet = !!window.__cvQuietPlot, _done = window.__cvPlayStepDone || null;
+    window.__cvQuietPlot = false; window.__cvPlayStepDone = null; window.__cvPlotSent = true;
+    if (!_quiet) cvSetBusy(true);
 
     ctrl.send(ids['plot'], {
         field:       field_sel.value,
@@ -8811,7 +10342,20 @@ function doPlot(reload) {
         // The layout as shown (2026-10-10): presets and the Layout buttons
         // change it in the browser only, and the status line (and the
         // PNG export) read Python's copy, which stayed at the start value.
-        layout:      ['one', 'side', 'over'][layout_rbg.active],
+        layout:      ['one', 'side', 'over', 'grid'][layout_rbg.active],
+        // Grid layout (gridplot G2): what it iterates over, and the panel
+        // it repeats -- the one shown first.
+        // with "then" (compound, G3 item 4): "antenna,spw"
+        iterate_by:  (typeof grid_iter_sel !== 'undefined' && grid_iter_sel)
+                     ? grid_iter_sel.value + ((typeof grid_then_sel !== 'undefined' && grid_then_sel
+                                               && grid_then_sel.value && grid_then_sel.value !== grid_iter_sel.value)
+                                              ? ',' + grid_then_sel.value : '')
+                     : null,
+        grid_slot:   [panel0_id, panel1_id][(display_order_source.data['order'][0] || [0, 1])[0]],
+        grid_shape:  (typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
+                     ? [window.__cvGrid[grid_key].state().rows, window.__cvGrid[grid_key].state().cols] : null,
+        grid_color: (typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
+                     ? window.__cvGrid[grid_key].state().color : null,
         // Row height / column width as shown (2026-10-13), for the
         // reproducing call and the status line.
         sizes:       window.__cvSizeSpec ? window.__cvSizeSpec() : null,
@@ -8823,11 +10367,29 @@ function doPlot(reload) {
         // ~300 ms later, and that request is what actually draws the new
         // plot (2026-09-30: after Z-Score the cursor went idle, then the
         // plot changed a noticeable moment later).
-        window.__cvSetBusy(true);
-        setTimeout(function() { window.__cvSetBusy(false); }, 450);
-        requestAnimationFrame(function() {
-            requestAnimationFrame(function() { cvSetBusy(false); });
-        });
+        // In Grid the response only configures the grid; the page is drawn
+        // by the grid's own request after it, so the busy state is
+        // released when that page is painted (2026-11-12: stepping the
+        // antennas, the cursor went idle before the grid changed).
+        const _gridApi = (resp && resp.grid && typeof grid_key !== 'undefined'
+                          && window.__cvGrid && window.__cvGrid[grid_key]) || null;
+        const _release = function() {
+            requestAnimationFrame(function() {
+                requestAnimationFrame(function() {
+                    if (!_quiet) cvSetBusy(false);
+                    if (_done) _done(!!_gridApi);
+                });
+            });
+        };
+        // (reference counted: doPlot's own hold is released once, by
+        // _release; the 450 ms bridge is a hold and release of its own)
+        if (!_gridApi) {
+            if (!_quiet) {
+                window.__cvSetBusy(true);
+                setTimeout(function() { window.__cvSetBusy(false); }, 450);
+            }
+            _release();
+        }
         if (!resp) return;
         // Which table rows have data in this field / SPW selection: the
         // Prev / Next stepping skips the others, the tables dim them.
@@ -8864,8 +10426,24 @@ function doPlot(reload) {
         // hidden slot and turned a one-panel view into two.
         const _order   = display_order_source.data['order'][0];
         const _one     = (layout_rbg.active === 0);
-        const hide0    = _one && (_order[0] !== 0);
-        const hide1    = _one && (_order[0] !== 1);
+        // Grid (gridplot G2): the panels stay hidden; the grid draws
+        // page 1 again from the source Python has just configured.
+        const _grid    = (layout_rbg.active === 3);
+        const hide0    = _grid || (_one && (_order[0] !== 0));
+        const hide1    = _grid || (_one && (_order[0] !== 1));
+        if (resp.grid) window.__cvGridDrawn = true;
+        // The grid's panel copied from Panel A (gridplot G3): its tab shows it.
+        if (resp.grid_template && typeof grid_tmpl !== 'undefined' && grid_tmpl)
+            cvSetPanelTab(grid_tmpl, resp.grid_template);
+        // Panels A / B were not drawn for this (Grid) Plot: drawn when shown.
+        if (resp.status === 'ok') window.__cvPanelsStale = !!resp.panels_stale;
+        if (_gridApi) {
+            let _drawn;
+            try { _drawn = _gridApi.reload('drawing ' + resp.grid.n_cells + ' plots', resp.grid.n_cells); }
+            catch (e) { console.warn('grid reload failed:', e); }
+            Promise.resolve(_drawn).catch(function(e) { console.warn('grid page failed:', e); })
+                .finally(_release);
+        }
 
         // Show the kind that rendered, hide the other (both hidden when
         // this slot is the hidden one in "One" layout).  A figure that
@@ -8910,6 +10488,22 @@ function doPlot(reload) {
         // ran, silently stale after any axis change.
         if (p0 && p0.state != null) { p0_state.data = p0.state; }
         if (p1 && p1.state != null) { p1_state.data = p1.state; }
+
+        // Color-scaling controls (colormap_sync, 2026-11-18): the
+        // histogram, min/max lines and fields and the scaling dropdown
+        // follow what was just drawn.  Each set of controls has its own
+        // sync source; writing it runs colormap_sync.APPLY_JS.
+        try {
+            const _cm = [[p0, p0_kind, panel0_raster_cmap_sync, panel0_scatter_cmap_sync],
+                         [p1, p1_kind, panel1_raster_cmap_sync, panel1_scatter_cmap_sync]];
+            for (const [p, k, rs, ss] of _cm) {
+                if (!p || !Array.isArray(p.cmap)) continue;
+                const srcs = (k === 'raster') ? rs : ss;
+                for (let i = 0; i < p.cmap.length && i < (srcs || []).length; i++) {
+                    if (srcs[i] && p.cmap[i]) srcs[i].data = {state: [p.cmap[i]]};
+                }
+            }
+        } catch (e) { console.warn('[visplot] color controls refresh failed:', e); }
 
         // An axis drawn in whole positions (a raster's Baseline axis:
         // the state's x_cat / y_cat hold its tick texts) has labels
@@ -9342,6 +10936,17 @@ function doPlot(reload) {
             "ctrl":       ctrl,
             "ids":        ids,
             "layout_rbg":           layout_rbg,
+            # Grid layout (gridplot G2)
+            "grid_iter_sel":        self._grid_iter_sel,
+            "grid_then_sel":        self._grid_then_sel,
+            "grid_key":             self._grid_view.key,
+            # The grid's own panel (gridplot G3): its tab's widgets, which
+            # doPlot reads in Grid, and each panel's, which a drill-down
+            # sets (screen-position independent: by slot index).
+            "grid_id":              self._grid_slot.id,
+            "grid_tmpl":            self._grid_tab_widgets,
+            "grid_tab":             self._grid_tab,
+            "panel_tabs":           [self._panel_tab_widgets(sl) for sl in self._slots],
             "display_order_source": self._display_order_source,
             "field_sel":  self._field_select,
             # Scan / Time range / UV range boxes (HRS A1).
@@ -9488,12 +11093,27 @@ function doPlot(reload) {
             "panel1_scatter_img_src": self._slots[1].scatter._image_source,
             "panel1_scatter_state":   self._slots[1].scatter._state_source,
             "panel1_scatter_layout":  self._slots[1].scatter.layout,
+            # Color-scaling control sync sources (colormap_sync,
+            # 2026-11-18): one per set of controls, filled from each
+            # panel's resp.panels[id].cmap.
+            "panel0_raster_cmap_sync":  [m for m in getattr(self._slots[0].raster, "_cmap_sync", None) or [] if m is not None],
+            "panel0_scatter_cmap_sync": list(getattr(self._slots[0].scatter, "_cmap_sync", None) or []),
+            "panel1_raster_cmap_sync":  [m for m in getattr(self._slots[1].raster, "_cmap_sync", None) or [] if m is not None],
+            "panel1_scatter_cmap_sync": list(getattr(self._slots[1].scatter, "_cmap_sync", None) or []),
         }
 
+        # Plot ▶ plots what is ticked: any iteration ends
+        # (iteration_subset.py).  Reload keeps it.
         plot_js = CustomJS(
             args=_plot_js_args,
-            code=_do_plot_js + "doPlot(false);",
+            code=_do_plot_js + "cvIterClearAll(spw_src, ant_src, bl_src); doPlot(false);",
         )
+        # A change of the ticks -- a click, the text box, ✱, a grid
+        # drill-down -- ends that axis's iteration.
+        for _src, _axis in ((self._spw_source, "spw"), (self._antenna_source, "antenna"),
+                            (self._baseline_source, "baseline")):
+            _src.selected.js_on_change("indices", CustomJS(
+                args={"src": _src, "axis": _axis}, code=_itsub.END_ON_TICK_CHANGE_JS))
         reload_js = CustomJS(
             args=_plot_js_args,
             code=_do_plot_js + "doPlot(true);",
@@ -9581,7 +11201,7 @@ function doIterateField(delta) {
     field_sel.value = names[idx];
 }
 """
-        _iterate_spw_js = STEP_INDEX_JS + """
+        _iterate_spw_js = STEP_INDEX_JS + _itsub.ITER_SUBSET_JS + """
 function doIterateSpw(delta) {
     // SPW is a DataTable (row-selection), not a dropdown -- see
     // _parse_spw_string's docstring for why (non-contiguous ids / bare
@@ -9594,6 +11214,9 @@ function doIterateSpw(delta) {
     // reference point in that case.
     const idents = spw_src.data['ident'] || [];""" + \
     _iter_guard_js("idents.length", "spectral window") + """
+    // The ▶ steps: through the ticked SPWs when two or more are ticked,
+    // else through all, the tick moving with it (iteration_subset.py).
+    if (cvIterSubsetStep(spw_src, 'spw', idents.map((_, i) => i), delta)) return;
     const sel = spw_src.selected.indices || [];
     const cur = sel.length ? Math.min.apply(null, sel) : null;
     const idx = stepIterationIndex(cur, idents.length, delta, true);
@@ -9610,22 +11233,34 @@ function doIterateSpw(delta) {
         # ant_src / bl_src from _plot_js_args.  (Before the tables, the
         # antenna axis was a free-text box and its name list had to be
         # embedded here as a JSON literal.)
-        _iterate_antenna_js = STEP_INDEX_JS + _abs.iterate_antenna_js(
+        _iterate_antenna_js = STEP_INDEX_JS + _itsub.ITER_SUBSET_JS + _abs.iterate_antenna_js(
             _iter_guard_js("names.length", "antenna"))
-        _iterate_baseline_js = STEP_INDEX_JS + _abs.iterate_baseline_js(
+        _iterate_baseline_js = STEP_INDEX_JS + _itsub.ITER_SUBSET_JS + _abs.iterate_baseline_js(
             _iter_guard_js("cand.length", "baseline"))
+        # kept for the grid's Play (gridplot, 2026-11-13: with every cell on
+        # one page, Play steps these; _wire_grid)
+        self._iterate_js = {"field": _iterate_field_js, "spw": _iterate_spw_js,
+                            "antenna": _iterate_antenna_js,
+                            "baseline": _iterate_baseline_js}
         # .wire() (see _IterButtons) assembles each button's CustomJS
         # from these bodies + self._do_plot_js exactly the way the
         # hand-written js_on_click() calls this replaced did -- the
         # only thing that moved is who writes the boilerplate.
+        # ✱ (2026-11-11): all of the axis again, plotted at once.  SPW's
+        # "all" is every row ticked (as at the start); Antenna's and
+        # Baseline's is nothing ticked (the tables' own rule).
+        _all_ab = "ant_src.selected.indices = []; bl_src.selected.indices = [];"
         self._field_iter.wire(self._plot_js_args, self._do_plot_js,
-                              _iterate_field_js, "doIterateField")
+                              _iterate_field_js, "doIterateField",
+                              all_js="field_sel.value = '';")
         self._spw_iter.wire(self._plot_js_args, self._do_plot_js,
-                            _iterate_spw_js, "doIterateSpw")
+                            _iterate_spw_js, "doIterateSpw",
+                            all_js="spw_src.selected.indices = "
+                                   "(spw_src.data['ident'] || []).map((_, i) => i);")
         self._antenna_iter.wire(self._plot_js_args, self._do_plot_js,
-                                _iterate_antenna_js, "doIterateAntenna")
+                                _iterate_antenna_js, "doIterateAntenna", all_js=_all_ab)
         self._baseline_iter.wire(self._plot_js_args, self._do_plot_js,
-                                 _iterate_baseline_js, "doIterateBaseline")
+                                 _iterate_baseline_js, "doIterateBaseline", all_js=_all_ab)
         self._wire_tick_text_inputs()
 
         # Rule 3 (§3.1c of the plan): superseded by the sidebar move.
@@ -9642,7 +11277,7 @@ function doIterateSpw(delta) {
         # see field_prev_btn/field_next_btn/spw_prev_btn/spw_next_btn
         # above, each `stylesheets=[dark, self._icon_btn_css]` — and
         # all four are in self._theme_restyle_args["widgets"] below, so
-        # stylesheets[0] (colour) follows the toggle exactly like every
+        # stylesheets[0] (color) follows the toggle exactly like every
         # other themed sidebar widget; stylesheets[1] (_ICON_BTN_CSS,
         # sizing only) is deliberately never touched by that loop — see
         # _ICON_BTN_CSS's own comment for why.
@@ -9676,6 +11311,7 @@ function doIterateSpw(delta) {
                 "display_order_source": self._display_order_source,
                 "layout_rbg":  layout_rbg,
                 "notify_div":  self._notify_div,
+                "grid_key":    self._grid_view.key if self._grid_view else "",
                 # Index of each (slot, kind) panel in _all_panels, so the
                 # message can name panels the way the handler indexes them.
                 "panel_index": {
@@ -9686,6 +11322,11 @@ function doIterateSpw(delta) {
                 },
             },
             code="""
+// Grid (gridplot G2): the page as the grid's Save PNG writes it.
+if (layout_rbg.active === 3) {
+    if (window.__cvGrid && window.__cvGrid[grid_key]) window.__cvGrid[grid_key].save();
+    return;
+}
 // Collect the state only the browser has.  With no Bokeh server the
 // figures' ranges, the layout radio and the panel order are all
 // CustomJS-mutated and never reach Python, so an export driven purely
@@ -9797,9 +11438,13 @@ ctrl.send(ids['export'], {panels: panels, nrows: nrows, ncols: ncols,
                 "sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             },
             code="""
-const val  = cb_obj.active;   // 0=one, 1=side, 2=over
+const val  = cb_obj.active;   // 0=one, 1=side, 2=over, 3=grid
 const one  = (val === 0);
 const over = (val === 2);
+// Grid (gridplot G2): the grid instead of the panels.  Its page is what
+// the last Plot in Grid drew; Plot draws it again.
+if (window.__cvGridLayout) window.__cvGridLayout(val === 3);
+if (val === 3) return;
 
 // Which SLOT is currently in the primary/first screen position — read
 // from the live swap tracker, not assumed from construction-time slot
@@ -9856,7 +11501,7 @@ if (window.__cvApplySizes) { window.__cvApplySizes(); } else {
 
 // Persist preference (side vs. over) — unchanged from before, "one"
 // doesn't participate since there's nothing to arrange with one panel.
-if (!one) {
+if (!one && val !== 3) {
     const key   = [ry_sel.value, rx_sel.value, 'AMPLITUDE',
                    sx_sel.value, sy_sel.value].join(':');
     const prefs = JSON.parse(pref_src.data['prefs'][0]);
@@ -9964,9 +11609,25 @@ try {
                 f"try {{ {w}.value = '{v}'; }} catch(e) {{}}\n"
                 for w, v in _PRESET_SETS.get(preset_name, ()))
 
+            # In Grid (gridplot G3) the preset sets the grid's own panel --
+            # its raster -- and nothing else: Panels A and B keep theirs.
+            grid_sets = [("ry", ry.name), ("rx", rx.name), ("rq", rq.name)]
+            if preset_name in _PRESETS_RESET_STAT:
+                grid_sets += [("rd", "remove"), ("rt", "auto"), ("rc", "off")]
+            grid_sets += [(w[len("panel0_"):-len("_sel")], v)
+                          for w, v in _PRESET_SETS.get(preset_name, ())
+                          if w.startswith("panel0_r")]
+            grid_js = "".join(f"try {{ grid_tmpl.{k}.value = '{v}'; }} catch(e) {{}}\n"
+                              for k, v in grid_sets)
             return CustomJS(
                 args=args,
-                code=self._do_plot_js + colorize_mode_js + f"""
+                code=self._do_plot_js + f"""
+if (layout_rbg.active === 3 && grid_tmpl) {{
+    try {{ grid_tmpl.kind.active = 0; }} catch(e) {{}}
+{grid_js}    doPlot();
+    return;
+}}
+""" + colorize_mode_js + f"""
 // The preset's own layout, unless "Pin layout" is ticked (2026-10-10).
 const lay = (pin_cb && pin_cb.active.length > 0) ? layout_rbg.active : active_layout;
 layout_rbg.active      = lay;
@@ -10021,6 +11682,7 @@ try {{
 const over = (lay === 2);
 side_container.visible = !over;
 over_container.visible =  over;
+if (window.__cvGridLayout) window.__cvGridLayout(lay === 3);
 // row_height / column_width (2026-10-13): window.__cvApplySizes (_SIZES_JS)
 // keeps the sizes the user chose; the fixed sizes are the fallback.
 if (window.__cvApplySizes) {{ window.__cvApplySizes(); }} else {{
@@ -10075,7 +11737,18 @@ doPlot();
             return CustomJS(
                 args=args,
                 code=self._do_plot_js + f"""
-// A Statistical (Z-Score) colouring left by the Z-Score preset goes back
+// In Grid (gridplot G3) the preset sets the grid's own panel: a scatter,
+// one scatter cell per baseline, antenna, ... (G3 item 3).
+if (layout_rbg.active === 3 && grid_tmpl) {{
+    try {{ grid_tmpl.kind.active = 1; }} catch(e) {{}}
+    try {{ grid_tmpl.sx.value = '{sx.name}'; }} catch(e) {{}}
+    try {{ grid_tmpl.sy.value = '{y0.name}'; }} catch(e) {{}}
+    try {{ grid_tmpl.sat.value = '{at}'; }} catch(e) {{}}
+    try {{ grid_tmpl.sac.value = '{ac}'; }} catch(e) {{}}
+    doPlot();
+    return;
+}}
+// A Statistical (Z-Score) coloring left by the Z-Score preset goes back
 // to Continuous, as for every other preset; Categorical is left alone.
 try {{
     panel0_colorize_handles.concat(panel1_colorize_handles).forEach(function(h) {{
@@ -10094,6 +11767,7 @@ panel1_kind_switch.active = 1;
 {sets}
 side_container.visible = (lay !== 2);
 over_container.visible = (lay === 2);
+if (window.__cvGridLayout) window.__cvGridLayout(lay === 3);
 // row_height / column_width (2026-10-13): window.__cvApplySizes (_SIZES_JS)
 // keeps the sizes the user chose; the fixed sizes are the fallback.
 if (window.__cvApplySizes) {{ window.__cvApplySizes(); }} else {{
@@ -10190,11 +11864,11 @@ doPlot();
                 # correct theme by the time it's shown, not caught in
                 # Bokeh's raw default because the toggle never reached it.
                 "figs":         [p.figure    for p in self._all_panels],
-                # Cursor readout, categorical legend and colour bar of every
+                # Cursor readout, categorical legend and color bar of every
                 # panel: all three sit in the same info block and share its
-                # background (the legend and colour bar were missing here,
-                # so they stayed dark in light mode).  The colour bar's
-                # text uses ``inherit``, so recolouring the Div is enough.
+                # background (the legend and color bar were missing here,
+                # so they stayed dark in light mode).  The color bar's
+                # text uses ``inherit``, so recoloring the Div is enough.
                 "info_divs":    ([p._info_div for p in self._all_panels]
                                  + [p._legend_content for p in self._all_panels]
                                  + [p._colorbar_content for p in self._all_panels]),
@@ -10226,6 +11900,10 @@ doPlot();
                                  self._baseline_text, self._spw_text,
                                  self._antenna_prev_btn, self._antenna_next_btn,
                                  self._baseline_prev_btn, self._baseline_next_btn]
+                                + [it.all_btn for it in (self._field_iter, self._spw_iter,
+                                                         self._antenna_iter,
+                                                         self._baseline_iter)]
+                                + list(getattr(self, "_grid_sidebar_widgets", []))
                                 + _all_axis_widgets
                                 + self._flags.themed_widgets(),
                 # Colormap histogram figures + reset-button icons (added
@@ -10265,6 +11943,12 @@ doPlot();
                 # disabled on light; the table stayed light-on-white on
                 # dark).
                 "section_divs":   self._section_divs,
+                # Equation labels in the color-scaling controls
+                # (2026-11-18): colored through Div.styles, see
+                # _style_cmap_column.
+                "cmap_text_divs":  list(getattr(self, "_cmap_text_divs", [])),
+                "cmap_text_dark":  _CMAP_TEXT_DARK,
+                "cmap_text_light": _CMAP_TEXT_LIGHT,
                 "section_dark":   _SECTION_DARK,
                 "section_light":  _SECTION_LIGHT,
                 "spw_table":       self._spw_table,
@@ -10299,6 +11983,10 @@ const light     = cb_obj.active;
 """ + _THEME_RESTYLE_JS + """
 cb_obj.label = light ? '\U0001f319 Dark' : '\u2600 Light';
 
+// The Grid layout (gridplot G2): its chrome now, its cells once Python has
+// the new palettes (the response below).
+_step('grid', () => { for (const k in (window.__cvGrid || {})) window.__cvGrid[k].restyle(!light); });
+
 // Tell Python, so the palettes follow.  The chrome above is JS-only;
 // the ramps are resolved server-side and conditioned against the
 // background, so without this the plot keeps ramps trimmed for the
@@ -10312,6 +12000,8 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             // in Python does nothing here -- no Bokeh server -- so the
             // handler returns them and the client installs them, the
             // same contract every other image-updating handler uses.
+            if (resp && resp.status === 'ok')
+                for (const k in (window.__cvGrid || {})) window.__cvGrid[k].redraw();
             if (!resp || resp.status !== 'ok' || !resp.images) return;
             if (typeof theme_img_srcs === 'undefined') return;
             var n = Math.min(resp.images.length, theme_img_srcs.length);
@@ -10364,6 +12054,8 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             self._hover(export_btn, "tb_export"),
             _sep(),
             self._hover(dark_btn, "tb_theme"),
+            self._hover(self._help_button(dark_btn), "tb_help"),
+            self._grid_nav,
             # A window too narrow for the whole row (a laptop, with the
             # Spectrum / Time series presets added, 2026-10-09) wraps it
             # onto a second line instead of cutting off its end.  The
@@ -10442,7 +12134,7 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
         # layout, set on both kinds of each position as the layout buttons
         # do (panel_sizes).  "fit" starts at the layout's default height;
         # the browser fits it once the page is laid out (_SIZES_JS).
-        from .panel_sizes import row_heights, column_widths, ROW_HEIGHT_DEFAULT
+        from ..gridplot.panel_sizes import row_heights, column_widths, ROW_HEIGHT_DEFAULT
         _hs = [h if isinstance(h, int) else ROW_HEIGHT_DEFAULT[self._layout]
                for h in row_heights(self._row_height, self._layout)]
         _ws = column_widths(self._column_width, self._layout)
@@ -10558,12 +12250,6 @@ if (x != null && !isNaN(x)) {
             } else if (sy_label && sy_label === p_y_label && y != null && !isNaN(y)) {
                 p.hspan.location = y;
             }
-
-            console.log('[visplot cursor-span]', p.id,
-                        'p_x_label:', p_x_label, 'p_y_label:', p_y_label,
-                        'sx_label:', sx_label, 'sy_label:', sy_label,
-                        'vspan.location:', p.vspan.location,
-                        'hspan.location:', p.hspan.location);
         }
     }
 }
@@ -10598,7 +12284,7 @@ if (x != null && !isNaN(x)) {
             sjs.args["over_container"] = over_container
 
         # Panel sizes (2026-10-13): window.__cvApplySizes, see _SIZES_JS.
-        from .panel_sizes import FIT_MIN_HEIGHT
+        from ..gridplot.panel_sizes import FIT_MIN_HEIGHT
         self._app_context.add_init_script(
             code=_SIZES_JS.replace("__FIT_MIN__", str(int(FIT_MIN_HEIGHT))),
             args={
@@ -10673,9 +12359,14 @@ if (x != null && !isNaN(x)) {
 
         # Pre-built hint divs — one per sidebar widget that benefits from help.
         # All start hidden; focus/blur JS toggles visibility.
-        def _hint(html):
-            return Div(text=html, sizing_mode="stretch_width",
-                       visible=False, styles=_hint_style)
+        def _hint(spec):
+            # A plain string, or (tracking, long_html) -- help_text.py.
+            # The long form rides in the Div's tags, where the help key
+            # handler finds the one showing.
+            tracking, long_html = _helptext.split_spec(spec)
+            return Div(text=tracking, sizing_mode="stretch_width",
+                       visible=False, styles=_hint_style,
+                       tags=_helptext.long_tag(long_html))
 
         self._hint_field    = _hint("")   # filled in _build_sidebar with MS data
         self._hint_spw      = _hint("")
@@ -10693,10 +12384,16 @@ if (x != null && !isNaN(x)) {
         # Controls in the gear tabs and the antenna switch (2026-10-06):
         # what each one does and when to use it.  Fixed text, so filled
         # here; attached to the controls by _hover().
-        self._hint_rcorr      = _hint("<b>Correlation shown</b> \u2014 a raster shows one correlation at a time  | <b>First ticked</b>: the first one ticked in the Data section, named in the title  | <b>Parallel hands</b>: the mean of the two parallel hands, (XX+YY)/2 or (RR+LL)/2, the Stokes I-like view AIPS editors start from; a sample counts only where both hands are unflagged, and a flag box here flags both  | A product: that one, whether ticked or not  | Two panels on RR and LL show a problem in one hand only")
-        self._hint_averaging  = _hint("<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities, then take amplitude / phase. Amplitude drops where samples do not line up (noise, uncalibrated phase, a delay across the averaged channels). What AIPS and plotms do  | <b>Scalar</b>: average the amplitudes themselves; shows signal plus noise level, no loss from decorrelation  | Vector next to Scalar on two panels shows where coherence is lost")
+        self._hint_rcorr      = _hint((
+            "<b>Correlation shown</b> \u2014 a raster shows one correlation at a time  | <b>First ticked</b>: the first one ticked in the Data section  | <b>Parallel hands</b>: (XX+YY)/2 or (RR+LL)/2, the Stokes I-like view; a flag box here flags both hands  | A product: that one, whether ticked or not" + _helptext.MORE_CUE,
+            _helptext.points_html("<b>Correlation shown</b> \u2014 a raster shows one correlation at a time  | <b>First ticked</b>: the first one ticked in the Data section, named in the title  | <b>Parallel hands</b>: the mean of the two parallel hands, (XX+YY)/2 or (RR+LL)/2, the Stokes I-like view AIPS editors start from; a sample counts only where both hands are unflagged, and a flag box here flags both  | A product: that one, whether ticked or not  | Two panels on RR and LL show a problem in one hand only")))
+        self._hint_averaging  = _hint((
+            "<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities; amplitude drops where samples do not line up. The default in AIPS and plotms  | <b>Scalar</b>: average the amplitudes; no loss from decorrelation  | Vector next to Scalar shows where coherence is lost" + _helptext.MORE_CUE,
+            _helptext.points_html("<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities, then take amplitude / phase. Amplitude drops where samples do not line up (noise, uncalibrated phase, a delay across the averaged channels). The default in AIPS and plotms, which both offer scalar averaging too  | <b>Scalar</b>: average the amplitudes themselves; shows signal plus noise level, no loss from decorrelation  | Vector next to Scalar on two panels shows where coherence is lost")))
         self._hint_detrend    = _hint("<b>Phase slope</b> \u2014 for Phase RMS and Coherence  | <b>Remove</b>: take out a linear phase slope (a delay across frequency, a rate in time) before measuring the scatter, wherever the data clearly show one. Use for data that are not yet fringe-fitted  | <b>Keep</b>: measure the data as they are; a delay or rate then shows up as large scatter and low coherence  | On noise-dominated or already calibrated data the two give the same picture")
-        self._hint_twin       = _hint("<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, one scan where it is not  | <b>Off</b>: no windows  | <b>Scan</b> or a length: each scan, or pieces of that length; never across a gap  | For <b>Amp V Diff / Phase Diff</b> it is the stretch the reference mean is taken over (Auto and Off mean one scan)  | Longer windows are steadier but blur changes in time; on the plot they show as blocks")
+        self._hint_twin       = _hint((
+            "<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, else one scan  | <b>Off</b>: no windows  | <b>Scan</b> or a length; never across a gap  | Longer windows are steadier but blur changes in time" + _helptext.MORE_CUE,
+            _helptext.points_html("<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, one scan where it is not  | <b>Off</b>: no windows  | <b>Scan</b> or a length: each scan, or pieces of that length; never across a gap  | For <b>Amp V Diff / Phase Diff</b> it is the stretch the reference mean is taken over (Auto and Off mean one scan)  | Longer windows are steadier but blur changes in time; on the plot they show as blocks")))
         self._hint_cwin       = _hint("<b>Channel window</b> \u2014 how many channels each Phase RMS / Coherence value is measured within  | <b>Off</b>: the whole band where frequency is not a plot axis, single channels where it is  | A number: blocks of that many channels  | Needed, with a time window or alone, to see these quantities on a Time \u00d7 Channel waterfall")
         self._hint_ant_mode   = _hint("<b>Which baselines the ticked antennas select</b>  | <b>Either end</b>: every baseline with a ticked antenna at one end \u2014 one antenna against all the others  | <b>Both ends</b>: only baselines between ticked antennas \u2014 tick all and untick one to exclude it, or tick a few for a sub-array  | Ticked baselines override both")
         self._hint_s_twin     = _hint("<b>Time window (scatter)</b> \u2014 the stretch of time each Phase RMS / Coherence point is measured within  | <b>Auto</b>: one integration when X is Time, otherwise one scan  | <b>Off</b>: single integrations when X is Time, otherwise the whole selected time range  | <b>Scan</b> or a length: as given  | Short windows of noisy data give scattered, low-reading values")
@@ -10728,6 +12425,10 @@ if (x != null && !isNaN(x)) {
         for d in self._hint_divs():
             d.styles = {**dict(d.styles or {}), "max-height": f"{_STATUS_HEIGHT}px",
                         "overflow-y": "auto"}
+        self._notify_div.js_on_change("text", CustomJS(
+            args={"all_hints": self._hint_divs(), "status_row": self._status_row,
+                  "status_div": self._status_div},
+            code=_NOTIFY_CHANGED_JS))
         self._status_col = column(
             self._status_row,
             *self._hint_divs(),

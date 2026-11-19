@@ -25,9 +25,9 @@ Confidence markers, as in `hrs_commissioning_workflow_survey.md`:
    Miriad uvplt). "Channel maps" are the image-domain equivalent (a grid of
    cube planes). That is CARTA's job, not visplot's (section 1).
 2. **Yes, `calplot`'s primary mode is the grid.** It is "iterate over
-   antenna" with an optional overlay ("colour by antenna/SPW/polarization")
+   antenna" with an optional overlay ("color by antenna/SPW/polarization")
    as the second idiom. Both are needed. The second already exists in
-   visplot as colour-by-axis.
+   visplot as color-by-axis.
 3. **Build one shared grid component, with lightweight cells, used by both
    applications.** A cell is a plain Bokeh figure showing a `RenderedPanel`
    image produced by the existing headless panel path. One toolbar serves
@@ -72,7 +72,7 @@ looks different from its neighbours.
 |---|---|---|---|---|
 | plotms | MS and cal tables | `iteraxis` (scan, field, spw, baseline, antenna, time, corr) **[doc]/[recall]** | `gridrows`, `gridcols`; `exprange` exports one file per page **[doc]** | `xselfscale`/`yselfscale` give the iterated plots a common range; `xsharedaxis`/`ysharedaxis` draw one external axis per column/row **[doc]** |
 | plotcal (removed in CASA 6.2) | cal tables | antenna, time, spw, field; several at once, fixed order **[doc]** | `subplot`, Next button **[doc]** | The canonical example in its docs is one bandpass per plot, six plots per page, iterating over antennas **[doc]** |
-| plotbandpass | B and Tsys tables | antenna, spw, time | `subplot` rows×cols, default 2×2 **[doc]** | `overlay` = antenna/time/spw/baseband puts several in one frame in different colours **[doc]** |
+| plotbandpass | B and Tsys tables | antenna, spw, time | `subplot` rows×cols, default 2×2 **[doc]** | `overlay` = antenna/time/spw/baseband puts several in one frame in different colors **[doc]** |
 | AIPS SNPLT | SN/CL tables | antenna | `NCOUNT` plots per page **[doc]** | The standard way to inspect gain solutions **[doc]** |
 | AIPS VPLOT / POSSM | visibilities | baseline | `NPLOTS` per page **[doc]** | VPLOT: one baseline per plot, many per page, many pages **[doc]** |
 | difmap vplot | visibilities | baselines of one telescope | `nplots` per page; `n`/`p` keys page **[doc]** | Groups baselines by telescope so a telescope-based problem shows up, then edits **[doc]** |
@@ -107,7 +107,7 @@ expect this view.
   unchanged (a cell is an image).
 - **Two comparison modes matter, and both should be in calplot from the
   start.** Grid (one cell per antenna, shared scales) shows the shape of
-  each solution. Overlay (all antennas in one frame, coloured) shows the
+  each solution. Overlay (all antennas in one frame, colored) shows the
   outlier against the crowd. plotbandpass offers both for this reason.
 
 ### 1.3 Behaviours to carry over from plotms
@@ -119,6 +119,17 @@ design below:
   own scale" as an option.
 - External shared axes: tick labels only on the outer row/column, which
   saves a lot of space on a 4×4 page.
+  *Decided 2026-11-11 (Darrell): with a common scale, the X axis is drawn
+  across the **top** of the top row and the Y axis down the **left** of the
+  first column -- not at the bottom as plotms does: the top row is always
+  full (cells fill row by row), while a partly filled last page would put
+  bottom axes in the middle of the grid; the axes then sit in one place on
+  every page.  Each axis **name** appears **once** (centred over the top
+  row, down the left column), which also leaves room for long names; tick
+  numbers on every outer cell.  Cells are sized by their frame
+  (`frame_width`/`frame_height`), so a cell with an axis has the same plot
+  area as one without.  With a per-cell scale every cell has its own axes.
+  The PNG export follows the same rule.*
 - Export one PNG per page, for a page range (`exprange`). `png_export`
   already composites an M×N page with a shared colorbar and legend
   **[code]**.
@@ -268,10 +279,13 @@ some VLBA presets are much slower (`hrs_visplot_plan.md` section 7).
 
 - Layout: One / Side / Over / **Grid**.
 - Grid reveals: *Iterate by* (Antenna, Baseline, SPW, Field, Scan,
-  Correlation; a compound such as "Antenna, then SPW" later), Rows,
+  Correlation; a compound such as "Antenna, then SPW": section 18), Rows,
   Cols, Scale (common / per cell), page nav, page "k of n".
 - **The template is the Panel A configuration**, edited with the existing
   gear tab. No new configuration UI is needed. "Plot ▶" renders page 1.
+  *Superseded 2026-11-12/13 (sections 14, 15): the grid has a panel of
+  its own, "⚙ Grid panel" in the Grid section, started as a copy of
+  Panel A; `grid_panel=` in scripts.*
 - Presets: "Waterfalls by baseline", "Time series by baseline (grouped by
   antenna)", "Spectra by baseline".
 
@@ -311,9 +325,9 @@ remote framework, FlagDB's command list.
 | Parameterised (antpos, opac, gaincurve) | one table | the stored parameters | antenna |
 
 Plus: reference antenna named in titles; flagged solutions shown in a
-different colour or hidden; polarization overlay or ratio ("/" in plotms,
-**[doc]**); overlay mode (colour by antenna/SPW/pol, using the existing
-colour-by machinery); PARAMERR as error bars, which the scatter
+different color or hidden; polarization overlay or ratio ("/" in plotms,
+**[doc]**); overlay mode (color by antenna/SPW/pol, using the existing
+color-by machinery); PARAMERR as error bars, which the scatter
 renderer would need to learn.
 
 **HRS relevance:** the survey lists SNPLT-style views (delay, rate, phase,
@@ -389,10 +403,10 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 | Stage | What | Size | Exit |
 |---|---|---|---|
 | **G0** | Benchmark: page of 9/16 headless cells (waterfall per baseline; time series per baseline; one cal-like scatter), read-per-cell vs read-once-and-split. Record in this note. **Done 2026-11-10: section 11** (synthetic data; the cal-like scatter waits for C0; retake on real data) | S | Numbers; decide whether "read once, split" is needed in G2 or later |
-| **G1a** | Move `panel_spec`, `png_export`, `tick_format`, `palettes`, `colormap_scaling`, `panel_sizes` (and shading helpers as needed) to a shared module; re-export from old paths | S–M | Test suite unchanged; `plotfile=` output byte-identical |
-| **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
-| **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
-| **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only | M | Page time inside the G0 target |
+| **G1a** | Move `panel_spec`, `png_export`, `tick_format`, `palettes`, `colormap_scaling`, `panel_sizes` (and shading helpers as needed) to a shared module; re-export from old paths **Done 2026-11-10** (`devel/notes/drs/gridplot/gridplot_notes.md` section 1) | S–M | Test suite unchanged; `plotfile=` output byte-identical |
+| **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event. **Built 2026-11-11: section 12** (remote waits for G2) | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
+| **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets. **Built 2026-11-11: sections 13, 14** (rasters; presets are the panel presets in Grid; TW Hya / VLBA to test) | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
+| **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only; scatter grids; "whole grid" color scope by default (kept at "this page" for now: section 16); the grid's own template panel (section 14). **The grid's own panel built 2026-11-13: section 15; read once, split: section 16; scatter grids: section 17; compound iteration and the `axes_override` hook: section 18. G3 done** | M | Page time inside the G0 target |
 | **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables | M | Round-trip of values and flags against casatools reads |
 | **C1** | calplot app: selection (antenna, SPW, field, pol, time), grid per antenna, overlay mode, flagged solutions shown, refant in titles, PNG pages; remote kernels via the existing setup | L | Gain, bandpass and fringe tables from a real VLA/VLBA reduction |
 | **C2** | Solution flagging: box in drill-down panel, FlagDB list/undo, commit to `FLAG` with a backup copy | M | Flag, undo, commit, reopen in plotms and see the same flags |
@@ -447,7 +461,7 @@ channels. Here the useful axes are different:
 Design points:
 
 - **Scale is locked during playback.** A common scale is required, or the
-  colour and Y range jump every frame and change becomes unreadable. Play
+  color and Y range jump every frame and change becomes unreadable. Play
   uses the grid's common-scale limits, computed over the whole iteration
   range, not per frame.
 - **Prefetch on the client.** Frames are small (a 600×400 cell is about
@@ -490,6 +504,11 @@ only that cell; with a **common** scale it zooms all cells, because they
 share ranges. That is the natural result of the design and matches what a
 user would expect from each mode.
 
+*Proved in the G1b prototype (2026-11-11, `devel/notes/drs/gridplot/gridplot_notes.md`
+section 2): all three hold, with tools identical in every cell and the cell
+taken from the event's origin; Bokeh's merge does work with cubevis's
+`InfoTool` and `FlagTool` when their arguments are the same in every cell.*
+
 ### 9.3 Maximum rows and columns: yes, two limits
 
 - **A legibility floor, not a fixed shape.** Rows and columns are refused
@@ -502,6 +521,10 @@ user would expect from each mode.
   cheap, but G1b measures construction time and page-switch time at 64
   before the number is fixed. For comparison, ALMA's 66 antennas fit in two
   pages of 6×6. CARTA caps its channel map at 100 panels **[doc]**.
+- *Prototype (2026-11-11): the pool costs about 55 ms a cell at start, so
+  it defaults to 6 x 6, with up to 8 x 8 as an argument; rows x cols change
+  by re-assigning the grid's children (70-760 ms), never by hiding cells
+  (8 s).*
 - **No cap for headless export** beyond memory, as in plotms **[doc]**:
   a PNG page of 12×6 is reasonable on paper even if not on screen.
 
@@ -541,7 +564,7 @@ because every cell already has its data on the Python side:
    by phase RMS, flag fraction, SNR or Z-Score instead of by antenna number,
    so page 1 shows the problems. One metric per cell plus a sort key.
 8. **Cell badges and outlier outlines.** A small per-cell number (rms, %
-   flagged, median SNR) in the corner, and a coloured outline on cells
+   flagged, median SNR) in the corner, and a colored outline on cells
    whose value is far from the median of the page. It is the small-
    multiples version of the TVFLG/LISTR "find the bad antenna" matrix.
 9. **Links between calplot and visplot.** From a solution, open visplot on
@@ -710,6 +733,22 @@ unrelated. The new name avoids confusion with it.
 
 ### 10.5 To verify in C0
 
+*Checked 2026-11-15 on tables CASA 6.7.6 solved from a simulated MS
+(`devel/tools/calplot/make_caltables.py`; notes
+`devel/notes/drs/gridplot/gridplot_notes.md` section 14).  The type is
+`table.info` `subType` and the `VisCal` keyword.  Fringe `FPARAM` is
+(8, nchan): phase, delay, rate and dispersive delay for each of two pols.
+arcae reads every column and keyword.  The first bullet is answered for
+synthetic tables; a real VLBA fringe-fit and ALMA Tsys are still worth
+checking.*
+
+*Real tables 2026-11-15: TL016B, calibrated as in the CASA VLBA guide
+(`devel/tools/calplot/tl016b_caltables.py`; notes section 14).  Nine
+tables: Accor, Tsys, EPowerCurve (gain curve), two Fringe, B, K, and G
+(phase and amplitude).  The fringe packing is confirmed.  arcae returns
+FLAG as `uint8`.  The meaning of EPowerCurve's 16 values is still to be
+checked.  An ALMA Tsys spectrum is still not covered.*
+
 - Cal-table keyword names and the `FPARAM`/`CPARAM` packing per type, on
   real VLA, VLBA and ALMA tables.
 - How arcae returns complex and variably shaped columns (its README: complex
@@ -771,6 +810,186 @@ per query, not the data read.
   matrix) first; scatter grids wait for read-once-and-split.
 - G3's "read once, split" is required, and first in G3.
 - The grid source re-renders its template panel only: no hidden panels.
+
+## 12. G1b built (2026-11-11, base `bdb2ec76`)
+
+The grid view is built in `cubevis/toolbox/gridplot`: `GridSource` (the
+protocol visplot and calplot implement) with a synthetic source,
+`GridView` (pool of figures, one merged toolbar, paging with cache and
+prefetch, common/per-cell scale, outer axes at common scale with each name
+once, probe, crosshair, tap to drill, playback, Save PNG) and `GridApp`
+(the view on its own page). `export_png` gains `axes="outer"`, so a saved
+page follows the same axes rule; its default output is unchanged. A
+browser check (13 items, raster and scatter) and a demo notebook come with
+it. Details: `devel/notes/drs/gridplot/gridplot_notes.md` section 3.
+
+Not yet exercised: a remote kernel. G2 does that with visplot's own data.
+
+## 13. G2 built (2026-11-11, base `fe6c0b0d`)
+
+visplot has a Grid layout: the panel shown first, once per baseline,
+antenna, SPW, field, scan or correlation of the selection (`iterate_by`),
+in the grid view of section 12 -- Plot in Grid draws page 1, a tap opens
+the cell in One with the sidebar set to it, Grid again restores the grid's
+selection; Export PNG writes the page; Light / Dark follows.  Raster
+panels only (scatter after G3).  `plotfile=` writes pages
+(`gridrows`, `gridcols`, `exprange` = current / all / page numbers), with
+`png_export(axes="outer")`, which now sizes its margins from the tick
+labels.  Local and remote (a kernel on this host) checked in the browser;
+headless remote cells are pixel-identical to local.
+
+Found on the way: Bokeh does not lay out a grid nested in visplot's plot
+area (the grid has its own area), a hidden grid costs 1.4 s at page load
+(attached on first use instead), and a cubevis message sent while the
+websocket opens ends the session (the grid waits; the transport should be
+fixed).  G1a's alias modules, never committed, are restored.  Details:
+`devel/notes/drs/gridplot/gridplot_notes.md` section 4.
+
+Open: one color scale for the grid, or per cell as now (notes section 4).
+*Settled in section 14.*
+
+## 14. G2 follow-ups (2026-11-11, base `fc3ea3b8`)
+
+From Darrell's review of G2 (details: notes section 5):
+
+- **The plots get the whole plot area.**  The grid's own control row is
+  gone from visplot: Iterate by, Scale, Rows, Cols, Color, Pages/s and
+  Loop are a Grid section at the top of the sidebar; paging and Play are
+  in the toolbar; the cursor readout sits above the status bar.  The grid's
+  configuration stays Panel A's tab (its Raster / Scatter switch included):
+  one place to configure, no gear of the grid's own.  `GridView(embedded=True)`
+  lets an application (calplot too) place the controls itself.
+- **✱ on the iteration steppers** (Field, SPW, Antenna): back to all, and
+  plot at once, as ◀ / ▶ do.  Other edits still stage until Plot.
+- **Color scope** (*per cell*, *this page*, *whole grid*;
+  `gridcolor=`).  Shared normalisation, not only a shared vmin/vmax: the
+  cells color against one pooled sample of their values, so `eq_hist`
+  shares one curve.  Default *this page*; *whole grid* is found in the
+  background, a cell at a time, and becomes the default once G3 makes
+  reading every cell cheap.
+- **Frame cache budget** from the host: free memory decides, since remote
+  hosts are usually compute nodes (up to 64 GiB with 48 GiB or more free;
+  up to 16 GiB otherwise; 10 % under 12 GiB).
+
+**Plan changes**: G3 adds "whole grid becomes the default color scope".
+Next: G3 (read once and split; scatter grids).
+
+**Later the same day (2026-11-12, Darrell agreed):**
+
+- *The grid fits its cells.*  Rows x Cols is a page's most; when every
+  cell fits on one page the grid shrinks to them (one cell is one plot the
+  size of the grid; 4 are 2 x 2).  It stays in Grid.  Done.
+- *The grid gets its own panel* (G3), superseding "Panel A's tab is the
+  grid's configuration" above: a headless grid template with its own gear
+  tab, started as a copy of Panel A; drill-down copies the cell into
+  Panel A; the data selection stays shared.  Today, editing in Grid
+  changes Panel A and every Plot in Grid re-renders it while hidden.
+
+## 15. G3a built: the grid's own panel (2026-11-13, base `b694c8ad`)
+
+What the grid repeats is a panel of its own: slot G, apart from Panels A
+and B.  It is never drawn itself; its cells are drawn from it.  The details
+were agreed on 2026-11-13:
+
+- **`grid_panel=`**: one dict, with the keys of one `panels=` entry; a key
+  left out takes Panel A's value.  `layout="grid"` can start with the grid
+  and the panels each set up.  Without it the grid starts as a copy of
+  Panel A, made the first time Grid is shown.
+- **In the GUI**, "⚙ Grid panel" in the sidebar's Grid section: Panel A's
+  gear-tab pickers, Raster / Scatter, and a color scaling applied at
+  Plot (auto = the quantity's own).  Plot in Grid sends only it.  Panels A
+  and B are drawn when shown again, for the grid's selection, so the
+  hidden Panel A render on every Plot in Grid is gone.
+- **A tapped cell** sets up the panel One shows as the grid's panel (axes,
+  quantity, settings, color scaling) and plots it there.  Back to Grid
+  does not restore Panel A.
+- **Presets in Grid** set the grid's panel.  The reproducing call adds
+  `grid_panel=dict(...)`.  `plotfile=` in Grid draws neither A nor B.
+- **Scatter**: the switch is there.  Plot refuses Scatter until scatter
+  grids come (G3 items 2 and 3).
+
+Details: `devel/notes/drs/gridplot/gridplot_notes.md` section 7.  Next: G3
+item 2, read once and split.
+
+## 16. G3 item 2 built: read once, split (2026-11-13, base `732798c5`)
+
+- **Read once.**  When the grid is configured, the reader holds the
+  grid's rows in memory: the union's time rows and baselines, every
+  channel and correlation.  Each cell's query carries the key it got back
+  and is served from that copy, applying its own selection as it would
+  to the data on disk.  Every other caller (panels, flagging, commits)
+  reads as before.  The copy lives where the data are: in the worker,
+  for a remote kernel.  It is held within the frame cache's budget;
+  above that, the cells read one by one, as before.
+- **Split.**  A scatter cell's samples are cut from the union's frames,
+  which are read once.  Ready for scatter grids (item 3).
+- **Same pixels.**  Every cell is identical whether drawn from memory or
+  read alone.  This is checked across quantities, iteration axes,
+  pending flags, autocorrelations and UV ranges, and through a remote
+  kernel.
+- **Numbers** (synthetic VLBA-sized MS, 45 baselines): page 1 of a 3×3
+  waterfall grid in 2.0 s (was 3.5 s); all 45 cells 7.3 s (was 12.7 s);
+  the whole grid's color range 4.3 s after page 1 (was 10.1 s).  A
+  scatter cell is 0.25 s after the union's frames (was 0.79 s).
+- **Not split**: raster cells.  They query from memory at ≈ 0.15 s;
+  splitting them means redoing every raster reduction per cell.
+
+The default color scope stays *this page* (2026-11-13): the whole
+grid's range still takes seconds, tens of seconds on a large array.
+Revisit with real-data timings.  Next: item 3, scatter grids.
+
+## 17. G3 item 3 built: scatter grids (2026-11-13, base `eac9c066`)
+
+- **Scatter cells.**  The grid's panel may be a scatter: set it to
+  Scatter in the grid tab, pass `grid_panel=dict(kind="scatter", ...)`,
+  or press Time series or Spectrum in Grid.  Each cell is a copy of that
+  panel, with its layers, averaging and statistics, cut to its baseline,
+  antenna, SPW, field, scan or correlation.  Cells share the X and Y
+  range of the whole selection.  The probe and drill-down work as for
+  rasters.
+- **Density per cell.**  A scatter cell is shaded by its own counts.
+  *This page* and *whole grid* apply to rasters only; a pooled count
+  scale is left for later.
+- **Read once, under a budget.**  Cells are cut from the union's frames.
+  When averaging makes those frames larger than half the frame cache, the
+  cut stops and the cells read their own rows from memory instead.
+  Without that limit, the frames pushed each other out of the cache and
+  were read again for every cell.
+- **Numbers** (synthetic VLBA-sized MS, page of 9): Amplitude v Time
+  2.4 s (was 4.5 s); time series 3.4 s (was 7.6 s); spectrum 3.3 s
+  (was 7.6 s).  For the averaged grids, configuring takes about 6 s.
+  Most of that is one averaged plot of the whole selection, which sets
+  the shared range.
+- **Same pixels.**  Each cell drawn from memory is identical to the cell
+  read alone.  This holds across iteration axes, pending flags, and scan
+  and channel averaging.
+
+Details: `devel/notes/drs/gridplot/gridplot_notes.md` section 12.  G3 has
+two items left: compound iteration and the `axes_override` hook.
+
+## 18. G3 item 4 built: compound iteration, `axes_override` (2026-11-14, base `d5a14e6e`)
+
+- **Compound iteration.**  `iterate_by="antenna,spw"`, or Iterate by
+  Antenna *then* SPW in the GUI, makes a cell for each antenna and SPW:
+  each antenna's SPWs in turn.  The inner axis's values come from the
+  selection narrowed to each outer value, so a field's cells are its
+  scans, and a SPW's baselines are those with rows in it.  A cell is
+  titled "antenna · SPW", a tap selects both, and the status line and
+  reproducing call name both axes.  The limit is two axes, not both
+  Baseline and Antenna.  Raster and scatter grids alike.
+- **`axes_override`, as a hook.**  `VisGridSource.set_axes_override`
+  lets a cell draw other axes than the grid's panel (July decision 8).
+  Such a cell keeps its own scale and color range, stays out of the
+  common extent and zoom, and labels its axes on screen and in saved
+  pages.  No GUI or task argument sets it yet; a per-cell editor can be
+  built on it later.
+- **Not done**: a page layout with one row per outer value, as plotms
+  offers.  Cells fill row by row.
+
+G3 is done.  What G3 measured on synthetic data is within the G0 target.
+It should be retaken on TW Hya and the VLBA subset.  Details:
+`devel/notes/drs/gridplot/gridplot_notes.md` section 13.  Next: C0, the
+arcae `casa-caltab` xarray backend (sections 9.5, 9.6, 10).
 
 ## Sources
 

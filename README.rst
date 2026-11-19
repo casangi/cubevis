@@ -8,6 +8,11 @@ processing backend. Python and CASA drive image/data access while a
 generated JavaScript interface provides an interactive control front-end,
 usable from JupyterLab, Google Colab, or plain Python scripts.
 
+The documentation is at https://casangi.github.io/cubevis/.
+
+``cubevis`` replaces the ``casagui`` and ``vidavis`` packages, which are
+no longer developed.
+
 ``cubevis`` currently provides two applications:
 
 - **Interactive Clean** (``iclean``) - **released**. Visually observe and
@@ -36,22 +41,27 @@ application you're using:
    # Visibility Plotter (in development - no stable API yet)
    pip install cubevis[visplot]
 
+   # both applications in one environment
+   pip install cubevis[iclean,visplot]
+
    # add Jupyter/anywidget support for either, if working in a notebook
    pip install cubevis[iclean,notebook]
 
-``iclean`` depends on CASA6's ``casatasks``. ``visplot`` depends on
-`xarray-ms <https://xarray-ms.readthedocs.io>`_ / ``arcae`` for **both** its
-MSv2 and MSv4 backends, so it does not require ``casatasks`` even when
-working with legacy Measurement Sets.
+``iclean`` depends on CASA6's ``casatasks``, which runs the imaging
+(``tclean``); the images themselves are read and written with ``arcae``
+(see `Images`_ below), which the ``iclean`` extra installs. ``visplot``
+depends on `xarray-ms <https://xarray-ms.readthedocs.io>`_ / ``arcae`` for
+**both** its MSv2 and MSv4 backends, so it does not require ``casatasks``
+even when working with legacy Measurement Sets.
 
 ``iclean`` and ``visplot`` are convenience aliases for the underlying
 ``casa6`` and ``xarray`` extras, respectively; those backend-named extras
 are also available directly for anyone assembling a custom environment.
-Installing ``casa6`` and ``xarray`` together in the same plain ``pip``
-environment is not currently supported, since the two backends can require
-mutually incompatible native library versions (notably ``libprotobuf``) that
-``pip`` has no mechanism to reconcile - use a `pixi <https://pixi.sh>`_ or
-conda environment for combined installs.
+The two can be installed together in one plain ``pip`` environment
+(``cubevis[iclean,visplot]``, which is also what ``cubevis.setup`` installs
+for a remote kernel that serves both applications): ``casatools`` and
+``arcae`` each bring their own native libraries and work side by side in
+one process.
 
 Interactive Clean
 -----------------
@@ -89,6 +99,50 @@ while the `outlierfile` would look something like::
   imsize=[80,80]
   cell=[8.0arcsec,8.0arcsec]
   phasecenter=J2000 19:58:41.095 +40.56.01.043
+
+Images
+^^^^^^
+
+Interactive clean reads the residual and reads and writes the mask through
+``arcae`` rather than ``casatools``: CASA images (paged, or concatenated with
+``ia.imageconcat``), and `xradio <https://xradio.readthedocs.io>`_ images in
+Zarr. Nothing needs to be set for this. To go back to ``casatools`` for image
+access, set an environment variable where the images are (for a remote
+session, in the kernel's environment):
+
+.. code-block:: bash
+
+   export CUBEVIS_IMAGE_STORE=casatools
+
+With ``CUBEVIS_DEBUG=1`` the log says once which is in use, for example
+``images are read with XarrayImageStore (arcae, through cubevis.xarray.image;
+no casatools): the default``. If ``arcae`` or ``xarray`` is not installed,
+``casatools`` is used and the log says so.
+
+The same code is available by itself, with no CASA installed
+(``pip install cubevis[image]``):
+
+.. code-block:: python
+
+   import xarray as xr
+   import cubevis.xarray.image                      # registers the "casa-image" engine
+
+   ds = xr.open_dataset( 'test.residual', engine='casa-image' )
+   plane = ds.SKY.isel( time=0, polarization=0, frequency=12 ).values   # reads one plane
+
+   from cubevis.xarray.image import CasaImage, write_image
+   im = CasaImage( 'test.mask' )
+   im[:, :, 0, 12] = 0                              # index as CASA does: x, y, Stokes, channel
+
+   from cubevis.imaging import ImageReader          # a CASA image, an xradio Zarr image, or a dataset
+   reader = ImageReader.open( 'test.residual' )
+   reader.info( ).shape, reader.plane( 0, 12 ), reader.spectrum( 50, 50, 0 )
+
+The dataset is laid out as xradio's image datasets are (``SKY``,
+``FLAG_SKY``, ``BEAM_FIT_PARAMS_SKY``; dims ``time``, ``frequency``,
+``polarization``, ``l``, ``m``). The engine is used only when named, so it
+does not change what ``xr.open_dataset(path)`` does where xradio's own
+``xradio_casa_image`` engine is installed.
 
 Visibility Plotter
 ------------------

@@ -1,102 +1,101 @@
-# Configuration file for the Sphinx documentation builder.
+# Configuration for the cubevis documentation (Sphinx).
 #
-# This file only contains a selection of the most common options. For a full
-# list see the documentation:
-# https://www.sphinx-doc.org/en/master/usage/configuration.html
-
-# -- Path setup --------------------------------------------------------------
-
-# If extensions (or modules to document with autodoc) are in another directory,
-# add these directories to sys.path here. If the directory is relative to the
-# documentation root, use os.path.abspath to make it absolute, like shown here.
-#
-# For extensions
+# Pages are Markdown (MyST) or reStructuredText; both build side by side.
+# See docs/README.md for how to write and build them.
 from os.path import dirname, abspath, join
-import sys
 import os
+import sys
 
-sys.path.insert(0, abspath(join(dirname(__file__),'extensions')))      # For xref
-sys.path.insert(0, abspath(join(dirname(__file__),'..','..')))         # For autoapi
+sys.path.insert(0, abspath(dirname(__file__)))                         # links
+sys.path.insert(0, abspath(join(dirname(__file__), 'extensions')))     # xref, pydoc_include
 
 # -- Project information -----------------------------------------------------
 
 project = 'cubevis'
-copyright = '2021,2022,2023,2024,2026 Associated Universities, Inc. Washington DC, USA.'
+copyright = '2021-2026 Associated Universities, Inc. Washington DC, USA.'
 author = 'CASA visualization team'
 
-# The full version, including alpha/beta/rc tags
-release = '0.0.1'
+# -- Links for the :xref: role (docs/source/links/*.py) -----------------------
 
-
-# -- General configuration ---------------------------------------------------
-#
-# Import hypertext links for use in the documentation
-#
 from links.link import *
 from links import *
 
-###
-### add color...
-###     https://stackoverflow.com/questions/3702865/sphinx-restructuredtext-set-color-for-a-single-word/60991308#60991308
-###
 rst_prolog = """
  .. include:: <s5defs.txt>
-
  """
 
-# Add any Sphinx extension module names here, as strings. They can be
-# extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
-# ones.
-extensions = [ 'sphinx.ext.autodoc',
-               'sphinx.ext.napoleon',
-               'sphinx.ext.todo',
+# -- General configuration ---------------------------------------------------
+
+extensions = [ 'sphinx.ext.todo',
                'sphinx.ext.intersphinx',
-               'autoapi.extension',
-               'xref'
+               'myst_parser',
+               'xref',
+               'pydoc_include',
              ]
 
-# configure autoapi
-autoapi_dirs = ['../../cubevis' ]
-autoapi_add_toctree_entry = False
-autoapi_generate_api_docs = True
-autoapi_root = '_api/autoapi'
-autoapi_options = ['show-module-summary']
-autoapi_template_dir = '_templates'
-autoapi_keep_files = True
+source_suffix = { '.rst': 'restructuredtext', '.md': 'markdown' }
 
-# Add any paths that contain templates here, relative to this directory.
+# MyST: ::: fences for admonitions, definition lists, and #anchors on headings
+myst_enable_extensions = [ 'colon_fence', 'deflist', 'dollarmath' ]
+myst_heading_anchors = 3
+
+# Where the "from the Python source" labels and slide "source" links point.
+# GitHub Actions sets GITHUB_REF_NAME, so a branch build links to its branch.
+_ref = os.environ.get('GITHUB_REF_NAME') or 'main'
+if os.environ.get('GITHUB_EVENT_NAME') == 'pull_request':
+    _ref = os.environ.get('GITHUB_HEAD_REF') or 'main'
+pydoc_source_url = f'https://github.com/casangi/cubevis/blob/{_ref}'
+
 templates_path = ['_templates']
 
-# List of patterns, relative to source directory, that match files and
-# directories to ignore when looking for source files.
-# This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = []
-
+# The casagui API stubs and notebooks are kept with the historical
+# reference but are not built.
+exclude_patterns = [ 'historical/python', 'historical/notebooks' ]
 
 # -- Options for HTML output -------------------------------------------------
 
-# The theme to use for HTML and HTML Help pages.  See the documentation for
-# a list of builtin themes.
-#
-html_theme = 'sphinx_rtd_theme'
-
-# Add any paths that contain custom static files (such as style sheets) here,
-# relative to this directory. They are copied after the builtin static files,
-# so a file named "default.css" will overwrite the builtin "default.css".
+html_theme = 'furo'
+html_title = 'cubevis'
 html_static_path = ['_static']
+html_css_files = ['css/s4defs-roles.css', 'css/cubevis-docs.css']
 
-# These paths are either relative to html_static_path
-# or fully qualified paths (eg. https://...)
-html_css_files = ['css/s4defs-roles.css']
+# -- Which copy of the documentation this is ----------------------------------
+#
+# .github/workflows/docs.yml publishes several copies side by side (see
+# docs/publish_site.py) and says which one this build is:
+#
+#   CUBEVIS_DOCS_KIND   latest (main), release (vX.Y), dev (a docs-* branch);
+#                       unset for a local or pull-request build
+#   CUBEVIS_DOCS_NAME   main, the X.Y version, or the branch name
+#
+# A release and a preview get a banner pointing at the latest copy, and every
+# copy gets the version menu (_static/js/versions.js).
 
-###
-### cause documentation for class.__call__ to be generated
-###
-def member_skip( app, what, name, obj, would_skip, options ):
-    if name == '__call__':
-        return False
-    return would_skip
+docs_site_url = 'https://casangi.github.io/cubevis/'
+docs_site_path = '/cubevis/'
+_kind = os.environ.get('CUBEVIS_DOCS_KIND', '')
+_name = os.environ.get('CUBEVIS_DOCS_NAME', '')
+_current = { 'release': f'v{_name}/',
+             'dev': 'dev/' + ''.join(c if c.isalnum() or c in '._-' else '-' for c in _name) + '/',
+           }.get(_kind, '')
 
-def setup(app):
-    app.add_css_file('customization.css')
-    app.connect( 'autodoc-skip-member', member_skip )
+html_baseurl = docs_site_url          # canonical links name the latest copy
+html_js_files = [ ('js/versions.js', { 'data-site': docs_site_path, 'data-current': _current }) ]
+html_context = { 'docs_noindex': _kind == 'dev' }
+html_theme_options = { }
+if _kind == 'release':
+    version = release = _name
+    html_title = f'cubevis {_name}'
+    html_theme_options['announcement'] = (
+        f'This is the documentation for cubevis {_name}. '
+        f'The <a href="{docs_site_url}">latest documentation</a> describes the current development version.' )
+elif _kind == 'dev':
+    html_title = f'cubevis ({_name})'
+    html_theme_options['announcement'] = (
+        f'Preview of the <code>{_name}</code> branch, not yet merged. '
+        f'The <a href="{docs_site_url}">published documentation</a> is the one to cite or link to.' )
+
+# The slide decks (devel/slides/<name>/slides.html) are copied into the site
+# root, so they stay at <site>/<name>/slides.html whoever builds the docs:
+# GitHub Actions, Read the Docs, or `make html` here.
+html_extra_path = ['../../devel/slides']

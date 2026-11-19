@@ -80,7 +80,7 @@ from bokeh.layouts import column, row
 
 from cubevis.bokeh.tools._flag_tool import FlagTool
 
-from .tick_format import TICK_FORMATTER_JS
+from ..gridplot.tick_format import TICK_FORMATTER_JS
 
 #: Shared, idempotent busy-cursor overlay -- the CORE piece of what was
 #: previously a single, plotter-only `cvSetBusy()` (see visibility_
@@ -402,7 +402,7 @@ def _img_to_uint32(img) -> np.ndarray:
     HISTORY: the PIL branch used to write B, G, R, A, producing
     BGRA-in-memory — R and B transposed relative to what ``image_rgba``
     consumes.  Test-only, so nothing user-visible was wrong, but any test
-    asserting colour through this path was asserting a mirrored answer,
+    asserting color through this path was asserting a mirrored answer,
     and the old docstring's "0xAARRGGBB" described that same wrong
     layout.  Datashader's actual output was verified empirically
     (2026-08): shading ``cmap=["#FF0000", "#0000FF"]`` yields bytes
@@ -835,7 +835,7 @@ class VisibilityPlot(Model):
 
     @abc.abstractmethod
     def _panel_spec(self) -> "PanelSpec":
-        """Describe this panel: geometry, labels, and colour bands.
+        """Describe this panel: geometry, labels, and color bands.
 
         Must be cheap — plain attribute reads and values already computed
         during ``_render()``.  It is called on every ``_state_source``
@@ -876,7 +876,7 @@ class VisibilityPlot(Model):
         the browser never reaches Python, so the Python-side ranges are
         stale the moment the user touches the plot.
         """
-        from .panel_spec import RenderedPanel
+        from ..gridplot.panel_spec import RenderedPanel
         spec = self._panel_spec()
         if spec.status != "ok":
             return RenderedPanel(spec=spec, image=None, viewport=viewport)
@@ -1378,7 +1378,7 @@ class VisibilityPlot(Model):
         # change later.
         try:
             spec = self._panel_spec()
-            from .tick_format import set_time_ticker
+            from ..gridplot.tick_format import set_time_ticker
             for axes, ticks, is_utc in (
                     (self._fig.xaxis, spec.x_ticks,
                      spec.x_is_time and spec.time_labels == "utc"),
@@ -1469,13 +1469,13 @@ class VisibilityPlot(Model):
                 # Theme via CSS custom properties (set on the page root by
                 # the Light/Dark toggle, inherited into shadow DOM): any
                 # later re-send of these styles carries the variable, not a
-                # baked-in dark colour, so the strip can never revert to
+                # baked-in dark color, so the strip can never revert to
                 # dark in light mode.
                 "background":  "var(--cv-info-bg, #1e1e2e)",
                 "overflow-y":  "auto",
                 # The full width less Bokeh's default 5 px margin on each
                 # side (2026-10-14).  A plain 100% (the 2026-09 guard
-                # against a colour bar narrower than its plot) made each
+                # against a color bar narrower than its plot) made each
                 # strip 5 px wider than its panel, so the plot area always
                 # had a few pixels to scroll sideways.
                 "width":       f"calc(100% - {2 * _STRIP_MARGIN}px)",
@@ -2145,7 +2145,7 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
         The label comes from *info*, so a substituted axis reports what
         was actually plotted rather than what was asked for.
         """
-        from .tick_format import format_tick, si_scale
+        from ..gridplot.tick_format import format_tick, si_scale
         from .axes import Axis
 
         label = info.label
@@ -2160,7 +2160,7 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
                 origin = getattr(self, "_x_origin", None)
                 origin = self._x_range[0] if origin is None else origin
             if self._time_labels == "utc":
-                from .tick_format import utc_datetime_text
+                from ..gridplot.tick_format import utc_datetime_text
                 try:
                     return f"<b>{label}:</b> {utc_datetime_text(float(value))} UTC"
                 except (OverflowError, ValueError, OSError):
@@ -2213,7 +2213,10 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
 
         scans = info.get("scan_names") or []
         if scans:
-            parts.append(f"<b>Scan:</b> {', '.join(scans)}")
+            # Sorted, ranges, at most five pieces (2026-11-18): see
+            # selection_text.format_scan_list.
+            from .selection_text import format_scan_list
+            parts.append(f"<b>Scan:</b> {format_scan_list(scans)}")
 
         pairs = info.get("antenna_pairs") or []
         if pairs:
@@ -2223,7 +2226,7 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
             parts.append(f"<b>BL:</b> {bl_str}")
         bl_len = info.get("baseline_length_m")
         if bl_len is not None:
-            from .raster_grid import format_length
+            from ..gridplot.raster_grid import format_length
             parts.append(f"<b>Length:</b> {format_length(bl_len)}")
 
         n = info.get("n_scatter_samples")

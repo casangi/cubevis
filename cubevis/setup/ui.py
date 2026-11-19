@@ -29,14 +29,14 @@ from . import config_dir, host_dir
 WIDTH = 76
 
 
-def _tty_colours() -> dict:
+def _tty_colors() -> dict:
     if sys.stdout.isatty() and os.environ.get("NO_COLOR") is None:
         return {"b": "\033[1m", "dim": "\033[2m", "r": "\033[31m", "g": "\033[32m",
                 "y": "\033[33m", "0": "\033[0m"}
     return {k: "" for k in ("b", "dim", "r", "g", "y", "0")}
 
 
-C = _tty_colours()
+C = _tty_colors()
 
 
 class Quit(Exception):

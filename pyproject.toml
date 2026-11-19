@@ -104,12 +104,21 @@ xradio = ["xradio[zarr]>=1.3; python_version < '3.15'"]
 # ssh from the computer the plots are on; ipykernel and jupyter_client are
 # what a kernel's environment needs there (python -m cubevis.setup HOST).
 remote = ["sshpyk>=1.23", "ipykernel", "jupyter_client"]
-iclean = ["cubevis[casa6,remote]"]
+# cubevis.xarray.image: CASA images through arcae, as xarray datasets
+# (zarr besides, to read xradio images)
+image = ["arcae>=0.5.9,<0.6.0", "xarray"]
+iclean = ["cubevis[casa6,remote,image]"]
 visplot = ["cubevis[xarray,remote]"]
 
 
+# xarray engines.  Each is a package of its own under cubevis/xarray that
+# imports nothing else of cubevis.
+[project.entry-points."xarray.backends"]
+casa-image = "cubevis.xarray.image._backend:CasaImageBackendEntrypoint"
+
 [project.urls]
 "Homepage" = "https://github.com/casangi/cubevis?tab=readme-ov-file#cubevis---visualization-tools-for-casa-images"
+"Documentation" = "https://casangi.github.io/cubevis/"
 "Source" = "https://github.com/casangi/cubevis"
 "Bug Tracker" = "https://github.com/casangi/cubevis/issues"
 

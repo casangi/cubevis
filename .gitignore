@@ -117,3 +117,6 @@ cubevis/_js_versions.py
 
 # written by the build (pdm_build.py), also by pip install -e
 cubevis/__version__.py
+
+# Sphinx output (cd docs && make html)
+docs/build/

@@ -65,6 +65,17 @@ pytest = ["tests/manual/iclean-imaging/test_remote_session.py",
 args = ["-q"]
 
 [[suite]]
+name = "xarray-image"
+# cubevis.xarray.image (CASA images through arcae as xarray datasets, in
+# xradio's image layout) on images written here, ImageReader over CASA, Zarr
+# and in-memory images, and XarrayImageStore, interactive clean's default
+# image store.  No CASA needed; where casatools is installed the same tests
+# compare with it value by value, and where xradio is, read its images.
+pytest = ["tests/manual/xarray-image"]
+args = ["-q"]
+requires = ["arcae", "xarray", "zarr"]
+
+[[suite]]
 name = "iclean-parity"
 # interactive clean with real tclean (design step 6): the GUI's handlers give
 # the same replies with the imaging on a kernel as in this process; a kernel
@@ -76,6 +87,19 @@ pytest = ["tests/manual/iclean-imaging/test_iclean_parity.py"]
 args = ["-q"]
 requires = ["casatasks", "casatools", "jupyter_client", "ipykernel"]
 optional = true     # skipped without them, even under --strict (the workflow has no CASA)
+
+[[suite]]
+name = "visplot-grid"
+# visplot's Grid layout without a browser (gridplot, cubevis issue 9): the
+# iteration values, compound iteration, color scopes, the grid's own panel,
+# drill-down, plotfile= pages, rows held in memory (and counted in the frame
+# cache) drawing the same pixels as cells read alone, scatter grids, and the
+# grid following flags added or committed after it was drawn.  Makes its own
+# tiny MS (make_tiny_ms.py).  The browser half: tests/manual/gridplot/
+# visplot_grid_check.py (Playwright, not run here)
+pytest = ["tests/manual/gridplot/test_vis_grid.py"]
+args = ["-q"]
+requires = ["xradio", "arcae", "xarray_ms"]
 
 [[suite]]
 name = "tiny-ms"

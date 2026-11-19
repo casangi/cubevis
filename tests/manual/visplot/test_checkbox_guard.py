@@ -116,6 +116,10 @@ def _do_plot_js() -> str:
                 # tabs' live message.
                 "_RASTER_AXES_RULE_JS": _module_level_str(
                     _find_plotter(), "_RASTER_AXES_RULE_JS"),
+                # 2026-11-18: the current-row helpers for Prev / Next
+                # through ticked rows (iteration_subset.py).
+                "_ITER_SUBSET_JS": _module_level_str(
+                    _find_module("iteration_subset.py"), "ITER_SUBSET_JS"),
             })
     raise RuntimeError("_do_plot_js not found")
 

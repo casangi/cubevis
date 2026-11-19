@@ -108,7 +108,7 @@ the time for each step:
 10. Flag: Z-Score filter
 11. Rendering with pending flags
 12. Undo/redo
-13. Colour display mode
+13. Color display mode
 14. User-filter refusal
 15. JSONL export and the pending-flag report
 16. Version check (kernel cubevis against local)
@@ -149,9 +149,9 @@ Keep the terminal (Python log) and the browser DevTools console visible.
 - [ ] Plot ▶ after changing field / SPW / correlation; Reload ↺.
 - [ ] Presets (vplot, radplot, Waterfall, Z-Score) and Swap; One / Side by Side
       / Over-Under.
-- [ ] Colorize (continuous, categorical with hide, statistical); colour
+- [ ] Colorize (continuous, categorical with hide, statistical); color
       scaling controls.
-- [ ] Light/Dark (sidebar, Flagging controls, colour bars); Export PNG.
+- [ ] Light/Dark (sidebar, Flagging controls, color bars); Export PNG.
 - [ ] No yellow version warning in the status line (or, if there is one, it
       names both versions correctly).
 - [ ] Data section: type `<200m` in UV range without pressing Plot. The
@@ -178,7 +178,7 @@ Keep the terminal (Python log) and the browser DevTools console visible.
 - [ ] Preview on: the proposal dialog appears, the proposed samples are orange,
       and Accept and Reject both work.
 - [ ] Undo / Redo / Clear, with the panels refreshing each time.
-- [ ] Show in colour: pending samples painted on both panels; change the colour.
+- [ ] Show in color: pending samples painted on both panels; change the color.
 - [ ] Describe pending flags; Save flags as JSON, then Load flags from JSON
       (as pending) into a fresh session. Note that the JSON is written on the
       machine running Python, not on the kernel host.

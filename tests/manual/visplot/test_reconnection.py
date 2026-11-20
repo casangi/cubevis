@@ -99,10 +99,13 @@ class Frontend:
     __ping__ heartbeat, and optionally replies to p2j requests.
     """
 
-    def __init__(self, mgr, port, reply=True):
+    def __init__(self, mgr, port, reply=True, frontend_id="test-frontend", claim=False):
+        self._claim = claim
         self._mgr = mgr
         self._port = port
         self._reply = reply
+        self._frontend_id = frontend_id
+        self.notices = []
         self.ws = None
         self.received = []
         self.handshaked = asyncio.Event()
@@ -127,7 +130,8 @@ class Frontend:
         await self.ws.send(serialize({
             "id": "initialize",
             "direction": "j2p",
-            "frontend_id": "test-frontend",
+            "frontend_id": self._frontend_id,
+            "claim": self._claim,
             "backend_id": None,
             "comm_mgr_id": self._mgr.comm_mgr_id,
         }))
@@ -146,6 +150,9 @@ class Frontend:
                     await self.ws.send(serialize({
                         "type": "__pong__", "seq": msg.get("seq"),
                     }))
+                    continue
+                if msg.get("type") == "__superseded__":
+                    self.notices.append(msg)
                     continue
 
                 if msg.get("direction") == "p2j":
@@ -424,6 +431,358 @@ async def test_requested_shutdown_still_invokes_on_shutdown():
         assert mgr.state == AppState.STOPPED
 
         await fe.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+# ======================================================================
+# A failed handshake is that attempt's failure, not the session's
+# ======================================================================
+#
+# visplot user testing, 2026-11-20: a browser attempt closed while still
+# CONNECTING (ConnectionClosedOK 1001, "closed before the connection is
+# established") made process_messages report a fatal error and shut the
+# session down -- the reader was closed, and the window, which went on
+# working on its next attempt, got "MSv2Backend is not open" for every
+# later request.  Transport review 2026-11-16, WS-1 / WS-2 / WS-3.
+
+async def _abandoned_attempt(port, *, say=None):
+    """Connect, optionally send *say*, then close without completing the
+    handshake -- what a browser does when it abandons an attempt."""
+    ws = await websockets.connect(f"ws://{HOST}:{port}")
+    if say is not None:
+        await ws.send(say)
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_abandoned_handshake_does_not_shut_down():
+    port = _port()
+    shutdowns = []
+    mgr = _new_mgr(port, on_shutdown=lambda reason=None, description="": shutdowns.append(reason))
+    mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        await _abandoned_attempt(port)                       # closed before any message
+        await _abandoned_attempt(port, say=serialize({"id": "hello", "direction": "j2p"}))
+        await asyncio.sleep(0.5)
+        assert shutdowns == [], "a failed handshake shut the session down"
+        assert mgr.state not in (AppState.ERROR, AppState.STOPPED)
+
+        # ... and a proper frontend still gets in afterwards.
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        assert mgr.state == AppState.RUNNING
+        await fe.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_failed_attempt_leaves_the_live_connection_alone():
+    """A stray attempt must not retire the working transport (WS-2)."""
+    port = _port()
+    shutdowns = []
+    mgr = _new_mgr(port, on_shutdown=lambda reason=None, description="": shutdowns.append(reason))
+    comm = mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        live = mgr._transport
+        generation = mgr.connection_generation
+
+        await _abandoned_attempt(port)
+        await asyncio.sleep(0.5)
+
+        assert shutdowns == []
+        assert mgr._transport is live, "the live transport was replaced by a failed attempt"
+        assert mgr.connection_generation == generation
+        assert mgr.state == AppState.RUNNING
+
+        # The live connection still carries requests.
+        await comm.send("update", {"hello": 1}, callback=lambda reply: None)
+        await asyncio.wait_for(fe.got_request.wait(), 3)
+        await fe.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_silent_peer_times_out_of_the_handshake():
+    """A client that connects and says nothing cannot hold the slot."""
+    port = _port()
+    shutdowns = []
+    mgr = _new_mgr(port, on_shutdown=lambda reason=None, description="": shutdowns.append(reason))
+    mgr._handshake_timeout = 0.5
+    mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        silent = await websockets.connect(f"ws://{HOST}:{port}")
+        await asyncio.sleep(1.0)
+        assert shutdowns == [] and mgr._transport is None
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        assert mgr.state == AppState.RUNNING
+        await fe.close()
+        await silent.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+# ======================================================================
+# A replayed request does not run its handler twice (review RP-1)
+# ======================================================================
+#
+# The browser replays the request it had in flight when a connection
+# ended, with the same request_id.  Python may already have run it (only
+# the reply was lost) or still be running it.
+
+class _Caller:
+    """A frontend that sends j2p requests and collects the replies."""
+
+    def __init__(self, mgr, port):
+        self._mgr, self._port = mgr, port
+        self.ws = None
+        self.replies = []
+        self._pump = None
+        self.got = asyncio.Event()
+
+    async def connect(self):
+        self.ws = await websockets.connect(f"ws://{HOST}:{self._port}")
+        await self.ws.send(serialize({
+            "id": "initialize", "direction": "j2p", "frontend_id": "test-frontend",
+            "backend_id": None, "comm_mgr_id": self._mgr.comm_mgr_id,
+        }))
+        assert deserialize(await self.ws.recv()).get("type") == "initialized"
+        self._pump = asyncio.create_task(self._run())
+        return self
+
+    async def _run(self):
+        try:
+            async for raw in self.ws:
+                msg = deserialize(raw)
+                if msg.get("type") == "__ping__":
+                    await self.ws.send(serialize({"type": "__pong__", "seq": msg.get("seq")}))
+                elif msg.get("request_id"):
+                    self.replies.append(msg)
+                    self.got.set()
+        except (asyncio.CancelledError, websockets.exceptions.ConnectionClosed):
+            pass
+
+    async def request(self, request_id, message):
+        self.got.clear()
+        await self.ws.send(serialize({
+            "comm_id": "data", "message_id": "act", "request_id": request_id,
+            "direction": "j2p", "message": message,
+        }))
+
+    async def suspend(self):
+        self._pump.cancel()
+        try:
+            self.ws.transport.abort()
+        except AttributeError:
+            await self.ws.close()
+
+    async def close(self):
+        if self._pump:
+            self._pump.cancel()
+        try:
+            await self.ws.close()
+        except Exception:
+            pass
+
+
+def _counting_mgr(port, *, delay=0.0, gate=None):
+    mgr = _new_mgr(port)
+    calls = []
+
+    async def act(message):
+        calls.append(message)
+        if gate is not None:
+            await gate.wait()
+        if delay:
+            await asyncio.sleep(delay)
+        return {"n": len(calls), "echo": message}
+
+    mgr.open("data").register("act", act)
+    return mgr, calls
+
+
+@pytest.mark.asyncio
+async def test_replay_of_an_answered_request_resends_the_reply():
+    port = _port()
+    mgr, calls = _counting_mgr(port)
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe = await _Caller(mgr, port).connect()
+        await fe.request("r1", {"step": "next"})
+        await asyncio.wait_for(fe.got.wait(), 3)
+        await fe.request("r1", {"step": "next"})            # the replay
+        await asyncio.wait_for(fe.got.wait(), 3)
+        assert len(calls) == 1, "the handler ran again for a replayed request"
+        assert [r["message"] for r in fe.replies] == [{"n": 1, "echo": {"step": "next"}}] * 2
+
+        await fe.request("r2", {"step": "next"})            # a new request runs
+        await asyncio.wait_for(fe.got.wait(), 3)
+        assert len(calls) == 2 and fe.replies[-1]["message"]["n"] == 2
+        await fe.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_replay_while_the_original_runs_is_dropped():
+    port = _port()
+    gate = asyncio.Event()
+    mgr, calls = _counting_mgr(port, gate=gate)
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe = await _Caller(mgr, port).connect()
+        await fe.request("r1", {"x": 1})
+        await asyncio.sleep(0.2)
+        await fe.request("r1", {"x": 1})                    # replay, original still running
+        await asyncio.sleep(0.2)
+        gate.set()
+        await asyncio.wait_for(fe.got.wait(), 3)
+        await asyncio.sleep(0.3)
+        assert len(calls) == 1
+        assert len(fe.replies) == 1, "the dropped copy got a reply of its own"
+        await fe.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_reply_lost_on_a_drop_reaches_the_replay_once():
+    """The reconnect case itself: the reply to r1 had nowhere to go; the
+    page comes back, replays r1, and gets exactly one reply without the
+    handler running again."""
+    port = _port()
+    mgr, calls = _counting_mgr(port, delay=0.4)
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe1 = await _Caller(mgr, port).connect()
+        await fe1.request("r1", {"flag": "apply"})
+        await asyncio.sleep(0.1)
+        await fe1.suspend()                                 # drops before the reply
+        await asyncio.sleep(1.0)                            # handler finishes meanwhile
+
+        fe2 = await _Caller(mgr, port).connect()
+        await fe2.request("r1", {"flag": "apply"})
+        await asyncio.wait_for(fe2.got.wait(), 3)
+        await asyncio.sleep(0.3)
+        assert len(calls) == 1, "flag apply ran twice"
+        assert len(fe2.replies) == 1 and fe2.replies[0]["message"]["n"] == 1
+        await fe2.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_handler_is_not_mistaken_for_a_running_one():
+    """A handler that never finished (cancelled) leaves no record, so the
+    replay runs it instead of being dropped forever."""
+    mgr, calls = _counting_mgr(_port(), gate=asyncio.Event())
+    msg = {"comm_id": "data", "message_id": "act", "request_id": "r1",
+           "direction": "j2p", "message": {}}
+    task = asyncio.ensure_future(mgr._handle_request(msg))
+    await asyncio.sleep(0.1)
+    assert mgr._last_request["data"] == ["r1", None]
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert "data" not in mgr._last_request
+
+
+@pytest.mark.asyncio
+async def test_python_replay_keeps_its_request_id():
+    """Python -> browser half of RP-1: the request replayed after a
+    reconnect carries its first request_id, so the page can tell."""
+    port = _port()
+    mgr = _new_mgr(port)
+    comm = mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe1 = await Frontend(mgr, port, reply=False).connect()
+        await comm.send("update", {"payload": 1}, callback=lambda r: None)
+        await asyncio.wait_for(fe1.got_request.wait(), 5)
+        first = fe1.received[0]["request_id"]
+        await fe1.suspend()
+        await asyncio.sleep(1.0)
+        fe2 = await Frontend(mgr, port).connect()
+        await asyncio.wait_for(fe2.got_request.wait(), 5)
+        assert fe2.received[0]["request_id"] == first
+        await fe2.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+# ======================================================================
+# Newest tab takes over (review WS-2)
+# ======================================================================
+
+@pytest.mark.asyncio
+async def test_another_tab_supersedes_the_first():
+    port = _port()
+    shutdowns = []
+    mgr = _new_mgr(port, on_shutdown=lambda reason=None, description="": shutdowns.append(reason))
+    comm = mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        tab1 = await Frontend(mgr, port, frontend_id="page-1").connect()
+        await asyncio.sleep(0.2)
+        tab2 = await Frontend(mgr, port, frontend_id="page-2").connect()
+        await asyncio.sleep(0.5)
+
+        assert [n["type"] for n in tab1.notices] == ["__superseded__"]
+        assert tab1.ws.close_code == _comm_mgr_module.SUPERSEDED_CLOSE_CODE
+        assert tab2.notices == []
+        assert shutdowns == [] and mgr.state == AppState.RUNNING
+        await comm.send("update", {"to": "tab2"}, callback=lambda r: None)
+        await asyncio.wait_for(tab2.got_request.wait(), 3)
+        assert tab1.received == []
+
+        # The first page waking and reconnecting on its own is turned away:
+        # the tabs must not trade the session back and forth.
+        woke = await Frontend(mgr, port, frontend_id="page-1").connect()
+        await asyncio.sleep(0.5)
+        assert [n["type"] for n in woke.notices] == ["__superseded__"]
+        assert tab2.notices == [] and mgr._transport is not None
+        assert mgr._transport.frontend_id == "page-2"
+
+        # "Use this tab" (claim): the first page takes it back.
+        tab1b = await Frontend(mgr, port, frontend_id="page-1", claim=True).connect()
+        await asyncio.sleep(0.5)
+        assert [n["type"] for n in tab2.notices] == ["__superseded__"]
+        assert tab1b.notices == [] and mgr._transport.frontend_id == "page-1"
+        await tab1b.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_same_page_reconnecting_is_not_superseded():
+    port = _port()
+    mgr = _new_mgr(port)
+    mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        a = await Frontend(mgr, port, frontend_id="page-1").connect()
+        await asyncio.sleep(0.2)
+        b = await Frontend(mgr, port, frontend_id="page-1").connect()
+        await asyncio.sleep(0.5)
+        assert a.notices == [] and a.ws.close_code != _comm_mgr_module.SUPERSEDED_CLOSE_CODE
+        await b.close()
     finally:
         server.close()
         await server.wait_closed()

@@ -94,6 +94,10 @@ export interface TransportBase {
  *     await transport.connect()  // Performs handshake
  *     await transport.run()      // Runs until connection closes
  */
+// WebSocket close code Python uses for a page another page has taken the
+// session from: SUPERSEDED_CLOSE_CODE in cubevis/bokeh/transport/_comm_mgr.py.
+export const SUPERSEDED_CLOSE_CODE = 4001
+
 export class WebSocketTransport implements TransportBase {
     private websocket?: WebSocket
     private onMessageCallback?: (msg: any) => void
@@ -121,7 +125,11 @@ export class WebSocketTransport implements TransportBase {
 
     constructor(
         private comm_mgr: CommMgr,
-        private address: [string, number]
+        private address: [string, number],
+        // True when the page is taking the session back on purpose ("Use
+        // this tab"); sent in the handshake.  An automatic reconnect of a
+        // page another tab has superseded is turned away by Python.
+        private claim: boolean = false
     ) { }
     
     setMessageCallback(callback: (msg: any) => void): void {
@@ -420,9 +428,10 @@ export class WebSocketTransport implements TransportBase {
             this.send({
                 id: 'initialize',
                 direction: 'j2p',
-                frontend_id: appContext?.frontend_id || null,
+                frontend_id: appContext?.frontend_id || this.comm_mgr.pageId,
                 backend_id: appContext?.backend_id || null,
-                comm_mgr_id: this.comm_mgr.comm_mgr_id
+                comm_mgr_id: this.comm_mgr.comm_mgr_id,
+                claim: this.claim
             })
             
             // Timeout after 5 seconds
@@ -471,6 +480,14 @@ export class WebSocketTransport implements TransportBase {
                             return
                         }
 
+                        // Another page has the session (WS-2).  The close
+                        // that follows (SUPERSEDED_CLOSE_CODE) says the same;
+                        // either one is enough.
+                        if (data && data.type === "__superseded__") {
+                            this.comm_mgr.onSuperseded()
+                            return
+                        }
+
                         // Any inbound traffic at all proves the socket is alive,
                         // so an outstanding pong deadline can be stood down.
                         this.notePong()
@@ -494,6 +511,9 @@ export class WebSocketTransport implements TransportBase {
                 this.stopHeartbeat()
                 this.connected = false
                 this.initialized = false
+                if (event.code === SUPERSEDED_CLOSE_CODE) {
+                    this.comm_mgr.onSuperseded()
+                }
                 this.finishRun()
             }
 

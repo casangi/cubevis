@@ -48,9 +48,9 @@ File shorthand:
 
 | ID | Sev | One line |
 |---|---|---|
-| WS-1 | S1 | Any failure during the handshake of *any* incoming WebSocket connection shuts the whole application down |
-| WS-2 | S1 | A new connection retires the live transport *before* the newcomer has proved itself (handshake) — a stray or second-tab connection kills the working one |
-| WS-3 | S1 | Retiring a half-open socket can take `close_timeout` (10 s default) while the JS handshake deadline is 5 s → guaranteed first-attempt failure, which then hits WS-1 |
+| WS-1 ✅ | S1 | Any failure during the handshake of *any* incoming WebSocket connection shuts the whole application down |
+| WS-2 (part) | S1 | A new connection retires the live transport *before* the newcomer has proved itself (handshake) — a stray or second-tab connection kills the working one |
+| WS-3 ✅ | S1 | Retiring a half-open socket can take `close_timeout` (10 s default) while the JS handshake deadline is 5 s → guaranteed first-attempt failure, which then hits WS-1 |
 | RP-1 | S1 | In-flight requests are replayed after reconnect with no de-duplication; a handler can run twice (JS reuses the request id, so a Python-side fix is cheap) |
 | HB-1 | S1/S2 | A synchronous handler longer than 10 s makes the browser declare a healthy socket dead → reconnect + replay (RP-1) → the long handler runs a second time |
 | JS-1 | S1/S2 | `cm.ts` reconnect is not single-flight and reads `this.transport` across awaits (the bug Python fixed with a local reference is still present in TypeScript) |
@@ -76,6 +76,12 @@ would turn each of these from a hang into a visible failure.
 ## 2. WebSocket leg (Python ↔ browser tab)
 
 ### WS-1 [C] S1 — handshake failure is fatal to the application
+
+> **Fixed in `debug-0003` (2026-11-20).** Hit in visplot user testing: a browser attempt closed while
+> still CONNECTING (`ConnectionClosedOK` 1001) shut the session down, and the window, which carried on
+> with its next attempt, then got "MSv2Backend is not open" for every request. `connect()` no longer
+> calls `abort`; `process_messages` closes a failed attempt, logs it and returns without touching the
+> live connection. Regression tests in `tests/manual/visplot/test_reconnection.py`.
 `llt.py:320-324` (`WebSocketTransport.connect`): every exception calls `self.abort(e)` and re-raises.
 `abort` is `transport_abort` (`cm.py:895-898`) → `report_error(fatal=True)` → state `ERROR`.
 The re-raise lands in `process_messages`' outer `except Exception` (`cm.py:995-1002`) →
@@ -94,6 +100,20 @@ connection, return. Only escalate to fatal for errors that are about the applica
 Remove the `abort` call from `connect()` (or make `transport_abort` non-fatal for connect-phase errors).
 
 ### WS-2 [C] S1 — the old transport is retired before the new one is validated
+
+> **Fixed in `debug-0003` (2026-11-20), except the `backend_id` mismatch, which still only warns.**
+> The handshake runs first, on the attempt's own transport, with a 10 s timeout
+> (`CommMgr._handshake_timeout`); only a completed handshake retires the live transport.
+> Second-tab policy: **the newest page wins.** The page it replaces gets `__superseded__` and a close
+> with `SUPERSEDED_CLOSE_CODE` (4001), stops reconnecting (including on focus/wake), and shows a
+> full-window notice with a *Use this tab* button (`CommMgr.onSuperseded` / `reclaim` in `cm.ts`).
+> Python remembers superseded pages (`_superseded_pages`) and turns away their automatic reconnects
+> while the other page is connected; only the button's handshake (`claim: true`) takes the session
+> back, so two tabs cannot trade it on every wake.
+> Found on the way: **`frontend_id` was always `null`.** `find.context(comm_mgr)` does not reach the
+> `BokehAppContext` from the CommMgr, so Python never could tell a second tab from a reconnect, and
+> two open tabs retired each other in a loop (seen live). `cm.ts` now has a per-page-load `pageId`,
+> sent when the context's id is not found.
 `cm.py:878-886`: on *any* new connection, `self._transport.close()` and `_reset_for_reconnect()` run
 before `WebSocketTransport.connect()` has even read the first frame. Consequences:
 - A second browser tab (or anything else that connects) closes the first tab's working socket. The
@@ -112,6 +132,9 @@ deliberately — but not both tabs oscillating. `frontend_id` already distinguis
 from "another tab".
 
 ### WS-3 [L] S1 — slow close of a dead socket outlasts the browser's handshake deadline
+
+> **Fixed in `debug-0003` (2026-11-20):** the retired transport is closed in a separate task
+> (`CommMgr._close_retired`), off the new connection's path.
 `cm.py:883` awaits `WebSocketTransport.close()` → `websocket.close()` (`llt.py:497`). For a half-open
 peer the `websockets` library waits up to `close_timeout` before giving up. visplot passes
 `close_timeout=5, ping_interval=20, ping_timeout=10` (`visibility_plotter.py:4624-4631`; iclean's call at
@@ -152,6 +175,13 @@ JS `goodbyeSent` is also never reset.
 ## 3. Reconnect, replay and liveness (both sides)
 
 ### RP-1 [C] S1 — replay without de-duplication
+
+> **Fixed in `debug-0003` (2026-11-20).** Python: `CommMgr._last_request` (one record per comm --
+> each side has one request in flight per comm, so a replay is always that comm's last request):
+> running → the copy is dropped; answered → the reply is sent again, handler not called. The reply is
+> recorded even when no transport is connected at that moment (that is the case a replay needs), and a
+> handler that ends without a reply (cancelled) leaves no record. Python → JS replays keep their
+> `request_id` (queue entries carry it), and `cm.ts` keeps the same per-comm record and resends.
 Both sides re-queue in-flight requests at the front of the comm's queue when a connection ends
 (`cm.py:1153-1160`, `cm.ts:397-418`). The request may already have been *received and executed* by the
 peer — only the reply was lost, or is still being computed. Nothing detects that:
@@ -196,6 +226,12 @@ missed, or lengthen the routine deadline; (d) optionally answer pings from Pytho
 having `_handle_request` send an interim `__busy__` frame before invoking a handler known to be slow.
 
 ### JS-1 [C] S1/S2 — `cm.ts` connection setup is not single-flight
+
+> **Fixed in `debug-0003` (2026-11-20):** `connecting` holds the attempt under way;
+> `scheduleReconnect`, `onWake` and `send` wait for it (`startAttempt`). `connectWebSocket`,
+> `setupTransport` and `runTransportWithReconnection` hold their transport locally and give up when
+> `this.transport` has moved on. Live check: socket declared dead, then a burst of focus/online/
+> visibility events → one reconnect handshake on the Python side, none failed.
 `scheduleReconnect()` is reachable from the end of `runTransportWithReconnection`, from `onWake`
 (focus + visibilitychange + pageshow + online — a tab switch fires three of them), and from `send()`.
 `reconnectTimer` is cleared at the top of the timer callback (`cm.ts:478`), *before*

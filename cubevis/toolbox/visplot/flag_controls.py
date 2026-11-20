@@ -417,6 +417,18 @@ class FlagController:
             bl_axis = getattr(panel, "_bl_axis", None)
             if bl_axis is not None and Axis.BASELINE in (x_ax, y_ax):
                 req["baseline_order"] = [int(i) for i in bl_axis.ids]
+            # A Time axis with its gaps closed (debug-0003) is in positions
+            # too: the box becomes the real times of the cells it covers.
+            # Across a closed gap that includes the gap itself, which holds
+            # nothing of this selection.
+            t_axis = getattr(panel, "_time_axis", None)
+            if t_axis is not None and Axis.TIME in (x_ax, y_ax):
+                k0, k1 = ("x0", "x1") if x_ax == Axis.TIME else ("y0", "y1")
+                span = t_axis.real_span(req[k0], req[k1])
+                if span is None:
+                    raise ValueError("the box covers only a gap between scans, "
+                                     "where there is no data")
+                req[k0], req[k1] = span
 
             def _span(ax, a, b):
                 if ax == Axis.BASELINE and bl_axis is not None:

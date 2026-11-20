@@ -259,7 +259,7 @@ def test_plotter_wiring():
     src = inspect.getsource(vp)
     assert "const _spw_idx = cvIterEffective(spw_src, 'spw');" in src
     assert "const [_ant_eff, _bl_eff] = cvIterAntBl(ant_src, bl_src);" in src
-    assert 'code=_do_plot_js + "cvIterClearAll(spw_src, ant_src, bl_src); doPlot(false);"' in src
+    assert 'code=_do_plot_js + "cvIterClearAll(spw_src, ant_src, bl_src); cvScanEnd(); doPlot(false);"' in src
     assert "if (cvIterSubsetStep(spw_src, 'spw', idents.map((_, i) => i), delta)) return;" in src
     assert src.count("_itsub.END_ON_TICK_CHANGE_JS") == 1
     assert "_itsub.MARKER_TEMPLATE" in src

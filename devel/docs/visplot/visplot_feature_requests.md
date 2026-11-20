@@ -13,6 +13,37 @@ For each request it gives what was asked, what visplot does today (checked
 against the code), the design questions, and an estimate of size.  The
 order is roughly the order in which they could be taken up.
 
+## Status (`debug-0003`, 2026-11-19)
+
+Triaged after `debug-0001` and `debug-0002` were merged (#24):
+
+| # | Request | Outcome |
+|---|---|---|
+| 1 | Scan iteration | **Built** (`debug-0003`): Prev / ✱ / Next beside Scan, the box kept as a text box, a "▶ Scan 7 · 3 of 5" readout; only the field shown's scans (`scan_iteration.py`). Skipping scans with no data for the SPWs / antennas / time range needs a reader method (and so a new remote-kernel fingerprint) and is left for later. |
+| 2 | Correlation iteration | Own issue, for discussion. |
+| 3 | "Correlation shown" | **Kept** (option a) and **documented**: a raster may show a product the Data ticks leave out. |
+| 4 | Iterated value in the title | **Built**: a default title ends with what the selection holds one of, of several ("— 1642+689, SPW 1, scan 7, DA41&DV01"). |
+| 5 | Channel selection | Own issue, for discussion (large). |
+| 6 | Time (integration) iteration | Own issue, for discussion. |
+| 7 + 8b | Aggregation; windows for every quantity | One issue, for discussion. |
+| 8a | Typed window values | **Built**: "Custom…" in the Time / Channel window dropdowns. |
+| 9 | Help pages from the in-app help | Done in `debug-0002`. |
+| — | Close time gaps (its own ticket) | **Built** for raster panels: the gear tab's *Time gaps: Closed* (`raster_grid.TimeAxis`); the linked cursor converts through real time. Checked on VLBA data (TL016B, fringe finder with 2 scans 84 min apart). Not yet: a constructor argument (scripts, `plotfile=`, the "Describe this plot" call), scatters with X = Time, frequency gaps between SPWs, finer re-query when zoomed. |
+| — | Scan intent selection | Own issue: MSv4 has `scan_intents` (xradio's schema), so it is in scope. |
+
+Rule for feature choices from here on: what MSv4 (xradio's processing
+set) provides decides. A feature only MSv2 can support is declined by
+default; arguing it up means getting it into MSv4 first.
+
+Found while checking the gaps: a cell's width is inferred from the
+spacing of its neighbours (`raster_grid.cell_edges`), so a lone channel
+of an SPW, or a lone integration of a scan, is drawn as wide as the
+distance to the next one (two one-channel SPWs each filling half a
+Frequency axis).  The fix is to carry the true channel widths and
+integration intervals with the aggregate.
+
+The sections below are the original planning notes.
+
 | # | Request | Size | Depends on |
 |---|---|---|---|
 | 1 | [Scan iteration](#1-scan-iteration) | medium | — |

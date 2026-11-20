@@ -78,7 +78,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import html as _html
+import inspect
 import base64
 import json
 import logging
@@ -109,7 +111,7 @@ from .axes import Axis
 from .selection import (
     SelectionSpec, normalize_averaging, normalize_baseline_combine,
 )
-from ..gridplot.raster_grid import normalize_baseline_order
+from ..gridplot.raster_grid import normalize_baseline_order, normalize_time_gaps
 from .data._raster_stats import normalize_chan_window, normalize_time_window
 from .data._scatter_average import normalize_avg_chan, normalize_avg_time
 from . import antenna_baseline_select as _abs
@@ -117,10 +119,13 @@ from . import colormap_sync as _cms_sync
 from . import help_text as _helptext
 from . import iteration_subset as _itsub
 from .iteration_subset import ITER_SUBSET_JS as _ITER_SUBSET_JS
+from . import scan_iteration as _scanit
+from .scan_iteration import SCAN_ITER_JS as _SCAN_ITER_JS
 from .antenna_baseline_select import SELECTION_PAYLOAD_JS as _SELECTION_PAYLOAD_JS
 from .data_format import MSV2 as _MSV2, detect_data_format, resolve_data_args
 from .selection_text import (SelectionTextError, parse_scan_text, parse_field_text,
                              parse_timerange_text, parse_uvrange_text)
+from .selection_text import SCAN_TEXT_JS as _SCAN_TEXT_JS
 from .visibility_raster import VisibilityRaster
 from .visibility_scatter import VisibilityScatter, ScatterLayer, _LAYER_CMAPS
 from .data.reader import DEFAULT_CATEGORY_PRIORITY as _DEFAULT_CATEGORY_PRIORITY
@@ -274,6 +279,8 @@ _STATIC_HINTS = {
         "<b>Color scaling</b> \u2014 how values are spread over the colors; changes the picture, never the data  | <b>eq_hist</b>: every color used equally; shows faint structure  | <b>linear</b>: honest about size  | <b>log / sqrt</b>: in between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights above a cutoff", "vp-scaling"),
     "bcombine": (
         "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines (a raster without Baseline on an axis). Averaging applies within each baseline; this is how the baselines are combined  | <b>Mean</b>: the general picture  | <b>Median</b>: what most baselines share  | <b>Maximum</b>: a problem shows even on one baseline  | <b>Vector (coherent)</b>: a complex sum, for a calibrated point source; Vector averaging only", "vp-bcombine"),
+    "tgaps": (
+        "<b>Time gaps</b> \u2014 how this raster's Time axis treats stretches with no data  | <b>Shown</b>: time to scale; a field observed in short scans is mostly blank space between thin bands  | <b>Closed</b>: one row per time with data, a thin blank row where there was a gap; the ticks read the times  | Applied by Plot", "vp-time-gaps"),
     "border": (
         "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out  | <b>By number</b>: the Baseline table\u2019s order; baselines to one antenna sit together  | <b>By length</b>: shortest first. Trouble that grows along the axis is about distance; trouble in scattered columns is about particular antennas", "vp-border"),
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
@@ -627,7 +634,9 @@ const _spw_idx = (spw_src && spw_src.selected && spw_src.selected.indices) || []
 const spw_ids = _spw_idx.map(i => spw_src.data['ident'][i]);
 ctrl.send(ids['rows'], {
     field: field_sel.value, spw_ids: spw_ids,
-    scan: scan_inp ? scan_inp.value : '', timerange: time_inp ? time_inp.value : '',
+    scan: (window.__cvScanCur && window.__cvScanCur.scan != null) ? String(window.__cvScanCur.scan)
+          : (scan_inp ? scan_inp.value : ''),
+    timerange: time_inp ? time_inp.value : '',
     uvrange: uv_inp ? uv_inp.value : '',
     autocorr: autocorr_rbg ? ['exclude', 'include', 'only'][autocorr_rbg.active] : 'exclude',
 }, function (resp) {
@@ -722,11 +731,65 @@ def _window_value(window) -> str:
 
 def _window_options(options, window, unit) -> list:
     """*options*, plus an entry for *window* if it is not among them (a
-    constructor-supplied value such as 45 seconds)."""
+    constructor-supplied value such as 45 seconds), and "Custom…" last
+    (``_custom_window``)."""
     value = _window_value(window)
-    if any(v == value for v, _ in options):
-        return list(options)
-    return list(options) + [(value, f"{value} {unit}")]
+    out = list(options)
+    if not any(v == value for v, _ in options):
+        out.append((value, f"{value} {unit}"))
+    return out + [(_CUSTOM, "Custom\u2026")]
+
+
+# "Custom…" in a statistic-window dropdown (pre-preview feedback,
+# debug-0003): any value, typed.  The fixed lists cover the usual
+# choices; the constructor always took any number, and now the GUI does.
+# Choosing Custom… leaves the dropdown on what it was and opens a box
+# under it; Enter (or leaving the box) checks the text, adds it to the
+# list and selects it.  A value the check refuses is reported as a
+# warning and changes nothing.  The parse matches normalize_time_window
+# and normalize_chan_window (seconds > 0; whole channels >= 2), with
+# units on time for convenience: 45, 45s, 2min, 1.5 h.
+_CUSTOM = "custom"
+_CUSTOM_WINDOW_JS = r"""
+const prev = (inp.tags && inp.tags[0] && inp.tags[0].prev) || 'off';
+if (cb_obj === sel) {
+    if (sel.value !== 'custom') { inp.tags = [{prev: sel.value}]; return; }
+    sel.value = prev;                 // stays on the last real value
+    inp.visible = true;
+    return;
+}
+const t = (inp.value || '').trim().toLowerCase();
+if (!t) { inp.visible = false; return; }
+let value = null, label = null, why = null;
+if (unit === 's') {
+    const m = /^([0-9]*\.?[0-9]+)\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hours?)?$/.exec(t);
+    if (!m) why = "a number of seconds, e.g. 45, 45s, 2min or 1.5h";
+    else {
+        const mult = !m[2] || m[2][0] === 's' ? 1 : (m[2][0] === 'm' ? 60 : 3600);
+        const sec = parseFloat(m[1]) * mult;
+        if (!(sec > 0)) why = "a time window must be longer than 0 s";
+        else { value = String(+sec.toPrecision(6)); label = value + ' s'; }
+    }
+} else {
+    const m = /^([0-9]+)\s*(ch|chan|channels?)?$/.exec(t);
+    if (!m) why = "a whole number of channels, e.g. 12";
+    else if (parseInt(m[1]) < 2) why = "a channel window needs at least 2 channels";
+    else { value = String(parseInt(m[1])); label = value + ' ch'; }
+}
+if (why) {
+    if (notify_div) notify_div.text = '\u26a0 ' + what + ': \'' + inp.value + '\' \u2014 ' + why + marker;
+    return;
+}
+if (notify_div && (notify_div.text || '').indexOf('\u26a0 ' + what + ':') === 0) notify_div.text = '';
+if (!sel.options.some(o => (Array.isArray(o) ? o[0] : o) === value)) {
+    const opts = sel.options.filter(o => (Array.isArray(o) ? o[0] : o) !== 'custom');
+    opts.push([value, label]); opts.push(['custom', 'Custom\u2026']);
+    sel.options = opts;
+}
+sel.value = value;
+inp.value = '';
+inp.visible = false;
+"""
 
 
 _SCATTER_X_OPTIONS  = [("UVDIST",        "UV Distance"),
@@ -2790,7 +2853,7 @@ if (sel) {
 # as it was before that last step.  cb_obj is the grid's JS API.
 _GRID_PLAY_JS = """
 const LABELS = {baseline: 'baselines', antenna: 'antennas', spw: 'spectral windows',
-                field: 'fields'};
+                field: 'fields', scan: 'scans'};
 function cvPlayOne(src) {
     return !!(src && src.selected && (src.selected.indices || []).length === 1);
 }
@@ -2818,8 +2881,15 @@ function cvPlayRowsWithData(src) {
     for (let i = 0; i < n; i++) if (!has || has[i] !== 0) k++;
     return k;
 }
+function cvPlayScanCur() {
+    return (window.__cvScanCur && window.__cvScanCur.scan != null) ? window.__cvScanCur.scan : null;
+}
 function cvPlayAxis() {
-    for (const a of ['baseline', 'antenna', 'spw']) if (cvPlayCur(a) != null) return a;
+    // Scan has a ▶ too (scan_iteration.py), between Antenna and SPW in
+    // how specific it is; it is played only once a scan is current.
+    for (const a of ['baseline', 'antenna']) if (cvPlayCur(a) != null) return a;
+    if (cvPlayScanCur() != null) return 'scan';
+    if (cvPlayCur('spw') != null) return 'spw';
     if (cvPlayOne(bl_src)) return 'baseline';
     if (cvPlayOne(ant_src)) return 'antenna';
     if ((spw_src.data['ident'] || []).length > 1 && cvPlayOne(spw_src)) return 'spw';
@@ -2836,6 +2906,7 @@ function cvPlayAxis() {
 // position after a step means it wrapped past the last.
 function cvPlayPos(axis) {
     if (axis === 'field') return cvPlayFields().indexOf(field_sel.value);
+    if (axis === 'scan') return cvScanPos();
     const c = cvPlayCur(axis);
     if (c != null) return c;
     const t = SRC[axis].selected.indices || [];
@@ -2846,6 +2917,7 @@ function cvPlaySnapshot() {
             bl: Array.from(bl_src.selected.indices || []),
             spw: Array.from(spw_src.selected.indices || []),
             field: field_sel ? field_sel.value : null,
+            scan: cvPlayScanCur(),
             cur: Object.assign({}, window.__cvIterCur || {})};
 }
 // Put back the ticks and the ▶ as they were before the last step:
@@ -2861,6 +2933,7 @@ function cvPlayRestore(s) {
         if (typeof cvIterMark === 'function') cvIterMark(src, axis, s.cur[axis] == null ? null : s.cur[axis]);
     }
     if (field_sel && s.field != null) field_sel.value = s.field;
+    if (window.__cvScanCur) { window.__cvScanCur.scan = s.scan; if (typeof cvScanShow === 'function') cvScanShow(); }
     if (window.__cvPlotPending) window.__cvPlotPending(false);   // as last plotted
 }
 cb_obj.outer = {
@@ -2869,8 +2942,11 @@ cb_obj.outer = {
         const axis = cvPlayAxis();
         if (!axis) return Promise.resolve(false);
         const before = cvPlaySnapshot(), pos = cvPlayPos(axis);
-        ({baseline: doIterateBaseline, antenna: doIterateAntenna,
-          spw: doIterateSpw, field: doIterateField})[axis](1);
+        // Named only when used: a script without scan stepping need not
+        // define doIterateScan.
+        if (axis === 'scan') doIterateScan(1);
+        else ({baseline: doIterateBaseline, antenna: doIterateAntenna,
+               spw: doIterateSpw, field: doIterateField})[axis](1);
         const now = cvPlayPos(axis);
         if (now === pos || (now < pos && !loop)) {     // one only, or past the last
             cvPlayRestore(before);
@@ -3524,6 +3600,41 @@ class VisibilityPlotter:
                 log.exception(
                     "VisibilityPlotter.close(): error closing data reader"
                 )
+
+    CLOSED_TEXT = ("\u26a0 This visplot session is closed: its data is no "
+                   "longer open, so nothing more can be plotted here. Run "
+                   "visplot again to continue.")
+
+    def _closed_reply(self) -> dict:
+        """The one answer every data request gets after close(): each
+        reply shape the page reads (Plot's status/notify, the summary's
+        and export's message, the selection tools' error) carries the
+        same sentence, so whichever control was used says so instead
+        of a backend traceback ("MSv2Backend is not open")."""
+        text = self.CLOSED_TEXT
+        return {"status": "error", "message": text, "error": text,
+                "status_text": text, "notify_text": text,
+                "notify_color": "#f38ba8", "closed": True}
+
+    def _while_open(self, handler):
+        """Wrap a request handler that reads the data so that, once the
+        plotter is closed (by close(), the ``with`` block ending, or the
+        session shutting down while a window is still up), it answers
+        with _closed_reply() rather than reaching the closed reader.
+        Logged once, at INFO: this is a state, not an error."""
+        @functools.wraps(handler)
+        async def guarded(msg, context=None):
+            if getattr(self, "_closed", False):
+                if not getattr(self, "_closed_logged", False):
+                    self._closed_logged = True
+                    log.info("VisibilityPlotter: request after close(); "
+                             "the window is told the session is closed")
+                return self._closed_reply()
+            result = handler(msg, context=context)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+        return guarded
 
     @contextlib.contextmanager
     def _closing_on_error(self):
@@ -4188,16 +4299,20 @@ class VisibilityPlotter:
             "summary": str(uuid4()),
             "rows": str(uuid4()),
         }
-        self._pipe["control"].register(self._ids["plot"], self._handle_plot)
+        # Handlers that read the data answer with one clear message once
+        # the plotter is closed (_while_open); Done and the theme do not
+        # touch the data and keep working.
+        guard = self._while_open
+        self._pipe["control"].register(self._ids["plot"], guard(self._handle_plot))
         self._pipe["control"].register(self._ids["done"], self._handle_done)
         self._pipe["control"].register(self._ids["theme"], self._handle_theme)
-        self._pipe["control"].register(self._ids["export"], self._handle_export)
+        self._pipe["control"].register(self._ids["export"], guard(self._handle_export))
         self._pipe["control"].register(self._ids["time_labels"],
-                                       self._handle_time_labels)
+                                       guard(self._handle_time_labels))
         self._pipe["control"].register(self._ids["summary"],
-                                       self._handle_summary)
+                                       guard(self._handle_summary))
         self._pipe["control"].register(self._ids["rows"],
-                                       self._handle_rows)
+                                       guard(self._handle_rows))
 
         # FlagDB v2 controls (filter/config, undo/redo/clear, review,
         # export) on their own pipe WITHOUT queue squashing: a squashing
@@ -4207,7 +4322,7 @@ class VisibilityPlotter:
             description="visibility plotter flag controls",
         )
         self._ids["flag"] = str(uuid4())
-        self._pipe["flag"].register(self._ids["flag"], self._flags.handle_action)
+        self._pipe["flag"].register(self._ids["flag"], guard(self._flags.handle_action))
 
         # Remote sessions (Scenario A, 2026-11-10): while a call waits, the
         # page asks what the connection is doing and shows it in the busy
@@ -4370,6 +4485,8 @@ class VisibilityPlotter:
             # The panel's correlation choice ("auto", "parallel" or a
             # product), kept with it for the gear tab and Plot.
             r._corr_choice = c.get("raster_corr", "auto")
+            if not grid:                 # a grid cell is labelled by its own value
+                r._title_context_fn = self._title_context
             return r
 
         # One scatter layer per polarisation -- multi-layer compositing
@@ -4400,6 +4517,8 @@ class VisibilityPlotter:
                     "stat_chan_window": c["stat_chan_window"]}
                    if c.get("scatter_stat_own") else {}),
             )
+            if not grid:
+                sc._title_context_fn = self._title_context
             return sc
 
         # Construction order as before: A raster, A scatter, B scatter,
@@ -6198,6 +6317,13 @@ for (const dt of other.tools) {
                     log.warning("_handle_plot: unknown baseline_combine %r for "
                                 "panel %s", panel_msg.get("baseline_combine"), slot.id)
                     bcomb = panel.baseline_combine
+                # Time gaps shown or closed (debug-0003); absent (the grid,
+                # a preset) or unrecognised: keep what the panel has.
+                try:
+                    tgaps = (normalize_time_gaps(panel_msg["time_gaps"])
+                             if panel_msg.get("time_gaps") else panel.time_gaps)
+                except ValueError:
+                    tgaps = panel.time_gaps
                 # Slope removal for this slot's Phase RMS / Coherence
                 # (HRS H2).  Sent as "remove" | "keep"; absent = unchanged.
                 det = panel_msg.get("detrend")
@@ -6262,6 +6388,7 @@ for (const dt of other.tools) {
                     # last rendered with.
                     avg != panel.averaging or
                     border != panel.baseline_order or
+                    tgaps != panel.time_gaps or
                     bcomb != panel.baseline_combine or
                     det != panel.detrend or
                     twin != panel.stat_time_window or
@@ -6299,6 +6426,7 @@ for (const dt of other.tools) {
                                 detrend      = det,
                                 stat_time_window = twin,
                                 stat_chan_window = cwin,
+                                time_gaps    = tgaps,
                             )
                         self._last_raster_selection_by_slot[slot.id] = self._selection
                     panel._corr_choice = rk
@@ -6810,6 +6938,23 @@ window.__cvPlotPending(true);
                 w.selected.js_on_change("indices", mark)
         self._plot_pending_js = mark
 
+    def _custom_window(self, sel, name: str, unit: str, what: str, label: str):
+        """*sel* (a statistic-window Select, with "Custom…" among its
+        options) wrapped for help, with the box that Custom… opens under
+        it: ``_CUSTOM_WINDOW_JS``.  Returns what goes in the layout."""
+        inp = TextInput(placeholder=("seconds, e.g. 45, 2min" if unit == "s"
+                                     else "channels, e.g. 12"),
+                        visible=False, width=sel.width, stylesheets=list(sel.stylesheets or []),
+                        tags=[{"prev": sel.value}])
+        js = CustomJS(args={"sel": sel, "inp": inp, "unit": unit, "what": what,
+                            "notify_div": getattr(self, "_notify_div", None),
+                            "marker": _helptext.marker(label)},
+                      code=_CUSTOM_WINDOW_JS)
+        sel.js_on_change("value", js)
+        inp.js_on_change("value", js)
+        inp.js_on_event(ValueSubmit, js)
+        return column(self._hover(sel, name), inp, sizing_mode="fixed", width=sel.width)
+
     def _hover(self, widget, name: str):
         """Wrap *widget* so the status-area help ``self._hint_<name>``
         shows while the pointer is over it; returns what to put in the
@@ -6980,6 +7125,47 @@ cvApplySelectionText(
     # ====================================================================== #
     # Status bar                                                               #
     # ====================================================================== #
+
+    def _title_context(self) -> str:
+        """What the selection is narrowed to, for the panel titles
+        (VisibilityPlot._titled): the field, the SPW, the scan and the
+        antenna or baseline, each only when the selection holds exactly one of it
+        and the data has more than one -- "1642+689, SPW 1, DA41&DV01".
+        The same rule as the status line's positions ("Field 3/4"),
+        which by design cannot tell a step of Prev / Next from a single
+        pick (``_field_iteration_position``): either way, the plot shows
+        one of several, and its PNG should say which.  Empty when
+        nothing is narrowed to one."""
+        meta = getattr(self, "_meta", None)
+        if meta is None:
+            return ""
+        parts = []
+        pos = _field_iteration_position(self._field_str, meta)
+        if pos and pos[1] > 1:
+            parts.append(str(_parse_field_string(self._field_str, meta)))
+        chosen = getattr(self, "_spw_ids", None)
+        spw_ids = (list(chosen) if chosen is not None
+                   else _parse_spw_string(self._spw_str, meta))
+        pos = _spw_iteration_position(spw_ids, meta)
+        if pos and pos[1] > 1:
+            name = next((s.name for s in meta.spws if s.spw_id == spw_ids[0]), None)
+            # The status line's label; a name of "none" (common in old
+            # VLA data) says nothing, so the number instead.
+            parts.append("SPW " + (name if name and name.lower() != "none"
+                                   else str(spw_ids[0])))
+        # One scan, of several: what Scan's Prev / Next plot (or one typed).
+        scan = str(getattr(self, "_scan_str", "") or "").strip()
+        if scan.isdigit() and len(getattr(self, "_scan_tab", {}).get("nos", ())) > 1:
+            parts.append(f"scan {int(scan)}")
+        try:
+            ants, bls = self._antenna_baseline_selection()
+        except Exception:                                   # noqa: BLE001
+            ants, bls = None, None
+        if bls and _abs.baseline_position(bls, meta):
+            parts.append(f"{bls[0][0]}&{bls[0][1]}")
+        elif not bls and _abs.antenna_position(ants, meta):
+            parts.append(f"antenna {ants[0]}")
+        return ", ".join(parts)
 
     def _status_text(self) -> str:
         fname        = os.path.basename(self._source_path)
@@ -7850,8 +8036,8 @@ html, body { height: 100%; margin: 0; }
         rb_box = self._hover(rb_sel, "border")
         rm_box = self._hover(rm_sel, "bcombine")
         rd_box = self._hover(rd_sel, "detrend")
-        rt_box = self._hover(rt_sel, "twin")
-        rc_box = self._hover(rc_sel, "cwin")
+        rt_box = self._custom_window(rt_sel, "twin", "s", "Time window", "vp-twin")
+        rc_box = self._custom_window(rc_sel, "cwin", "ch", "Channel window", "vp-cwin")
 
         # Per-slot Y/X conflict indicator — an inline Div scoped to this
         # panel, not the shared self._notify_div the old single global
@@ -7926,13 +8112,23 @@ conflict_div.text = m ? '⚠ ' + m : '';
                                         icon_stylesheets=[dark, self._icon_btn_css])
         cmap_widgets = list(cmap_widgets) + info_sel.widgets()
 
+        # Time gaps (pre-preview feedback, debug-0003): a Time axis drawn to
+        # scale, or with its gaps closed (raster_grid.TimeAxis).  Per panel,
+        # read at Plot; a panel's own control, not the grid tab's.
+        tg_sel = Select(
+            title="Time gaps", value=getattr(slot.raster, "time_gaps", "shown"),
+            options=[("shown", "Shown (time to scale)"), ("closed", "Closed")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        tg_box = self._hover(tg_sel, "tgaps")
+
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Raster ──</span>", width=_SIDEBAR_WIDTH),
             self._hover(column(ry_sel, rx_sel, width=_SIDEBAR_WIDTH),
                         "r_axes"),
             self._hover(rq_sel, "r_qty"),
-            rk_box, ra_box, rm_box, rb_box, rd_box, rt_box, rc_box,
+            rk_box, ra_box, rm_box, rb_box, tg_box, rd_box, rt_box, rc_box,
             conflict_div,
             self._hover(raster_cmap, "scaling"),
             self._hover(info_sel.column, "info"),
@@ -7941,7 +8137,7 @@ conflict_div.text = m ? '⚠ ' + m : '';
             "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
             "avg_sel": ra_sel, "detrend_sel": rd_sel,
             "twin_sel": rt_sel, "cwin_sel": rc_sel,
-            "border_sel": rb_sel, "bcombine_sel": rm_sel,
+            "border_sel": rb_sel, "bcombine_sel": rm_sel, "tgaps_sel": tg_sel,
             "corr_sel": rk_sel,
             "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
@@ -8002,8 +8198,8 @@ conflict_div.text = m ? '⚠ ' + m : '';
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
         sd_box = self._hover(sd_sel, "detrend")
-        st_box = self._hover(st_sel, "s_twin")
-        sc_box = self._hover(sc_sel, "s_cwin")
+        st_box = self._custom_window(st_sel, "s_twin", "s", "Time window", "vp-twin")
+        sc_box = self._custom_window(sc_sel, "s_cwin", "ch", "Channel window", "vp-cwin")
         # Averaging of THIS scatter (HRS H6, 2026-10-09): over time, over
         # channels, vector or scalar.  Same per-slot arrangement.
         _s_at = self._scatter_avg_time if _sc._avg_time is None else _sc._avg_time
@@ -8498,7 +8694,9 @@ for (let i = 0; i < cols.length; i++) {
             f"| Scans: {', '.join(str(s) for s in scan_ids[:8])}"
             + (f" \u2026 {scan_ids[-1]} ({len(scan_ids)} total)" if len(scan_ids) > 8 else "")
             + "  | e.g. <tt>1,3,7</tt>  or  <tt>1~7</tt>  or  <tt>&gt;30</tt>  "
-              "or  <tt>!5</tt> (all but 5)  | Empty: all scans"
+              "or  <tt>!5</tt> (all but 5)  | Empty: all scans  "
+              "| \u25c0 \u25b6 step through the scans the box selects (of the field shown), "
+              "one plot each; typing in the box or Plot ends it"
         )
         ant_hint     = (
             f"<b>Antenna / Baseline</b> — tick rows to select  "
@@ -8600,7 +8798,26 @@ for (let i = 0; i < cols.length; i++) {
             _focus_blur(inp, hint_div)
             return inp
 
-        scan_inp    = _stub_input("Scan",       self._scan_str,      self._hint_scan)
+        scan_inp    = _stub_input("",           self._scan_str,      self._hint_scan)
+        # Scan iteration (pre-preview feedback #24, debug-0003): Prev / ✱ /
+        # Next beside the heading, the box under it, and while a scan is
+        # current a readout under that (scan_iteration.py).
+        # Each scan's field comes from the reader's identity tables (the
+        # metadata's scan list has no field); coordinates only, no data.
+        try:
+            _scans = self._reader.identity_tables(SelectionSpec()).scans
+        except Exception:                                   # noqa: BLE001
+            log.debug("scan fields unavailable", exc_info=True)
+            _scans = meta.scans
+        self._scan_tab = _scanit.scan_table(_scans)
+        scan_heading = _section("Scan", width=_IterButtons.LABEL_WIDTH, margin=(0, 0, 0, 0))
+        self._scan_iter = _IterButtons(
+            axis_label="scan", control=scan_heading,
+            count=len(self._scan_tab["nos"]), dark=dark,
+            icon_btn_css=self._icon_btn_css, tt=self._tt,
+        )
+        self._scan_note = Div(text="", visible=False, stylesheets=[dark],
+                              margin=(0, 0, 0, 5), styles={"color": "#f9e2af"})
         # Checked when Return is pressed (2026-11-18), not only at Plot:
         # an error shows at once in the notify area (where it stays while
         # help is showing), and clears once the text is valid.
@@ -8610,9 +8827,16 @@ for (let i = 0; i < cols.length; i++) {
         from .selection_text import SCAN_TEXT_JS
         _scan_check = CustomJS(
             args={"notify_div": self._notify_div, "scan_marker": _helptext.marker("vp-scan"),
+                  "scan_note": self._scan_note,
                   "scans": [int(x) for x in scan_ids
                                                               if str(x).lstrip("-").isdigit()]},
             code=SCAN_TEXT_JS + """
+// Typing in the box (or a grid drill-down writing it) ends scan stepping:
+// the box is what the next Plot plots (scan_iteration.py).
+if (window.__cvScanCur && window.__cvScanCur.scan != null) {
+    window.__cvScanCur.scan = null;
+    if (scan_note) { scan_note.text = ''; scan_note.visible = false; }
+}
 const r = cvParseScanText(cb_obj.value, scans);
 if (!r.ok) {
     notify_div.text = '\u26a0 ' + r.error + scan_marker;
@@ -8856,7 +9080,9 @@ if (!r.ok) {
             self._hover(column(_section("Autocorrelations"), self._autocorr_rbg,
                                width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
                         "autocorr"),
-            scan_inp, antenna_col, baseline_col, time_inp, uv_inp,
+            self._hover(column(self._scan_iter.row, scan_inp, self._scan_note,
+                               width=_SIDEBAR_WIDTH, margin=(0, 0, 10, 0)), "scan"),
+            antenna_col, baseline_col, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
             # with self._raster_axis_section/_scatter_axis_section that
             # used to sit under it — axis controls now live inside each
@@ -9829,7 +10055,8 @@ if (sidebarEl && prevScrollTop !== null) {
         # (A bare module-level name rather than _abs.SELECTION_PAYLOAD_JS:
         # test_checkbox_guard.py reads this expression from the source
         # and resolves names, not attribute lookups.)
-        _do_plot_js = _CV_SET_BUSY_JS + _SELECTION_PAYLOAD_JS + _ITER_SUBSET_JS + """
+        _do_plot_js = (_CV_SET_BUSY_JS + _SELECTION_PAYLOAD_JS + _ITER_SUBSET_JS
+                       + _SCAN_TEXT_JS + _SCAN_ITER_JS) + """
 // Shared with gear_click_js (a separate, non-concatenated CustomJS
 // string, hence a global rather than a local function) -- defining it
 // here too, identically, since switchToTab() below can be the very
@@ -10163,14 +10390,15 @@ function doPlot(reload) {
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
                                 colorize_handles, ra_sel, rd_sel, rt_sel, rc_sel,
                                 rb_sel, rm_sel, sat_sel, sac_sel, sam_sel,
-                                sd_sel, st_sel, sc_sel, rk_sel) {
+                                sd_sel, st_sel, sc_sel, rk_sel, tg_sel) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
                     averaging: ra_sel.value, detrend: rd_sel.value,
                     twin: rt_sel.value, cwin: rc_sel.value,
                     baseline_order: rb_sel ? rb_sel.value : null,
                     baseline_combine: rm_sel ? rm_sel.value : null,
-                    raster_corr: rk_sel ? rk_sel.value : null};
+                    raster_corr: rk_sel ? rk_sel.value : null,
+                    time_gaps: tg_sel ? tg_sel.value : null};
         } else {
             return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
                      colorize: buildColorizeArray(colorize_handles),
@@ -10238,13 +10466,15 @@ function doPlot(reload) {
         panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel,
         panel0_rd_sel, panel0_rt_sel, panel0_rc_sel, panel0_rb_sel, panel0_rm_sel,
         panel0_sat_sel, panel0_sac_sel, panel0_sam_sel,
-        panel0_sd_sel, panel0_st_sel, panel0_sc_sel, panel0_rk_sel);
+        panel0_sd_sel, panel0_st_sel, panel0_sc_sel, panel0_rk_sel,
+        (typeof panel0_tg_sel !== 'undefined') ? panel0_tg_sel : null);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
         panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel,
         panel1_rd_sel, panel1_rt_sel, panel1_rc_sel, panel1_rb_sel, panel1_rm_sel,
         panel1_sat_sel, panel1_sac_sel, panel1_sam_sel,
-        panel1_sd_sel, panel1_st_sel, panel1_sc_sel, panel1_rk_sel);
+        panel1_sd_sel, panel1_st_sel, panel1_sc_sel, panel1_rk_sel,
+        (typeof panel1_tg_sel !== 'undefined') ? panel1_tg_sel : null);
 
     // Each panel renders at its figure's current size (2026-10-09).
     [[panels[panel0_id], panel0_raster_fig, panel0_scatter_fig],
@@ -10330,7 +10560,9 @@ function doPlot(reload) {
         correlation: corr.join(','),
         datacolumn:  col_sel.value,
         // Scan / Time range / UV range text (HRS A1); parsed in Python.
-        scan:        scan_inp  ? scan_inp.value  : '',
+        // While a scan is being stepped through, that scan
+        // (scan_iteration.cvScanPlotText); else the box's text.
+        scan:        cvScanPlotText(),
         timerange:   time_inp  ? time_inp.value  : '',
         uvrange:     uv_inp    ? uv_inp.value    : '',
         autocorr:    autocorr_rbg ? ['exclude', 'include', 'only'][autocorr_rbg.active] : 'exclude',
@@ -10948,6 +11180,10 @@ function doPlot(reload) {
             "field_sel":  self._field_select,
             # Scan / Time range / UV range boxes (HRS A1).
             "scan_inp":   self._scan_inp,
+            # Scan stepping (scan_iteration.py)
+            "scan_note":  self._scan_note,
+            "scan_tab":   self._scan_tab,
+            "scan_marker": _helptext.marker("vp-scan"),
             "time_inp":   self._time_inp,
             "uv_inp":     self._uv_inp,
             # Antenna / Baseline tables' sources (2026-10): read by
@@ -11009,6 +11245,7 @@ function doPlot(reload) {
             "panel0_rb_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["border_sel"],
             "panel0_rm_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["bcombine_sel"],
             "panel0_rk_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["corr_sel"],
+            "panel0_tg_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["tgaps_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
             "panel0_sd_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["detrend_sel"],
@@ -11036,6 +11273,7 @@ function doPlot(reload) {
             "panel1_rb_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["border_sel"],
             "panel1_rm_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["bcombine_sel"],
             "panel1_rk_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["corr_sel"],
+            "panel1_tg_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["tgaps_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             "panel1_sd_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["detrend_sel"],
@@ -11103,7 +11341,7 @@ function doPlot(reload) {
         # (iteration_subset.py).  Reload keeps it.
         plot_js = CustomJS(
             args=_plot_js_args,
-            code=_do_plot_js + "cvIterClearAll(spw_src, ant_src, bl_src); doPlot(false);",
+            code=_do_plot_js + "cvIterClearAll(spw_src, ant_src, bl_src); cvScanEnd(); doPlot(false);",
         )
         # A change of the ticks -- a click, the text box, ✱, a grid
         # drill-down -- ends that axis's iteration.
@@ -11236,9 +11474,11 @@ function doIterateSpw(delta) {
             _iter_guard_js("cand.length", "baseline"))
         # kept for the grid's Play (gridplot, 2026-11-13: with every cell on
         # one page, Play steps these; _wire_grid)
+        _iterate_scan_js = STEP_INDEX_JS + _SCAN_TEXT_JS + _scanit.SCAN_ITER_JS
         self._iterate_js = {"field": _iterate_field_js, "spw": _iterate_spw_js,
                             "antenna": _iterate_antenna_js,
-                            "baseline": _iterate_baseline_js}
+                            "baseline": _iterate_baseline_js,
+                            "scan": _iterate_scan_js}
         # .wire() (see _IterButtons) assembles each button's CustomJS
         # from these bodies + self._do_plot_js exactly the way the
         # hand-written js_on_click() calls this replaced did -- the
@@ -11258,6 +11498,9 @@ function doIterateSpw(delta) {
                                 _iterate_antenna_js, "doIterateAntenna", all_js=_all_ab)
         self._baseline_iter.wire(self._plot_js_args, self._do_plot_js,
                                  _iterate_baseline_js, "doIterateBaseline", all_js=_all_ab)
+        # ✱ for Scan: back to all of the box's scans (the stepping ends).
+        self._scan_iter.wire(self._plot_js_args, self._do_plot_js,
+                             _iterate_scan_js, "doIterateScan", all_js="cvScanEnd();")
         self._wire_tick_text_inputs()
 
         # Rule 3 (§3.1c of the plan): superseded by the sidebar move.
@@ -12186,6 +12429,9 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             _cursor_panels.append({
                 "id": panel.vr_id, "fig": panel.figure,
                 "vspan": vspan, "hspan": hspan,
+                # x_tcells / y_tcells: a raster Time axis with its gaps
+                # closed (VisibilityRaster._state_data).
+                "state": panel._state_source,
             })
 
         cursor_src = self._cursor_source
@@ -12207,6 +12453,35 @@ for (const p of panels) {
     p.hspan.location = NaN;
 }
 
+// A raster Time axis with its gaps closed (debug-0003) is in positions,
+// one per time cell, with "(gaps closed)" in its label: a cursor there is
+// converted to the real time for the other panels, and a real time to
+// the position on a closed axis.  [positions, lo, hi] per axis, or null.
+const cells = (p, ax) => {
+    const d = p.state && p.state.data;
+    const c = d && d[ax + '_tcells'];
+    return (c && c[0]) || null;
+};
+const toReal = (c, v) => {
+    if (!c) return v;
+    const [pos, lo, hi] = c;
+    for (let i = 0; i < pos.length; i++)
+        if (Math.abs(pos[i] - v) <= 0.5) return lo[i] + (v - (pos[i] - 0.5)) * (hi[i] - lo[i]);
+    return NaN;                       // a blank row: no time
+};
+const toPos = (c, t) => {
+    if (!c) return t;
+    const [pos, lo, hi] = c;
+    let a = 0, b = pos.length - 1;
+    while (a <= b) {
+        const m = (a + b) >> 1;
+        if (t < lo[m]) b = m - 1; else if (t > hi[m]) a = m + 1;
+        else return pos[m] - 0.5 + (hi[m] > lo[m] ? (t - lo[m]) / (hi[m] - lo[m]) : 0.5);
+    }
+    return NaN;                       // in a closed gap: not shown
+};
+const norm = (l) => (l || '').replace(' (gaps closed)', '');
+
 if (x != null && !isNaN(x)) {
     let source = null;
     for (const p of panels) {
@@ -12214,8 +12489,10 @@ if (x != null && !isNaN(x)) {
     }
 
     if (source) {
-        const sx_label = source.fig.below.length ? source.fig.below[0].axis_label : '';
-        const sy_label = source.fig.left.length  ? source.fig.left[0].axis_label  : '';
+        const sx_label = norm(source.fig.below.length ? source.fig.below[0].axis_label : '');
+        const sy_label = norm(source.fig.left.length  ? source.fig.left[0].axis_label  : '');
+        const rx = toReal(cells(source, 'x'), x);
+        const ry = (y != null && !isNaN(y)) ? toReal(cells(source, 'y'), y) : NaN;
 
         for (const p of panels) {
             if (p === source) {
@@ -12227,25 +12504,27 @@ if (x != null && !isNaN(x)) {
                 continue;
             }
 
-            const p_x_label = p.fig.below.length ? p.fig.below[0].axis_label : '';
-            const p_y_label = p.fig.left.length  ? p.fig.left[0].axis_label  : '';
+            const p_x_label = norm(p.fig.below.length ? p.fig.below[0].axis_label : '');
+            const p_y_label = norm(p.fig.left.length  ? p.fig.left[0].axis_label  : '');
+            const pxc = cells(p, 'x'), pyc = cells(p, 'y');
 
             // This panel's vertical span (its X axis): match against the
             // source's X first, else the source's Y — independent of the
             // horizontal-span check below, so both can fire on the same
-            // panel if it happens to match on both axes.
+            // panel if it happens to match on both axes.  Values go
+            // through real time when either axis has its gaps closed.
             if (sx_label && sx_label === p_x_label) {
-                p.vspan.location = x;
-            } else if (sy_label && sy_label === p_x_label && y != null && !isNaN(y)) {
-                p.vspan.location = y;
+                p.vspan.location = toPos(pxc, rx);
+            } else if (sy_label && sy_label === p_x_label && !isNaN(ry)) {
+                p.vspan.location = toPos(pxc, ry);
             }
 
             // This panel's horizontal span (its Y axis): same two-way
             // check against the source's X and Y.
             if (sx_label && sx_label === p_y_label) {
-                p.hspan.location = x;
-            } else if (sy_label && sy_label === p_y_label && y != null && !isNaN(y)) {
-                p.hspan.location = y;
+                p.hspan.location = toPos(pyc, rx);
+            } else if (sy_label && sy_label === p_y_label && !isNaN(ry)) {
+                p.hspan.location = toPos(pyc, ry);
             }
         }
     }
@@ -12386,16 +12665,16 @@ if (x != null && !isNaN(x)) {
         # what each one does and when to use it.  Fixed text, so filled
         # here; attached to the controls by _hover().
         self._hint_rcorr      = _hint((
-            "<b>Correlation shown</b> \u2014 a raster shows one correlation at a time  | <b>First ticked</b>: the first one ticked in the Data section  | <b>Parallel hands</b>: (XX+YY)/2 or (RR+LL)/2, the Stokes I-like view; a flag box here flags both hands  | A product: that one, whether ticked or not", "vp-rcorr"))
+            "<b>Correlation shown</b> \u2014 a raster shows one correlation at a time  | <b>First ticked</b>: the first one ticked in the Data section  | <b>Parallel hands</b>: (XX+YY)/2 or (RR+LL)/2, the Stokes I-like view; a flag box here flags both hands  | A product: that one, even if the Data section leaves it unticked (the ticks decide what the scatters read)", "vp-rcorr"))
         self._hint_averaging  = _hint((
             "<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities; amplitude drops where samples do not line up. The default in AIPS and plotms  | <b>Scalar</b>: average the amplitudes; no loss from decorrelation  | Vector next to Scalar shows where coherence is lost", "vp-averaging"))
         self._hint_detrend    = _hint("<b>Phase slope</b> \u2014 for Phase RMS and Coherence  | <b>Remove</b>: take out a linear phase slope (a delay across frequency, a rate in time) before measuring the scatter, wherever the data clearly show one. Use for data that are not yet fringe-fitted  | <b>Keep</b>: measure the data as they are; a delay or rate then shows up as large scatter and low coherence  | On noise-dominated or already calibrated data the two give the same picture")
         self._hint_twin       = _hint((
-            "<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, else one scan  | <b>Off</b>: no windows  | <b>Scan</b> or a length; never across a gap  | Longer windows are steadier but blur changes in time", "vp-twin"))
-        self._hint_cwin       = _hint("<b>Channel window</b> \u2014 how many channels each Phase RMS / Coherence value is measured within  | <b>Off</b>: the whole band where frequency is not a plot axis, single channels where it is  | A number: blocks of that many channels  | Needed, with a time window or alone, to see these quantities on a Time \u00d7 Channel waterfall")
+            "<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, else one scan  | <b>Off</b>: no windows  | <b>Scan</b> or a length; never across a gap  | Longer windows are steadier but blur changes in time  | <b>Custom\u2026</b>: type any length", "vp-twin"))
+        self._hint_cwin       = _hint(("<b>Channel window</b> \u2014 how many channels each Phase RMS / Coherence value is measured within  | <b>Off</b>: the whole band where frequency is not a plot axis, single channels where it is  | A number: blocks of that many channels; <b>Custom\u2026</b> for any  | Needed, with a time window or alone, to see these quantities on a Time \u00d7 Channel waterfall", "vp-cwin"))
         self._hint_ant_mode   = _hint("<b>Which baselines the ticked antennas select</b>  | <b>Either end</b>: every baseline with a ticked antenna at one end \u2014 one antenna against all the others  | <b>Both ends</b>: only baselines between ticked antennas \u2014 tick all and untick one to exclude it, or tick a few for a sub-array  | Ticked baselines override both")
-        self._hint_s_twin     = _hint("<b>Time window (scatter)</b> \u2014 the stretch of time each Phase RMS / Coherence point is measured within  | <b>Auto</b>: one integration when X is Time, otherwise one scan  | <b>Off</b>: single integrations when X is Time, otherwise the whole selected time range  | <b>Scan</b> or a length: as given  | Short windows of noisy data give scattered, low-reading values")
-        self._hint_s_cwin     = _hint("<b>Channel window (scatter)</b> \u2014 how many channels each Phase RMS / Coherence point is measured within  | <b>Off</b>: single channels when X is Frequency or Channel, otherwise the whole band  | A number: blocks of that many channels")
+        self._hint_s_twin     = _hint(("<b>Time window (scatter)</b> \u2014 the stretch of time each Phase RMS / Coherence point is measured within  | <b>Auto</b>: one integration when X is Time, otherwise one scan  | <b>Off</b>: single integrations when X is Time, otherwise the whole selected time range  | <b>Scan</b> or a length (<b>Custom\u2026</b> for any): as given  | Short windows of noisy data give scattered, low-reading values", "vp-twin"))
+        self._hint_s_cwin     = _hint(("<b>Channel window (scatter)</b> \u2014 how many channels each Phase RMS / Coherence point is measured within  | <b>Off</b>: single channels when X is Frequency or Channel, otherwise the whole band  | A number: blocks of that many channels (<b>Custom\u2026</b> for any)", "vp-cwin"))
 
         # Fixed-text help for the gear tabs and the toolbar.
         for name, text in _STATIC_HINTS.items():

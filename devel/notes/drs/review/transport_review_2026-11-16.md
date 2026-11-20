@@ -101,10 +101,19 @@ Remove the `abort` call from `connect()` (or make `transport_abort` non-fatal fo
 
 ### WS-2 [C] S1 — the old transport is retired before the new one is validated
 
-> **Partly fixed in `debug-0003` (2026-11-20):** the handshake now runs first, on the attempt's own
-> transport, with a 10 s timeout (`CommMgr._handshake_timeout`); only a completed handshake retires the
-> live transport. **Still open:** the second-tab policy (a valid second tab still takes over) and the
-> `backend_id` mismatch that only warns.
+> **Fixed in `debug-0003` (2026-11-20), except the `backend_id` mismatch, which still only warns.**
+> The handshake runs first, on the attempt's own transport, with a 10 s timeout
+> (`CommMgr._handshake_timeout`); only a completed handshake retires the live transport.
+> Second-tab policy: **the newest page wins.** The page it replaces gets `__superseded__` and a close
+> with `SUPERSEDED_CLOSE_CODE` (4001), stops reconnecting (including on focus/wake), and shows a
+> full-window notice with a *Use this tab* button (`CommMgr.onSuperseded` / `reclaim` in `cm.ts`).
+> Python remembers superseded pages (`_superseded_pages`) and turns away their automatic reconnects
+> while the other page is connected; only the button's handshake (`claim: true`) takes the session
+> back, so two tabs cannot trade it on every wake.
+> Found on the way: **`frontend_id` was always `null`.** `find.context(comm_mgr)` does not reach the
+> `BokehAppContext` from the CommMgr, so Python never could tell a second tab from a reconnect, and
+> two open tabs retired each other in a loop (seen live). `cm.ts` now has a per-page-load `pageId`,
+> sent when the context's id is not found.
 `cm.py:878-886`: on *any* new connection, `self._transport.close()` and `_reset_for_reconnect()` run
 before `WebSocketTransport.connect()` has even read the first frame. Consequences:
 - A second browser tab (or anything else that connects) closes the first tab's working socket. The
@@ -166,6 +175,13 @@ JS `goodbyeSent` is also never reset.
 ## 3. Reconnect, replay and liveness (both sides)
 
 ### RP-1 [C] S1 — replay without de-duplication
+
+> **Fixed in `debug-0003` (2026-11-20).** Python: `CommMgr._last_request` (one record per comm --
+> each side has one request in flight per comm, so a replay is always that comm's last request):
+> running → the copy is dropped; answered → the reply is sent again, handler not called. The reply is
+> recorded even when no transport is connected at that moment (that is the case a replay needs), and a
+> handler that ends without a reply (cancelled) leaves no record. Python → JS replays keep their
+> `request_id` (queue entries carry it), and `cm.ts` keeps the same per-comm record and resends.
 Both sides re-queue in-flight requests at the front of the comm's queue when a connection ends
 (`cm.py:1153-1160`, `cm.ts:397-418`). The request may already have been *received and executed* by the
 peer — only the reply was lost, or is still being computed. Nothing detects that:
@@ -210,6 +226,12 @@ missed, or lengthen the routine deadline; (d) optionally answer pings from Pytho
 having `_handle_request` send an interim `__busy__` frame before invoking a handler known to be slow.
 
 ### JS-1 [C] S1/S2 — `cm.ts` connection setup is not single-flight
+
+> **Fixed in `debug-0003` (2026-11-20):** `connecting` holds the attempt under way;
+> `scheduleReconnect`, `onWake` and `send` wait for it (`startAttempt`). `connectWebSocket`,
+> `setupTransport` and `runTransportWithReconnection` hold their transport locally and give up when
+> `this.transport` has moved on. Live check: socket declared dead, then a burst of focus/online/
+> visibility events → one reconnect handshake on the Python side, none failed.
 `scheduleReconnect()` is reachable from the end of `runTransportWithReconnection`, from `onWake`
 (focus + visibilitychange + pageshow + online — a tab switch fires three of them), and from `send()`.
 `reconnectTimer` is cleared at the top of the timer callback (`cm.ts:478`), *before*

@@ -192,6 +192,15 @@ class WebSocketTransport(TransportBase):
         ### does not depend on the close frame arriving intact.
         self._goodbye_received = False
 
+        ### The page on the other end, from its `initialize` message: a
+        ### random id per page load (cubevisjs find.object_id).  CommMgr
+        ### compares it with the live transport's to tell another tab (or
+        ### a reload) taking over from the same page reconnecting.
+        self.frontend_id: Optional[str] = None
+        ### True when the page is taking the session back on purpose (its
+        ### "Use this tab" button), rather than reconnecting on its own.
+        self.claim: bool = False
+
     def close_was_clean(self) -> Optional[bool]:
         """
         Whether the peer closed with a proper WebSocket close frame.
@@ -252,6 +261,8 @@ class WebSocketTransport(TransportBase):
 
             if msg.get('id') == 'initialize' and msg.get('direction') == 'j2p':
                 frontend_id = msg.get('frontend_id')
+                self.frontend_id = frontend_id
+                self.claim = bool(msg.get('claim'))
                 backend_id = msg.get('backend_id')
                 received_comm_mgr_id = msg.get('comm_mgr_id')
 
@@ -277,27 +288,18 @@ class WebSocketTransport(TransportBase):
                         logger.warning(warning)
                         warnings.append(warning)
 
-                    # Check for duplicate frontend (multi-tab detection)
+                    # The newest page takes the session (transport review
+                    # WS-2): CommMgr tells the earlier one it was superseded
+                    # once this handshake succeeds, so a second tab is not a
+                    # warning any more, and the app's frontend_id follows
+                    # the page that has the session.
                     if frontend_id:
                         if app.frontend_id and app.frontend_id != frontend_id:
-                            warning = (
-                                f"Multiple tabs detected! "
-                                f"Existing: {app.frontend_id}, New: {frontend_id}"
+                            logger.debug(
+                                f"New page for this session: {frontend_id} "
+                                f"(was {app.frontend_id})"
                             )
-                            logger.warning(warning)
-                            warnings.append(warning)
-
-                            # Send warning message
-                            await self.websocket.send(serialize({
-                                'type': 'warning',
-                                'message': 'Application already open in another tab',
-                                'existing_frontend_id': app.frontend_id,
-                                'new_frontend_id': frontend_id
-                            }))
-                        else:
-                            # Set frontend_id
-                            app.frontend_id = frontend_id
-                            logger.debug(f"Set frontend_id: {frontend_id}")
+                        app.frontend_id = frontend_id
 
                 # Send acknowledgment
                 await self.websocket.send(serialize({
@@ -500,6 +502,29 @@ class WebSocketTransport(TransportBase):
                 logger.debug(f"Closed WebSocket for {self._comm_mgr_id}")
             except Exception as e:
                 logger.error(f"Error closing WebSocket: {e}")
+            finally:
+                self._connected = False
+                self._initialized = False
+        self._closed = True
+
+    async def supersede(self, code: int) -> None:
+        """Tell the page another page has taken the session, then close
+        with *code*.  The notice goes first, as a message: a close code
+        alone can be lost (a 1006 instead), and either one is enough for
+        the page to stop reconnecting."""
+        from ...utils import serialize
+        if self._closed:
+            return
+        self._should_run = False
+        if self.websocket and self._connected:
+            try:
+                await self.websocket.send(serialize({'type': '__superseded__'}))
+            except Exception as e:                       # noqa: BLE001
+                logger.debug(f"Could not send __superseded__: {e}")
+            try:
+                await self.websocket.close(code=code, reason="session opened in another tab")
+            except Exception as e:                       # noqa: BLE001
+                logger.debug(f"Error closing superseded WebSocket: {e}")
             finally:
                 self._connected = False
                 self._initialized = False

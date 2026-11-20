@@ -22,7 +22,10 @@ enum AppState {
     RUNNING = "running",
     SHUTTING_DOWN = "shutting_down",
     STOPPED = "stopped",
-    ERROR = "error"
+    ERROR = "error",
+    // Another page (tab) has the session; this one stops reconnecting
+    // until its "Use this tab" button is pressed (transport review WS-2).
+    SUPERSEDED = "superseded"
 }
 
 /**
@@ -113,6 +116,26 @@ export class CommMgr extends Model {
     private reconnectTimer?: number
     private shouldReconnect: boolean = true
     private wakeRecoveryAttached: boolean = false
+    // The connection attempt under way, if any (transport review JS-1).
+    // Reconnects are single-flight: a wake, a send() or a timer that fires
+    // while an attempt is pending waits for that attempt instead of closing
+    // it mid-handshake and starting another (each abandoned attempt was a
+    // failed handshake on the Python side).
+    private connecting?: Promise<void>
+    // Another page took the session (see onSuperseded()).
+    private superseded: boolean = false
+    // Identifies this page load to Python in the handshake (`frontend_id`)
+    // when the BokehAppContext's own id cannot be found from here -- in
+    // practice always: find.context() does not reach the context from the
+    // CommMgr, and until 2026-11-20 every page sent null, so Python could
+    // not tell a second tab from a reconnect (transport review WS-2).
+    readonly pageId: string =
+        `page-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+    // comm_id => the last request Python sent on that comm and the reply
+    // this page gave.  Python replays a request that was in flight when a
+    // connection ended with its first request_id; the reply is sent again
+    // rather than the handler run twice (transport review RP-1).
+    private lastRequest: Map<string, {requestId: string, reply: any}> = new Map()
 
     private comms: Map<string, Comm> = new Map()
     private handlers: Map<string, Map<string, (msg: any, ctx: HandlerContext) => any>> = new Map()
@@ -206,7 +229,13 @@ export class CommMgr extends Model {
                     throw new Error("WebSocket transport requires address")
                 }
                 this.attachWakeRecovery()
-                await this.connectWebSocket()
+                const attempt = this.connectWebSocket()
+                this.connecting = attempt
+                try {
+                    await attempt
+                } finally {
+                    if (this.connecting === attempt) this.connecting = undefined
+                }
             } else if (transportType === 'colab' || transportType === 'jupyter') {
                 this.transport = new CommsTransport(this)
                 await this.setupTransport()
@@ -269,11 +298,14 @@ export class CommMgr extends Model {
         this.wakeRecoveryAttached = true
 
         const onWake = () => {
-            if (!this.shouldReconnect || this.state === AppState.STOPPED) {
+            if (!this.shouldReconnect || this.state === AppState.STOPPED || this.superseded) {
                 return
             }
             if (this.transport && this.transport.isConnected()) {
                 return
+            }
+            if (this.connecting) {
+                return   // an attempt is under way; let it finish (JS-1)
             }
 
             console.debug("Wake/online detected — retrying connection immediately")
@@ -299,16 +331,20 @@ export class CommMgr extends Model {
     /**
      * Connect WebSocket with reconnection support.
      */
-    private async connectWebSocket(): Promise<void> {
+    private async connectWebSocket(claim: boolean = false): Promise<void> {
         console.debug(`Connecting WebSocket (attempt ${this.reconnectAttempts + 1})...`)
 
         try {
-            this.transport = new WebSocketTransport(
+            // Held locally through setupTransport(): this.transport may be
+            // replaced while an await is pending (JS-1).
+            const transport = new WebSocketTransport(
                 this,
-                this.address!
+                this.address!,
+                claim
             )
+            this.transport = transport
 
-            await this.setupTransport()
+            await this.setupTransport(transport)
 
             // Reset reconnect counter on successful connection
             this.reconnectAttempts = 0
@@ -325,43 +361,63 @@ export class CommMgr extends Model {
     /**
      * Set up transport callbacks and start event loop.
      */
-    private async setupTransport(): Promise<void> {
-        if (!this.transport) {
+    private async setupTransport(transport: TransportBase | undefined = this.transport): Promise<void> {
+        if (!transport) {
             throw new Error("Transport not created")
         }
 
         // Set message callback
-        this.transport.setMessageCallback((msg: any) => {
+        transport.setMessageCallback((msg: any) => {
             this.routeMessage(msg)
         })
 
        // Connect
-        await this.transport.connect()
+        await transport.connect()
+
+        // A newer transport replaced this one while connect() was pending:
+        // this one is not ours to use any more (JS-1).
+        if (this.transport !== transport) {
+            transport.close()
+            throw new Error("Connection attempt superseded by a newer one")
+        }
+        if (this.superseded) {
+            // Told during the handshake that another tab has the session.
+            transport.close()
+            throw new Error("Session is open in another tab")
+        }
 
         // Flush any queued messages
         await this.flushAllQueues()
 
         // Start event loop (DON'T await - let it run in background)
-        this.runTransportWithReconnection()  // ← No await!
+        this.runTransportWithReconnection(transport)  // ← No await!
     }
 
     /**
      * Run transport event loop with automatic reconnection.
      */
-    private async runTransportWithReconnection(): Promise<void> {
-        if (!this.transport) {
+    private async runTransportWithReconnection(transport: TransportBase | undefined = this.transport): Promise<void> {
+        if (!transport) {
             return
         }
 
         try {
 
             // Run transport until it closes
-            await this.transport.run()
+            await transport.run()
+
+            // A transport that was already replaced ending is not the
+            // connection ending: the newer one carries on (JS-1).
+            if (this.transport !== transport) {
+                return
+            }
 
             this.resetConnectionState()
 
             // Transport closed - attempt reconnection if still active
-            if (this.shouldReconnect && this.state !== AppState.STOPPED) {
+            if (this.superseded) {
+                console.debug("Transport closed: the session is open in another tab")
+            } else if (this.shouldReconnect && this.state !== AppState.STOPPED) {
                 console.debug("Transport closed, attempting reconnection...")
                 this.state = AppState.INITIALIZING
                 this.scheduleReconnect()
@@ -371,11 +427,14 @@ export class CommMgr extends Model {
 
         } catch (e) {
             console.error("Transport error:", e)
+            if (this.transport !== transport) {
+                return
+            }
 
             this.resetConnectionState()
 
             // Attempt reconnection on error
-            if (this.shouldReconnect && this.state !== AppState.STOPPED) {
+            if (!this.superseded && this.shouldReconnect && this.state !== AppState.STOPPED) {
                 console.debug("Transport error, attempting reconnection...")
                 this.state = AppState.INITIALIZING
                 this.scheduleReconnect()
@@ -433,8 +492,14 @@ export class CommMgr extends Model {
      * Schedule a reconnection attempt with exponential backoff.
      */
     private scheduleReconnect(): void {
-        // Don't reconnect if we're shutting down
-        if (!this.shouldReconnect || this.state === AppState.STOPPED) {
+        // Don't reconnect if we're shutting down, or another tab has the
+        // session (only "Use this tab" reconnects then: reclaim()).
+        if (!this.shouldReconnect || this.state === AppState.STOPPED || this.superseded) {
+            return
+        }
+        // Single-flight (JS-1): an attempt under way schedules the next
+        // one itself if it fails.
+        if (this.connecting) {
             return
         }
 
@@ -471,34 +536,174 @@ export class CommMgr extends Model {
         console.log(`Reconnecting in ${delay}ms...`)
 
         // Schedule reconnection
-        this.reconnectTimer = window.setTimeout(async () => {
+        this.reconnectTimer = window.setTimeout(() => {
             // Clear the handle first. send() gates its recovery path on
             // `!this.reconnectTimer`, and leaving it set makes that path dead
             // after the very first reconnect.
             this.reconnectTimer = undefined
             this.reconnectAttempts++
+            this.startAttempt(false)
+        }, delay)
+    }
 
-            try {
-                // Close old transport
-                if (this.transport) {
-                    try {
-                        this.transport.close()
-                    } catch (e) {
-                        console.error("Error closing old transport:", e)
-                    }
-                    this.transport = undefined
+    /**
+     * One reconnection attempt, recorded in `this.connecting` until it
+     * settles (JS-1).  On failure the next one is scheduled -- after
+     * `connecting` is cleared, or scheduleReconnect() would see this attempt
+     * still pending and do nothing.
+     */
+    private startAttempt(claim: boolean): void {
+        if (this.connecting) {
+            return
+        }
+        const attempt = (async () => {
+            // Close old transport
+            if (this.transport) {
+                try {
+                    this.transport.close()
+                } catch (e) {
+                    console.error("Error closing old transport:", e)
                 }
-
-                // Attempt to reconnect
-                await this.connectWebSocket()
-
-            } catch (e) {
+                this.transport = undefined
+            }
+            // Attempt to reconnect
+            await this.connectWebSocket(claim)
+        })()
+        this.connecting = attempt
+        attempt.then(
+            () => {
+                if (this.connecting === attempt) this.connecting = undefined
+            },
+            (e) => {
+                if (this.connecting === attempt) this.connecting = undefined
                 console.error("Reconnection attempt failed:", e)
-
                 // Try again
                 this.scheduleReconnect()
             }
-        }, delay)
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Another tab took the session (transport review WS-2)
+    // ------------------------------------------------------------------
+
+    /**
+     * Called by the transport when Python says another page has the session
+     * (an `__superseded__` message or close code SUPERSEDED_CLOSE_CODE).
+     * This page stops reconnecting -- including on focus or wake -- and says
+     * so over the window; its plots stay visible underneath.  Requests that
+     * were waiting stay queued and go out if the page takes the session back.
+     */
+    onSuperseded(): void {
+        if (this.superseded || this.state === AppState.STOPPED) {
+            return
+        }
+        console.log("CommMgr: this session is now open in another tab")
+        this.superseded = true
+        if (this.reconnectTimer !== undefined) {
+            clearTimeout(this.reconnectTimer)
+            this.reconnectTimer = undefined
+        }
+        this.state = AppState.SUPERSEDED
+        this.showSupersededNotice()
+    }
+
+    /**
+     * "Use this tab": connect again, telling Python this is deliberate
+     * (`claim`), so this page takes the session back and the other one is
+     * told in turn.
+     */
+    reclaim(): void {
+        if (!this.superseded) {
+            return
+        }
+        this.superseded = false
+        this.hideSupersededNotice()
+        this.state = AppState.INITIALIZING
+        this.resetBackoff()
+        if (this.reconnectTimer !== undefined) {
+            clearTimeout(this.reconnectTimer)
+            this.reconnectTimer = undefined
+        }
+        this.startAttempt(true)
+    }
+
+    private supersededNoticeId(): string {
+        return `cv-superseded-${this.comm_mgr_id}`
+    }
+
+    /**
+     * A full-window notice, deliberately unlike the small remote-kernel
+     * "Reconnecting to ..." chip: nothing is wrong with the connection; this
+     * tab simply is not the one in use.  Plain DOM on document.body so it
+     * covers the whole page whatever the Bokeh layout is.
+     */
+    private showSupersededNotice(): void {
+        if (typeof document === "undefined" || document.getElementById(this.supersededNoticeId())) {
+            return
+        }
+        const veil = document.createElement("div")
+        veil.id = this.supersededNoticeId()
+        veil.className = "cv-superseded"
+        veil.setAttribute("role", "alertdialog")
+        veil.setAttribute("aria-modal", "true")
+        veil.setAttribute("aria-labelledby", veil.id + "-title")
+        veil.style.cssText = [
+            "position:fixed", "inset:0", "z-index:2147483000",
+            "display:flex", "align-items:center", "justify-content:center",
+            "background:rgba(17,17,27,0.62)",
+            "font-family:system-ui,-apple-system,'Segoe UI',sans-serif",
+        ].join(";")
+
+        const card = document.createElement("div")
+        card.style.cssText = [
+            "max-width:26rem", "margin:1rem", "padding:1.25rem 1.5rem",
+            "background:#1e1e2e", "color:#cdd6f4",
+            "border:1px solid #45475a", "border-radius:10px",
+            "box-shadow:0 10px 30px rgba(0,0,0,0.45)",
+            "line-height:1.45", "font-size:14px",
+        ].join(";")
+
+        const title = document.createElement("div")
+        title.id = veil.id + "-title"
+        title.textContent = "Open in another tab"
+        title.style.cssText = "font-size:16px;font-weight:600;margin-bottom:0.5rem"
+
+        const body = document.createElement("div")
+        body.textContent =
+            "This session is now open in another browser tab. This tab no " +
+            "longer updates; what it shows stays as it was."
+        body.style.cssText = "margin-bottom:1rem;color:#bac2de"
+
+        const button = document.createElement("button")
+        button.type = "button"
+        button.textContent = "Use this tab"
+        button.title = "Take the session back; the other tab stops updating"
+        button.style.cssText = [
+            "padding:0.45rem 1rem", "font:inherit", "font-weight:600",
+            "color:#11111b", "background:#89b4fa", "border:0",
+            "border-radius:6px", "cursor:pointer",
+        ].join(";")
+        button.addEventListener("click", () => this.reclaim())
+
+        // Keys pressed while the notice is up go nowhere else: this tab's
+        // shortcuts would only produce requests that cannot be answered.
+        veil.addEventListener("keydown", (ev: KeyboardEvent) => {
+            if (ev.key !== "Tab" && ev.key !== "Enter" && ev.key !== " ") ev.stopPropagation()
+        })
+
+        card.append(title, body, button)
+        veil.append(card)
+        document.body.append(veil)
+        try { button.focus() } catch (_e) { /* not focusable yet */ }
+    }
+
+    private hideSupersededNotice(): void {
+        if (typeof document === "undefined") {
+            return
+        }
+        const veil = document.getElementById(this.supersededNoticeId())
+        if (veil) veil.remove()
     }
 
     /**
@@ -584,6 +789,11 @@ export class CommMgr extends Model {
                 if ( callback ) callback( { result: 'Error', error: 'transport has been shut down' } )
                 return
             }
+            if ( this.superseded ) {
+                console.debug(`Session is open in another tab; dropping ${commId}.${messageId}`)
+                if ( callback ) callback( { result: 'Error', error: 'session is open in another tab' } )
+                return
+            }
 
             console.warn(
                 `Transport not ready, queuing message for ${commId}.${messageId} ` +
@@ -603,7 +813,7 @@ export class CommMgr extends Model {
             })
 
             // Trigger reconnection if not already happening
-            if (this.shouldReconnect && !this.reconnectTimer) {
+            if (this.shouldReconnect && !this.reconnectTimer && !this.connecting) {
                 console.debug("Triggering reconnection due to queued message")
                 this.scheduleReconnect()
             }
@@ -799,35 +1009,45 @@ private sendImmediate(
             return
         }
         
+        // A replay of the comm's last request (RP-1): Python keeps the
+        // request_id when it re-sends after a reconnect, so the handler has
+        // already run here; send the reply again.
+        const last = requestId ? this.lastRequest.get(commId) : undefined
+        if (last && last.requestId === requestId) {
+            console.debug(`Replayed ${commId}.${messageId} (${requestId}); sending the reply again`)
+            if (this.transport) this.transport.send(last.reply)
+            return
+        }
+
         // Call handler
         const handler = this.handlers.get(commId)!.get(messageId)!
+        let reply: any
         
         try {
             const result = handler(msg.message, this.context)
-            
-            // Send response if there's a request_id
-            if (requestId && this.transport) {
-                this.transport.send({
-                    comm_id: commId,
-                    message_id: messageId,
-                    request_id: requestId,
-                    message: result,
-                    direction: 'p2j'
-                })
+            reply = {
+                comm_id: commId,
+                message_id: messageId,
+                request_id: requestId,
+                message: result,
+                direction: 'p2j'
             }
         } catch (e) {
             console.error(`Error in handler ${commId}.${messageId}:`, e)
             this.reportError(e as Error, false)
-            
-            if (requestId && this.transport) {
-                this.transport.send({
-                    comm_id: commId,
-                    message_id: messageId,
-                    request_id: requestId,
-                    message: {error: (e as Error).message},
-                    direction: 'p2j'
-                })
+            reply = {
+                comm_id: commId,
+                message_id: messageId,
+                request_id: requestId,
+                message: {error: (e as Error).message},
+                direction: 'p2j'
             }
+        }
+
+        // Send response if there's a request_id
+        if (requestId) {
+            this.lastRequest.set(commId, {requestId, reply})
+            if (this.transport) this.transport.send(reply)
         }
     }
     
@@ -932,6 +1152,8 @@ private sendImmediate(
         this.sendQueue.clear()
         this.comms.clear()
         this.requestBorn.clear()
+        this.lastRequest.clear()
+        this.hideSupersededNotice()
         
         this.state = AppState.STOPPED
 

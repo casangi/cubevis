@@ -278,6 +278,30 @@ toolbar or sidebar control -- a short description of that control.
   ``cubevis`` (the latest documentation for a development version).
   :doc:`visplot_help` lists them all; the *? Help* button opens it.
 
+.. _vp-other-tab:
+
+The window in more than one tab
+-------------------------------
+
+One ``visplot`` session drives one browser tab at a time.  Opening its
+address in a second tab (or reloading) moves the session there: the
+first tab dims under *Open in another tab* and stops updating, with its
+plots left as they were.  It does not take the session back by itself,
+not even when the computer wakes from sleep; its **Use this tab** button
+does, and the other tab then shows the same notice.  A request that was
+still running for the first tab finishes, but its result is not shown
+in the new one: press *Plot* there.
+
+This is unrelated to the remote-session indicator ("Reconnecting to
+*host* ... 12 s"), which means the connection to a remote kernel is
+being restored.
+
+When the window loses its connection (the computer slept, the network
+dropped), it reconnects by itself when the connection returns; a step
+that was in progress (a *Plot*, a flag) is completed once, not repeated.
+After ``visplot`` has ended, the window says so: any request is answered
+with "This visplot session is closed" instead of plotting.
+
 .. _vp-memory-guard:
 
 Large selections

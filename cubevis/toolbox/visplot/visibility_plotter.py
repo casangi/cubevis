@@ -78,7 +78,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import html as _html
+import inspect
 import base64
 import json
 import logging
@@ -3599,6 +3601,41 @@ class VisibilityPlotter:
                     "VisibilityPlotter.close(): error closing data reader"
                 )
 
+    CLOSED_TEXT = ("\u26a0 This visplot session is closed: its data is no "
+                   "longer open, so nothing more can be plotted here. Run "
+                   "visplot again to continue.")
+
+    def _closed_reply(self) -> dict:
+        """The one answer every data request gets after close(): each
+        reply shape the page reads (Plot's status/notify, the summary's
+        and export's message, the selection tools' error) carries the
+        same sentence, so whichever control was used says so instead
+        of a backend traceback ("MSv2Backend is not open")."""
+        text = self.CLOSED_TEXT
+        return {"status": "error", "message": text, "error": text,
+                "status_text": text, "notify_text": text,
+                "notify_color": "#f38ba8", "closed": True}
+
+    def _while_open(self, handler):
+        """Wrap a request handler that reads the data so that, once the
+        plotter is closed (by close(), the ``with`` block ending, or the
+        session shutting down while a window is still up), it answers
+        with _closed_reply() rather than reaching the closed reader.
+        Logged once, at INFO: this is a state, not an error."""
+        @functools.wraps(handler)
+        async def guarded(msg, context=None):
+            if getattr(self, "_closed", False):
+                if not getattr(self, "_closed_logged", False):
+                    self._closed_logged = True
+                    log.info("VisibilityPlotter: request after close(); "
+                             "the window is told the session is closed")
+                return self._closed_reply()
+            result = handler(msg, context=context)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+        return guarded
+
     @contextlib.contextmanager
     def _closing_on_error(self):
         """Close what has been opened if the body raises, then re-raise."""
@@ -4262,16 +4299,20 @@ class VisibilityPlotter:
             "summary": str(uuid4()),
             "rows": str(uuid4()),
         }
-        self._pipe["control"].register(self._ids["plot"], self._handle_plot)
+        # Handlers that read the data answer with one clear message once
+        # the plotter is closed (_while_open); Done and the theme do not
+        # touch the data and keep working.
+        guard = self._while_open
+        self._pipe["control"].register(self._ids["plot"], guard(self._handle_plot))
         self._pipe["control"].register(self._ids["done"], self._handle_done)
         self._pipe["control"].register(self._ids["theme"], self._handle_theme)
-        self._pipe["control"].register(self._ids["export"], self._handle_export)
+        self._pipe["control"].register(self._ids["export"], guard(self._handle_export))
         self._pipe["control"].register(self._ids["time_labels"],
-                                       self._handle_time_labels)
+                                       guard(self._handle_time_labels))
         self._pipe["control"].register(self._ids["summary"],
-                                       self._handle_summary)
+                                       guard(self._handle_summary))
         self._pipe["control"].register(self._ids["rows"],
-                                       self._handle_rows)
+                                       guard(self._handle_rows))
 
         # FlagDB v2 controls (filter/config, undo/redo/clear, review,
         # export) on their own pipe WITHOUT queue squashing: a squashing
@@ -4281,7 +4322,7 @@ class VisibilityPlotter:
             description="visibility plotter flag controls",
         )
         self._ids["flag"] = str(uuid4())
-        self._pipe["flag"].register(self._ids["flag"], self._flags.handle_action)
+        self._pipe["flag"].register(self._ids["flag"], guard(self._flags.handle_action))
 
         # Remote sessions (Scenario A, 2026-11-10): while a call waits, the
         # page asks what the connection is doing and shows it in the busy

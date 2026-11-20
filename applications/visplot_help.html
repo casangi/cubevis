@@ -1,0 +1,950 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="What visplot can do" href="capabilities/index.html"><link rel="prev" title="The visplot window" href="visplot.html">
+        <link rel="canonical" href="https://casangi.github.io/cubevis/applications/visplot_help.html">
+
+    <!-- Generated with Sphinx 9.1.1 and Furo 2025.12.19 -->
+        <title>visplot controls, in full - cubevis</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/s4defs-roles.css?v=4e6db181" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/cubevis-docs.css?v=8a4cc0d1" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">cubevis</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  <span class="sidebar-brand-text">cubevis</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="installing.html">Installing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="remote_kernels.html">Setting up remote execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="visplot_starting.html">Starting visplot</a></li>
+<li class="toctree-l1"><a class="reference internal" href="visplot.html">The visplot window</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">visplot controls, in full</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="capabilities/index.html">What visplot can do</a><input aria-label="Toggle navigation of What visplot can do" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/from_plotms.html">Coming from plotms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/from_aips.html">Coming from AIPS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/data_access.html">Data formats and access</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/selection.html">Selecting data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/plot_types.html">Rasters, scatter plots and layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/standard_views.html">Standard views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/quantities.html">Plotted quantities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/phase_stability.html">Phase stability: Phase RMS and Coherence</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/vector_difference.html">Difference from the mean: Amp V Diff and Phase Diff</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/z_score.html">Z-Score</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/averaging.html">Averaging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/colormaps.html">Colormaps and color scaling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/flagging.html">Flagging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/output.html">Saving and describing plots</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="iclean_starting.html">Starting iclean</a></li>
+<li class="toctree-l1"><a class="reference internal" href="iclean_parameters.html">iclean parameters</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Slides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../slides.html">Slide decks</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Background and development</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../contributing.html">Writing this documentation</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../historical/index.html">Historical reference</a><input aria-label="Toggle navigation of Historical reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../historical/intro.html">System Design</a><input aria-label="Toggle navigation of System Design" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../historical/applications/interactive_clean_pathfinder.html">Interactive clean as a pathfinder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../historical/applications/interactive_clean.html">Interactive Clean Design</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../historical/boundary.html">CASA/Viz Boundary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../historical/components/cube_mask.html">Cube Mask Design</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/applications/visplot_help.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section class="tex2jax_ignore mathjax_ignore" id="vp-help">
+<span id="visplot-controls-in-full"></span><h1>visplot controls, in full<a class="headerlink" href="#vp-help" title="Link to this heading">¶</a></h1>
+<p>This page is the long form of the descriptions and warnings in the
+<code class="docutils literal notranslate"><span class="pre">visplot</span></code> window’s status area: what a <strong>ⓘ</strong> there leads to. Pressing
+<strong>?</strong> in the window (or clicking a warning’s ⓘ) opens this page at the
+entry for what the status area is showing: see <a class="reference internal" href="visplot.html#vp-help-window"><span class="std std-ref">Help in the window</span></a>.
+Some entries are elsewhere in the documentation, where the subject is
+already explained, for example <a class="reference internal" href="visplot.html#vp-memory-guard"><span class="std std-ref">Large selections</span></a>.</p>
+<p>The pages under <a class="reference internal" href="capabilities/data_access.html#cap-data"><span class="std std-ref">Data formats and access</span></a> and the other capability pages describe
+what each feature is for; this page describes each control.</p>
+<p><em>Updated 2026-11-19 (ⓘ and ?).</em></p>
+<nav class="contents local" id="contents">
+<ul class="simple">
+<li><p><a class="reference internal" href="#selection" id="id1">Selection</a></p>
+<ul>
+<li><p><a class="reference internal" href="#vp-antenna" id="id2">Antenna and Baseline</a></p></li>
+<li><p><a class="reference internal" href="#vp-iteration" id="id3">Stepping through Field, SPW, Scan, Antenna and Baseline</a></p></li>
+<li><p><a class="reference internal" href="#vp-scan" id="id4">Scan</a></p></li>
+<li><p><a class="reference internal" href="#vp-time" id="id5">Time range</a></p></li>
+<li><p><a class="reference internal" href="#vp-uvrange" id="id6">UV range</a></p></li>
+<li><p><a class="reference internal" href="#vp-autocorr" id="id7">Autocorrelations</a></p></li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#raster-panels" id="id8">Raster panels</a></p>
+<ul>
+<li><p><a class="reference internal" href="#vp-r-axes" id="id9">Raster axes</a></p></li>
+<li><p><a class="reference internal" href="#vp-rcorr" id="id10">Correlation shown</a></p></li>
+<li><p><a class="reference internal" href="#vp-averaging" id="id11">Averaging</a></p></li>
+<li><p><a class="reference internal" href="#vp-bcombine" id="id12">Baselines combined</a></p></li>
+<li><p><a class="reference internal" href="#vp-border" id="id13">Baseline order</a></p></li>
+<li><p><a class="reference internal" href="#vp-time-gaps" id="id14">Time gaps</a></p></li>
+<li><p><a class="reference internal" href="#vp-twin" id="id15">Time window</a></p></li>
+<li><p><a class="reference internal" href="#vp-cwin" id="id16">Channel window</a></p></li>
+<li><p><a class="reference internal" href="#vp-scaling" id="id17">Color scaling</a></p></li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#scatter-panels" id="id18">Scatter panels</a></p>
+<ul>
+<li><p><a class="reference internal" href="#vp-s-avg" id="id19">Averaging (scatter)</a></p></li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#presets" id="id20">Presets</a></p>
+<ul>
+<li><p><a class="reference internal" href="#vp-preset-waterfall-all" id="id21">All-baseline waterfall</a></p></li>
+<li><p><a class="reference internal" href="#vp-preset-antmatrix" id="id22">Antenna × antenna</a></p></li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#flagging" id="id23">Flagging</a></p>
+<ul>
+<li><p><a class="reference internal" href="#vp-flag-reach" id="id24">Flag reaches</a></p></li>
+<li><p><a class="reference internal" href="#vp-flag-filters" id="id25">Flag filters</a></p></li>
+<li><p><a class="reference internal" href="#vp-flag-export" id="id26">Export / commit</a></p></li>
+</ul>
+</li>
+</ul>
+</nav>
+<section id="selection">
+<h2><a class="toc-backref" href="#id1" role="doc-backlink">Selection</a><a class="headerlink" href="#selection" title="Link to this heading">¶</a></h2>
+<section id="vp-antenna">
+<span id="antenna-and-baseline"></span><h3><a class="toc-backref" href="#id2" role="doc-backlink">Antenna and Baseline</a><a class="headerlink" href="#vp-antenna" title="Link to this heading">¶</a></h3>
+<p>Tick rows to select.</p>
+<ul class="simple">
+<li><p><strong>Antennas ticked</strong>: their baselines to every other antenna.</p></li>
+<li><p><strong>Baselines ticked</strong>: exactly those; they override the antennas.</p></li>
+<li><p><strong>Nothing ticked</strong>: all antennas, or all baselines.</p></li>
+<li><p>The text box under each table sets the ticks from text: for antennas,
+a name or number such as <code class="docutils literal notranslate"><span class="pre">DA41</span></code>, <code class="docutils literal notranslate"><span class="pre">DA43~DA46</span></code>, <code class="docutils literal notranslate"><span class="pre">0,3,5</span></code> or <code class="docutils literal notranslate"><span class="pre">!DA42</span></code>
+(all but); for baselines, two antennas joined by <code class="docutils literal notranslate"><span class="pre">&amp;</span></code> (<code class="docutils literal notranslate"><span class="pre">DA41&amp;DV01</span></code>),
+or the baseline’s number (<code class="docutils literal notranslate"><span class="pre">12</span></code>, <code class="docutils literal notranslate"><span class="pre">10~20</span></code>, <code class="docutils literal notranslate"><span class="pre">!3</span></code>). <strong>Enter</strong> replaces
+the ticks and clears the box; if any part matches nothing, nothing
+changes. Then press <strong>Plot</strong>.</p></li>
+<li><p><strong>Prev / Next</strong> (◀ ▶) step through the rows one at a time: see
+<a class="reference internal" href="#vp-iteration"><span class="std std-ref">Stepping through Field, SPW, Scan, Antenna and Baseline</span></a>.</p></li>
+</ul>
+</section>
+<section id="vp-iteration">
+<span id="stepping-through-field-spw-scan-antenna-and-baseline"></span><h3><a class="toc-backref" href="#id3" role="doc-backlink">Stepping through Field, SPW, Scan, Antenna and Baseline</a><a class="headerlink" href="#vp-iteration" title="Link to this heading">¶</a></h3>
+<p>Field, SPW, Scan, Antenna and Baseline each have <strong>Prev</strong>, <strong>✱</strong> and
+<strong>Next</strong> beside their control (Scan: see <a class="reference internal" href="#vp-scan"><span class="std std-ref">Scan</span></a>; it has a text
+box rather than a table, and its ▶ is the line under the box). Each step plots straight away, and steps wrap
+around at the ends.</p>
+<ul class="simple">
+<li><p><strong>The ▶ marks the row being shown.</strong> It is that axis’s <em>current
+row</em>, and the table scrolls to keep it in view. While a row is
+current, the status line gives the position, for example
+“Antenna 4/6: ANTENNA-3”.</p></li>
+<li><p><strong>Two or more rows ticked:</strong> Prev and Next step through only those
+rows. The ticks stay as they are.</p></li>
+<li><p><strong>One row ticked:</strong> Prev and Next step through every row that has
+data, and the tick moves with the ▶.</p></li>
+<li><p><strong>No row ticked:</strong> on Antenna and Baseline, none ticked means all, so
+the ▶ steps through every row with data and the ticks stay empty. On
+SPW the tick and the ▶ start at the first row and move together.</p></li>
+<li><p><strong>Stepping ends</strong> when the ticks are changed by hand (a click, the text
+box, ✱, a drill-down from the grid) or when <strong>Plot</strong> is pressed.
+<strong>Plot</strong> always plots what is ticked.</p></li>
+<li><p><strong>The plot titles</strong> name what is being shown when the selection holds
+one field, SPW, scan, antenna or baseline of several, for example
+“… — 1642+689, scan 7”: an exported PNG then says which it is.</p></li>
+<li><p><strong>The grid’s Play</strong> steps, in order of preference: the axis with a ▶
+(the most specific one, if more than one has a ▶; a current scan
+counts, between Antenna and SPW); else an axis with
+exactly one row ticked; else the most specific axis with more than one
+row to step.</p></li>
+</ul>
+</section>
+<section id="vp-scan">
+<span id="scan"></span><h3><a class="toc-backref" href="#id4" role="doc-backlink">Scan</a><a class="headerlink" href="#vp-scan" title="Link to this heading">¶</a></h3>
+<p>Scan numbers, applied by <strong>Plot</strong>. The status-area help lists the
+data’s scans.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">1,3,7</span></code>: those scans.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1~7</span></code>: scans 1 to 7. A range is written with <code class="docutils literal notranslate"><span class="pre">~</span></code>, not <code class="docutils literal notranslate"><span class="pre">-</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&gt;30</span></code> and <code class="docutils literal notranslate"><span class="pre">&lt;5</span></code>: scans above or below a number.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">!5</span></code>: all scans but 5. <code class="docutils literal notranslate"><span class="pre">!</span></code> can go before any of the forms above.</p></li>
+<li><p>Several parts are separated by commas.</p></li>
+<li><p>Empty: all scans.</p></li>
+</ul>
+<p><strong>Stepping through scans.</strong> ◀ and ▶ beside the Scan heading plot one
+scan at a time: the scans the box selects (every scan when it is empty),
+and only those of the field shown when one field is chosen. A line under
+the box says which, for example “▶ Scan 7 · 3 of 5”; the box itself is
+left as it is. Typing in the box, <strong>Plot</strong>, or ✱ (all of the box’s scans
+again) ends it. A scan with no data for the chosen spectral windows,
+antennas or time range plots empty; the next step moves on. See also
+<a class="reference internal" href="#vp-iteration"><span class="std std-ref">Stepping through Field, SPW, Scan, Antenna and Baseline</span></a>.</p>
+<p>The text is checked when <strong>Enter</strong> is pressed and when the box loses the
+focus. A problem shows as a ⚠ warning in the status area, which stays
+while other help is showing; text that selects no scan of the data is a
+problem too.</p>
+</section>
+<section id="vp-time">
+<span id="time-range"></span><h3><a class="toc-backref" href="#id5" role="doc-backlink">Time range</a><a class="headerlink" href="#vp-time" title="Link to this heading">¶</a></h3>
+<p>UTC, applied by <strong>Plot</strong>. The status-area help gives the data’s time
+range.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">08:00:00~08:30:00</span></code>: times of day, on the day of the data.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">2024-05-01/08:00:00~2024-05-01/08:30:00</span></code>: with the date.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&gt;08:00</span></code> and <code class="docutils literal notranslate"><span class="pre">&lt;08:30</span></code>: after or before a time.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">08:00:00+00:10:00</span></code>: a start and a length.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1/00:10:00</span></code>: day/time, as the time axis labels data that cross
+midnight.</p></li>
+<li><p>One time alone: the integration around it.</p></li>
+<li><p>Empty: all times.</p></li>
+</ul>
+</section>
+<section id="vp-uvrange">
+<span id="uv-range"></span><h3><a class="toc-backref" href="#id6" role="doc-backlink">UV range</a><a class="headerlink" href="#vp-uvrange" title="Link to this heading">¶</a></h3>
+<p>Projected baseline length, applied by <strong>Plot</strong>.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">0~50klambda</span></code>, <code class="docutils literal notranslate"><span class="pre">100~300m</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;200m</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;1.5km</span></code>; several with commas.</p></li>
+<li><p>Units: m, km, lambda, klambda, Mlambda (kl and Ml for short); metres
+when none is given.</p></li>
+<li><p>Wavelengths are taken at each spectral window’s centre frequency.</p></li>
+<li><p>Whole rows (one baseline at one time) are in or out.</p></li>
+<li><p>Empty: all lengths.</p></li>
+</ul>
+</section>
+<section id="vp-autocorr">
+<span id="autocorrelations"></span><h3><a class="toc-backref" href="#id7" role="doc-backlink">Autocorrelations</a><a class="headerlink" href="#vp-autocorr" title="Link to this heading">¶</a></h3>
+<p>Baselines from an antenna to itself.</p>
+<ul class="simple">
+<li><p><strong>Exclude</strong> (the default): cross-correlations only. Autocorrelations
+can be hundreds of times larger (VLBI data before amplitude
+calibration) and flatten every plot of all baselines.</p></li>
+<li><p><strong>Include</strong>: both. The Antenna × antenna matrix then has its
+diagonal.</p></li>
+<li><p><strong>Only</strong>: autocorrelations alone: the bandpass shape and the
+interference at each station.</p></li>
+<li><p>A baseline ticked by name (for example <code class="docutils literal notranslate"><span class="pre">BR&amp;BR</span></code>) is plotted whatever is
+chosen here.</p></li>
+<li><p>Applied by <strong>Plot</strong>.</p></li>
+</ul>
+</section>
+</section>
+<section id="raster-panels">
+<h2><a class="toc-backref" href="#id8" role="doc-backlink">Raster panels</a><a class="headerlink" href="#raster-panels" title="Link to this heading">¶</a></h2>
+<section id="vp-r-axes">
+<span id="raster-axes"></span><h3><a class="toc-backref" href="#id9" role="doc-backlink">Raster axes</a><a class="headerlink" href="#vp-r-axes" title="Link to this heading">¶</a></h3>
+<p>What runs up (Y) and across (X) the image. Everything else is averaged
+into each cell.</p>
+<ul class="simple">
+<li><p><strong>Baseline × Time</strong>: all baselines at once, to find when and where
+something went wrong.</p></li>
+<li><p><strong>Time × Channel</strong>: a waterfall. One baseline if one is ticked,
+otherwise the selected baselines combined (see <a class="reference internal" href="#vp-bcombine"><span class="std std-ref">Baselines combined</span></a>).</p></li>
+<li><p><strong>Baseline × Channel</strong>: the band on every baseline.</p></li>
+<li><p><strong>Antenna 1 × Antenna 2</strong>: one cell per baseline over time and
+channels, mirrored, so a bad antenna is a whole row and column (the
+<a class="reference internal" href="#vp-preset-antmatrix"><span class="std std-ref">Antenna × antenna</span></a> preset). The two Antenna axes only go
+together.</p></li>
+<li><p>Y and X must differ.</p></li>
+<li><p>Which correlation is shown is set by <a class="reference internal" href="#vp-rcorr"><span class="std std-ref">Correlation shown</span></a>.</p></li>
+</ul>
+</section>
+<section id="vp-rcorr">
+<span id="correlation-shown"></span><h3><a class="toc-backref" href="#id10" role="doc-backlink">Correlation shown</a><a class="headerlink" href="#vp-rcorr" title="Link to this heading">¶</a></h3>
+<p>A raster shows one correlation at a time.</p>
+<ul class="simple">
+<li><p><strong>First ticked</strong>: the first one ticked in the Data section, named in
+the title.</p></li>
+<li><p><strong>Parallel hands</strong>: the mean of the two parallel hands, (XX+YY)/2 or
+(RR+LL)/2: the Stokes I-like view AIPS editors start from. A sample
+counts only where both hands are unflagged, and a flag box here flags
+both.</p></li>
+<li><p><strong>A product</strong>: that one, whether it is ticked or not.</p></li>
+<li><p>Two panels, on RR and on LL, show a problem that is in one hand only.</p></li>
+</ul>
+<p><strong>How it differs from the Data section’s Correlation ticks.</strong> The ticks
+decide what is <em>read</em>: a scatter draws one layer for each ticked
+correlation. Correlation shown decides what each <em>raster</em> draws, and a
+raster set to a product reads that product itself, so it can show a
+correlation the ticks leave out. That lets the two panels show RR and LL
+side by side while a scatter keeps a single layer, or a scatter show
+both hands while the raster shows one. With <em>First ticked</em>, the raster
+simply follows the ticks.</p>
+</section>
+<section id="vp-averaging">
+<span id="averaging"></span><h3><a class="toc-backref" href="#id11" role="doc-backlink">Averaging</a><a class="headerlink" href="#vp-averaging" title="Link to this heading">¶</a></h3>
+<p>How a raster cell combines the samples it covers (Amplitude and Phase
+only).</p>
+<ul class="simple">
+<li><p><strong>Vector</strong>: average the complex visibilities, then take amplitude and
+phase. The amplitude drops where the samples do not line up (noise, an
+uncalibrated phase, a delay across the averaged channels). This is the
+default in AIPS and plotms, which both offer scalar averaging too.</p></li>
+<li><p><strong>Scalar</strong>: average the amplitudes themselves. Shows the signal plus the
+noise level, with no loss from decorrelation.</p></li>
+<li><p>Vector next to Scalar, on two panels, shows where coherence is lost.</p></li>
+</ul>
+<p>See also <a class="reference internal" href="capabilities/averaging.html#cap-averaging"><span class="std std-ref">Averaging</span></a>.</p>
+</section>
+<section id="vp-bcombine">
+<span id="baselines-combined"></span><h3><a class="toc-backref" href="#id12" role="doc-backlink">Baselines combined</a><a class="headerlink" href="#vp-bcombine" title="Link to this heading">¶</a></h3>
+<p>What a cell shows when it covers several baselines: any raster without
+Baseline on an axis, such as Time × Channel with no single baseline
+ticked. <a class="reference internal" href="#vp-averaging"><span class="std std-ref">Averaging</span></a> applies to the samples of each baseline;
+this is what happens to the baselines.</p>
+<ul class="simple">
+<li><p><strong>Mean</strong>: the average of the baselines’ amplitudes. The general picture
+of the selected baselines; a problem on a few of them is diluted.</p></li>
+<li><p><strong>Median</strong>: the middle baseline at each cell: what most baselines
+share, unmoved by a few bad ones. A feature that shows in Maximum but
+not in Median is on a few baselines (find and flag those); one that
+shows in both is on most of them.</p></li>
+<li><p><strong>Maximum</strong>: the largest baseline at each cell. Interference or a bad
+antenna shows even if only one baseline has it; then tick baselines to
+find which.</p></li>
+<li><p><strong>Vector (coherent)</strong>: the baselines are added as complex numbers
+first. Only for a calibrated point source, where all baselines agree
+and the noise averages down; on anything else they cancel and the plot
+reads low. Offered only with Vector averaging.</p></li>
+<li><p>Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean
+direction), Amp V Diff and Phase Diff.</p></li>
+<li><p>A flag box on such a plot flags every selected baseline.</p></li>
+</ul>
+</section>
+<section id="vp-border">
+<span id="baseline-order"></span><h3><a class="toc-backref" href="#id13" role="doc-backlink">Baseline order</a><a class="headerlink" href="#vp-border" title="Link to this heading">¶</a></h3>
+<p>How the Baseline axis of a raster is laid out. The baselines that have
+data are drawn side by side either way.</p>
+<ul class="simple">
+<li><p><strong>By number</strong>: in the order of the Baseline table; baselines to one
+antenna sit together.</p></li>
+<li><p><strong>By length</strong>: shortest first, and the ticks read the length. Trouble
+that grows along the axis is then about distance (the atmosphere, a
+source that is resolved); trouble in scattered columns is about
+particular antennas.</p></li>
+<li><p>The cursor readout names the baseline and its length in both.</p></li>
+</ul>
+</section>
+<section id="vp-time-gaps">
+<span id="time-gaps"></span><h3><a class="toc-backref" href="#id14" role="doc-backlink">Time gaps</a><a class="headerlink" href="#vp-time-gaps" title="Link to this heading">¶</a></h3>
+<p>How a raster’s Time axis treats stretches with no data, such as the time
+spent on other fields between the scans of the one shown.</p>
+<ul class="simple">
+<li><p><strong>Shown</strong> (the default): time is drawn to scale. A field observed in
+short scans with long gaps between them shows as thin bands in
+mostly blank space. The Time axis then lines up with a scatter of
+X = Time beside it.</p></li>
+<li><p><strong>Closed</strong>: one row (or column) per time with data, side by side, with
+one thin blank row where there was a gap, much as the AIPS editors
+draw time. The ticks read the times, and the axis label says “(gaps
+closed)”. The cursor readout and flag boxes work in real time: a box
+drawn across a closed gap covers the scans on both sides, and the gap
+itself, which holds no data of the selection.</p></li>
+<li><p>With the gaps closed the axis no longer runs at a constant rate, so it
+does not line up with a scatter of X = Time beside it. The linked
+cursor still follows: over the raster it marks the same time on the
+scatter, and over a scatter’s time in a closed gap it shows nothing on
+the raster.</p></li>
+<li><p>Zooming in magnifies the cells already read rather than reading finer
+ones.</p></li>
+<li><p>Each panel has its own setting, in its gear tab. Applied by <strong>Plot</strong>.</p></li>
+</ul>
+</section>
+<section id="vp-twin">
+<span id="time-window"></span><h3><a class="toc-backref" href="#id15" role="doc-backlink">Time window</a><a class="headerlink" href="#vp-twin" title="Link to this heading">¶</a></h3>
+<p>The stretch of time each Phase RMS or Coherence value is measured
+within.</p>
+<ul class="simple">
+<li><p><strong>Auto</strong>: one integration where Time is a plot axis, one scan where it
+is not.</p></li>
+<li><p><strong>Off</strong>: no windows.</p></li>
+<li><p><strong>Scan</strong>, or a length: each scan, or pieces of that length; never
+across a gap.</p></li>
+<li><p>For <strong>Amp V Diff</strong> and <strong>Phase Diff</strong> it is the stretch the reference
+mean is taken over (Auto and Off mean one scan).</p></li>
+<li><p>Longer windows are steadier but blur changes in time. On the plot they
+show as blocks.</p></li>
+<li><p><strong>Custom…</strong> opens a box under the list for any length: a number of
+seconds, or with a unit (<code class="docutils literal notranslate"><span class="pre">45</span></code>, <code class="docutils literal notranslate"><span class="pre">45s</span></code>, <code class="docutils literal notranslate"><span class="pre">2min</span></code>, <code class="docutils literal notranslate"><span class="pre">1.5h</span></code>). <strong>Enter</strong> adds it
+to the list and selects it. A value that is not a positive length is
+reported as a warning and changes nothing.</p></li>
+<li><p>A scatter panel has its own Time window, for its Phase RMS and
+Coherence points: <em>Auto</em> is one integration when X is Time, otherwise
+one scan.</p></li>
+</ul>
+</section>
+<section id="vp-cwin">
+<span id="channel-window"></span><h3><a class="toc-backref" href="#id16" role="doc-backlink">Channel window</a><a class="headerlink" href="#vp-cwin" title="Link to this heading">¶</a></h3>
+<p>How many channels each Phase RMS or Coherence value is measured within.</p>
+<ul class="simple">
+<li><p><strong>Off</strong>: on a raster, the whole band where frequency is not a plot axis
+and single channels where it is; on a scatter, single channels when X is
+Frequency or Channel, otherwise the whole band.</p></li>
+<li><p><strong>A number</strong>: blocks of that many channels.</p></li>
+<li><p><strong>Custom…</strong> opens a box for any whole number of channels, 2 or more
+(<code class="docutils literal notranslate"><span class="pre">12</span></code>, <code class="docutils literal notranslate"><span class="pre">12ch</span></code>); <strong>Enter</strong> adds it to the list and selects it.</p></li>
+<li><p>On a Time × Channel waterfall, Phase RMS and Coherence need a channel
+window, a time window, or both: without one, each cell holds one sample.</p></li>
+</ul>
+</section>
+<section id="vp-scaling">
+<span id="color-scaling"></span><h3><a class="toc-backref" href="#id17" role="doc-backlink">Color scaling</a><a class="headerlink" href="#vp-scaling" title="Link to this heading">¶</a></h3>
+<p>How values are spread over the colors. It changes the picture, never the
+data.</p>
+<ul class="simple">
+<li><p><strong>eq_hist</strong> uses every color equally and shows faint structure, but
+distances between colors mean nothing.</p></li>
+<li><p><strong>linear</strong> is honest about size, and lets a few strong values hide the
+rest.</p></li>
+<li><p><strong>log</strong> and <strong>sqrt</strong> sit between.</p></li>
+<li><p><strong>Min</strong> and <strong>max</strong> (or a drag on the histogram) clip the range;
+<strong>threshold</strong> highlights everything above a cutoff.</p></li>
+<li><p>Phase is fixed at −180..180°, linear, with a cyclic colormap.</p></li>
+</ul>
+<p>See also <a class="reference internal" href="capabilities/colormaps.html#cap-colormaps"><span class="std std-ref">Colormaps and color scaling</span></a>.</p>
+</section>
+</section>
+<section id="scatter-panels">
+<h2><a class="toc-backref" href="#id18" role="doc-backlink">Scatter panels</a><a class="headerlink" href="#scatter-panels" title="Link to this heading">¶</a></h2>
+<section id="vp-s-avg">
+<span id="averaging-scatter"></span><h3><a class="toc-backref" href="#id19" role="doc-backlink">Averaging (scatter)</a><a class="headerlink" href="#vp-s-avg" title="Link to this heading">¶</a></h3>
+<p>One point per baseline and correlation for each stretch of time and block
+of channels, instead of one per sample: what a spectrum or a time series
+needs.</p>
+<ul class="simple">
+<li><p><strong>Average over time</strong>: <em>Off</em> (every integration), <em>Scan</em> (a spectrum
+per scan, with X Frequency or Channel), or a length (from the start of
+each scan, never across a scan boundary).</p></li>
+<li><p><strong>Average over channels</strong>: <em>Off</em>, a number of channels, or <em>All</em> (one
+point per spectral window: a time series, with X Time).</p></li>
+<li><p><strong>Vector</strong>: average the complex visibilities, then take amplitude and
+phase. The amplitude drops where the samples do not add up (noise, an
+uncalibrated phase, a delay across the averaged channels).</p></li>
+<li><p><strong>Scalar</strong>: average the amplitudes.</p></li>
+<li><p>Amplitude, Phase, Real and Imaginary only. Flagged samples are left
+out, and a flag box takes every sample behind the points it encloses.</p></li>
+</ul>
+</section>
+</section>
+<section id="presets">
+<h2><a class="toc-backref" href="#id20" role="doc-backlink">Presets</a><a class="headerlink" href="#presets" title="Link to this heading">¶</a></h2>
+<section id="vp-preset-waterfall-all">
+<span id="all-baseline-waterfall"></span><h3><a class="toc-backref" href="#id21" role="doc-backlink">All-baseline waterfall</a><a class="headerlink" href="#vp-preset-waterfall-all" title="Link to this heading">¶</a></h3>
+<p>Time × Channel with every selected baseline in one image, like AIPS
+FTFLG.</p>
+<ul class="simple">
+<li><p>Each cell shows the largest amplitude among the baselines
+(<a class="reference internal" href="#vp-bcombine"><span class="std std-ref">Baselines combined</span></a> is set to Maximum).</p></li>
+<li><p>The scatter panel shows Amplitude vs Channel.</p></li>
+<li><p>A quick survey for interference: one picture instead of one per
+baseline. A flag box here flags <strong>every selected baseline</strong>, and the
+message says how many.</p></li>
+<li><p>What looks bad here may be on only a few baselines: tick antennas or
+baselines to find which before flagging them all.</p></li>
+</ul>
+</section>
+<section id="vp-preset-antmatrix">
+<span id="antenna-antenna"></span><span id="antenna--antenna"></span><h3><a class="toc-backref" href="#id22" role="doc-backlink">Antenna × antenna</a><a class="headerlink" href="#vp-preset-antmatrix" title="Link to this heading">¶</a></h3>
+<p>One cell per baseline, averaged over time and channels, like the matrix
+of AIPS LISTR.</p>
+<ul class="simple">
+<li><p>The matrix is mirrored, so an antenna that is bad on every baseline
+shows as a whole row and column.</p></li>
+<li><p>Hover a cell for its baseline. The diagonal holds the autocorrelations
+when <a class="reference internal" href="#vp-autocorr"><span class="std std-ref">Autocorrelations</span></a> is Include.</p></li>
+<li><p>The scatter panel shows Amplitude vs UV Distance, where that antenna’s
+baselines stand apart.</p></li>
+<li><p><a class="reference internal" href="#vp-averaging"><span class="std std-ref">Averaging</span></a> applies: vector averaging over a long stretch reads
+low where the phase is not calibrated yet. Use Scalar, or narrow the
+time range.</p></li>
+<li><p>Flag on Baseline × Time once the antenna is found.</p></li>
+</ul>
+</section>
+</section>
+<section id="flagging">
+<h2><a class="toc-backref" href="#id23" role="doc-backlink">Flagging</a><a class="headerlink" href="#flagging" title="Link to this heading">¶</a></h2>
+<p>See also <a class="reference internal" href="capabilities/flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a>.</p>
+<section id="vp-flag-reach">
+<span id="flag-reaches"></span><h3><a class="toc-backref" href="#id24" role="doc-backlink">Flag reaches</a><a class="headerlink" href="#vp-flag-reach" title="Link to this heading">¶</a></h3>
+<p>How far each flag (or unflag) goes beyond the box that is drawn. The
+settings stay until they are changed; the line underneath turns amber
+while any is wider than the box, and the box is outlined in amber as it
+is drawn.</p>
+<ul class="simple">
+<li><p><strong>Baselines</strong>: <em>As drawn</em>; or all baselines <em>to the antenna they share</em>
+(drag across two or more baselines of the bad antenna; refused if they
+do not share exactly one); or all baselines <em>to every antenna drawn</em>;
+or <em>all baselines</em>.</p></li>
+<li><p><strong>All channels</strong>: the drawn time range over the whole band (a bad
+integration).</p></li>
+<li><p><strong>All selected spectral windows</strong>: the same channels and times in every
+selected window.</p></li>
+<li><p><strong>Whole scan</strong>: every integration of the scans the box touches.</p></li>
+<li><p><strong>All fields</strong>: matters only on a plot without a Time axis.</p></li>
+<li><p><strong>All correlations</strong>: not just the one plotted.</p></li>
+<li><p>Baselines, windows, scans and fields are extended for a raster box with
+the <a class="reference internal" href="#vp-flagf-all"><span class="std std-ref">All selected (immediate)</span></a> filter; other boxes say so.</p></li>
+<li><p><strong>For one box only</strong>, without changing these settings: <strong>Shift</strong> while
+dragging gives the full height of the plot as shown, <strong>Alt</strong> (<strong>Option</strong>
+on a Mac) the full width. A key held as the drag starts, or pressed
+during it, counts for the whole drag, even if it is let go first.
+<strong>Esc</strong> before letting go of the button drops the box.</p></li>
+</ul>
+</section>
+<section id="vp-flag-filters">
+<span id="flag-filters"></span><h3><a class="toc-backref" href="#id25" role="doc-backlink">Flag filters</a><a class="headerlink" href="#vp-flag-filters" title="Link to this heading">¶</a></h3>
+<p>What a flag box takes from the samples it encloses.</p>
+<p>A box from which the filter takes no sample adds nothing to the pending
+flags, and the status area says <strong>Nothing to flag</strong> (or unflag), with the
+reason: usually “no samples matched filter …”. The filter’s cutoff is
+then beyond every value in the box: lower it (for Value range, check the
+numbers against the color bar or axis, whose units it uses), or draw the
+box with <strong>All selected</strong>.</p>
+<section id="vp-flagf-all">
+<span id="all-selected-immediate"></span><h4>All selected (immediate)<a class="headerlink" href="#vp-flagf-all" title="Link to this heading">¶</a></h4>
+<p>Every sample in the box: AIPS-style immediate flagging. The other filters
+take only some of the samples in the box, so a generous box can be drawn
+round a bad stretch.</p>
+</section>
+<section id="vp-flagf-value-range">
+<span id="value-range"></span><h4>Value range<a class="headerlink" href="#vp-flagf-value-range" title="Link to this heading">¶</a></h4>
+<p>Samples whose value, of the quantity the panel shows (Amplitude, Phase,
+Real or Imaginary), lies in the range. For dropouts (High only) and
+strong interference (Low only); CASA’s clip.</p>
+<ul class="simple">
+<li><p><strong>Low</strong>: flag samples at or above this value; empty for no lower bound.
+In the units of the color bar or axis.</p></li>
+<li><p><strong>High</strong>: flag samples at or below this value; empty for no upper
+bound. Low and High together take the samples between them.</p></li>
+</ul>
+</section>
+<section id="vp-flagf-outlier">
+<span id="outlier-from-neighbors"></span><h4>Outlier from neighbors<a class="headerlink" href="#vp-flagf-outlier" title="Link to this heading">¶</a></h4>
+<p>Amplitudes far from the running median of the 9 samples around them, per
+baseline and correlation, within each scan. Finds spikes that a smooth
+change in gain or a bandpass does not explain; CASA’s tfcrop or AIPS’s
+FLAGR in spirit.</p>
+<ul class="simple">
+<li><p><strong>Compare along</strong>: <em>time</em>, each sample against the integrations before
+and after it (spikes in time, brief interference); <em>channel</em>, against
+the neighboring channels (narrow-band interference, a bad channel).</p></li>
+<li><p><strong>Cutoff (sigma)</strong>: how far from its neighbors a sample must be, in
+robust standard deviations of the baseline’s scatter about them. Lower
+takes more.</p></li>
+</ul>
+</section>
+<section id="vp-flagf-zscore">
+<span id="z-score-above-cutoff"></span><h4>Z-Score above cutoff<a class="headerlink" href="#vp-flagf-zscore" title="Link to this heading">¶</a></h4>
+<p>The robust per-baseline joint (real, imaginary) Z-Score, as the Z-Score
+coloring computes it: what the Z-Score view shows bright.</p>
+<ul class="simple">
+<li><p><strong>Cutoff</strong>: the per-sample Z-Score cutoff (3.5, after Iglewicz and
+Hoaglin).</p></li>
+<li><p><strong>Match per</strong>: <em>sample</em>, each sample against the cutoff; <em>cell</em>, a
+whole raster cell (the maximum over its reduced dimensions, with a
+Šidák-corrected cutoff), as the raster coloring shows it; <em>auto</em>,
+<em>cell</em> on a raster showing Z-Score, else <em>sample</em>.</p></li>
+</ul>
+<p>See also <a class="reference internal" href="capabilities/z_score.html#cap-zscore"><span class="std std-ref">Z-Score</span></a>.</p>
+</section>
+<section id="vp-flagf-amplitude-mad">
+<span id="amplitude-outlier-mad"></span><h4>Amplitude outlier (MAD)<a class="headerlink" href="#vp-flagf-amplitude-mad" title="Link to this heading">¶</a></h4>
+<p>|amp − median| / (1.4826 MAD) above the cutoff, per baseline over the
+whole selection: a baseline’s samples that are off its usual level.</p>
+<ul class="simple">
+<li><p><strong>Sigma</strong>: how far from the baseline’s median amplitude, in robust
+standard deviations.</p></li>
+</ul>
+</section>
+<section id="vp-flagf-phase-deviation">
+<span id="phase-deviation"></span><h4>Phase deviation<a class="headerlink" href="#vp-flagf-phase-deviation" title="Link to this heading">¶</a></h4>
+<p>Phase further than the limit from the per-baseline median direction. For
+a calibrator, where the phases should agree.</p>
+<ul class="simple">
+<li><p><strong>Max deviation (deg)</strong>: phases further than this from the baseline’s
+median direction are taken.</p></li>
+</ul>
+</section>
+<section id="vp-flagf-grow">
+<span id="grow-around-flags"></span><h4>Grow around flags<a class="headerlink" href="#vp-flagf-grow" title="Link to this heading">¶</a></h4>
+<p>Unflagged samples next to flagged ones (on disk or pending). Interference
+has weaker edges that a cutoff misses: flag the core with another filter,
+then draw a box with this one; CASA’s extend.</p>
+<ul class="simple">
+<li><p><strong>Grow along</strong>: <em>time</em>, the integrations before and after a flagged
+sample; <em>channel</em>, the channels either side; <em>both</em>, either.</p></li>
+<li><p><strong>Samples</strong>: how many samples either side of a flagged one are taken.</p></li>
+</ul>
+</section>
+</section>
+<section id="vp-flag-export">
+<span id="export-commit"></span><span id="export--commit"></span><h3><a class="toc-backref" href="#id26" role="doc-backlink">Export / commit</a><a class="headerlink" href="#vp-flag-export" title="Link to this heading">¶</a></h3>
+<p>What to do with the pending flags. Nothing is written until <strong>Go</strong>.</p>
+<ul class="simple">
+<li><p><strong>Save as JSON</strong>: the flags as a file that can be loaded again here,
+with their reasons.</p></li>
+<li><p><strong>Write flags</strong> to the MS or Processing Set: exact, checked afterwards,
+and with a backup.</p></li>
+<li><p><strong>Write flags with CASA flagdata</strong> (when CASA is installed): the CASA
+route. CASA may apply large or scattered selections incompletely, so
+prefer Write flags for many points. The result is checked either way.</p></li>
+<li><p><strong>After writing</strong>, visplot reads the flags back and compares them with
+what it showed. A difference is reported as a warning with the number
+of samples not flagged, not unflagged, or changed that should not have
+been; the flags as they were before are kept in the backup file it
+names (see the next point).</p></li>
+<li><p><strong>Restore flags from a commit backup (.npz)</strong> puts back the flags a
+write replaced; give the backup file in <strong>File</strong>.</p></li>
+<li><p><strong>Writing flags is unavailable</strong> when visplot cannot write to the data:
+no write permission for it, or a reader that cannot write. The warning
+gives the reason. Save the flags as JSON and apply them where the data
+can be written.</p></li>
+<li><p><strong>Load flags from JSON</strong>: the flag files saved in the working directory
+or next to the data are listed, this data’s first.</p></li>
+<li><p><strong>File</strong>: where to write, or what to load or restore. Empty takes a name
+made from the data name and the time.</p></li>
+</ul>
+</section>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="capabilities/index.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">What visplot can do</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="visplot.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">The visplot window</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2021-2026 Associated Universities, Inc. Washington DC, USA.
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">visplot controls, in full</a><ul>
+<li><a class="reference internal" href="#selection">Selection</a><ul>
+<li><a class="reference internal" href="#vp-antenna">Antenna and Baseline</a></li>
+<li><a class="reference internal" href="#vp-iteration">Stepping through Field, SPW, Scan, Antenna and Baseline</a></li>
+<li><a class="reference internal" href="#vp-scan">Scan</a></li>
+<li><a class="reference internal" href="#vp-time">Time range</a></li>
+<li><a class="reference internal" href="#vp-uvrange">UV range</a></li>
+<li><a class="reference internal" href="#vp-autocorr">Autocorrelations</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#raster-panels">Raster panels</a><ul>
+<li><a class="reference internal" href="#vp-r-axes">Raster axes</a></li>
+<li><a class="reference internal" href="#vp-rcorr">Correlation shown</a></li>
+<li><a class="reference internal" href="#vp-averaging">Averaging</a></li>
+<li><a class="reference internal" href="#vp-bcombine">Baselines combined</a></li>
+<li><a class="reference internal" href="#vp-border">Baseline order</a></li>
+<li><a class="reference internal" href="#vp-time-gaps">Time gaps</a></li>
+<li><a class="reference internal" href="#vp-twin">Time window</a></li>
+<li><a class="reference internal" href="#vp-cwin">Channel window</a></li>
+<li><a class="reference internal" href="#vp-scaling">Color scaling</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#scatter-panels">Scatter panels</a><ul>
+<li><a class="reference internal" href="#vp-s-avg">Averaging (scatter)</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#presets">Presets</a><ul>
+<li><a class="reference internal" href="#vp-preset-waterfall-all">All-baseline waterfall</a></li>
+<li><a class="reference internal" href="#vp-preset-antmatrix">Antenna × antenna</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#flagging">Flagging</a><ul>
+<li><a class="reference internal" href="#vp-flag-reach">Flag reaches</a></li>
+<li><a class="reference internal" href="#vp-flag-filters">Flag filters</a><ul>
+<li><a class="reference internal" href="#vp-flagf-all">All selected (immediate)</a></li>
+<li><a class="reference internal" href="#vp-flagf-value-range">Value range</a></li>
+<li><a class="reference internal" href="#vp-flagf-outlier">Outlier from neighbors</a></li>
+<li><a class="reference internal" href="#vp-flagf-zscore">Z-Score above cutoff</a></li>
+<li><a class="reference internal" href="#vp-flagf-amplitude-mad">Amplitude outlier (MAD)</a></li>
+<li><a class="reference internal" href="#vp-flagf-phase-deviation">Phase deviation</a></li>
+<li><a class="reference internal" href="#vp-flagf-grow">Grow around flags</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#vp-flag-export">Export / commit</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script data-current="" data-site="/cubevis/" src="../_static/js/versions.js?v=56d3ce4a"></script>
+    </body>
+</html>

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Page not found</title>
+<meta name="robots" content="noindex">
+<script>
+(function () {
+  var root = "/cubevis/";
+  var p = location.pathname;
+  if (p.indexOf(root) !== 0) return;
+  var m = /^(.*?)help\/([^\/]+)\.html$/.exec(p.slice(root.length));
+  if (!m) return;
+  // A copy without this help entry: try the latest copy's; the latest
+  // copy without it: its help index.
+  location.replace(root + "help/" + (m[1] ? m[2] : "index") + ".html");
+})();
+</script>
+</head><body>
+<h1>Page not found</h1>
+<p>The <a href="/cubevis/">cubevis documentation</a> has no page at this address.</p>
+</body></html>

@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+<defs><marker id="a-ws" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#1F6FB2"/></marker><marker id="a-comms" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-ccomm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-evaljs" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-bc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0F8B8D"/></marker><marker id="a-ssh" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#C0392B"/></marker><marker id="a-pipe" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2E7D5B"/></marker><marker id="a-fs" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#555555"/></marker></defs>
+<rect width="1600" height="900" fill="white"/>
+<rect x="40" y="140" width="480" height="650" rx="18" fill="#F3F5F8" stroke="#8A94A0" stroke-width="2.5" stroke-dasharray="10 6"/>
+<text x="60" y="172" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="#4A5563" text-anchor="start" >User's host</text>
+<rect x="70" y="200" width="420" height="465" rx="10" fill="white" stroke="#C9711F" stroke-width="2.5"/>
+<path d="M70 244 V210 a10 10 0 0 1 10 -10 H480 a10 10 0 0 1 10 10 V244 Z" fill="#C9711F"/>
+<text x="280.0" y="229" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Browser process</text>
+<rect x="95" y="258" width="370" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="280.0" y="285.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >Notebook frontend</text>
+<text x="280.0" y="307.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >JupyterLab / Notebook</text>
+<rect x="95" y="335" width="370" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="280.0" y="362.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >anywidget bridge</text>
+<text x="280.0" y="384.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >kernel.createComm(target)</text>
+<rect x="95" y="410" width="370" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="280.0" y="437.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >CommMgr / Comm (JS)</text>
+<text x="280.0" y="459.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >uses the bridge's comm · casalib.min.js</text>
+<rect x="95" y="485" width="370" height="160" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="280.0" y="562.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >cubevis GUI (BokehJS)</text>
+<text x="280.0" y="584.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >VisibilityPlotter layout in cell output</text>
+<rect x="680" y="140" width="880" height="650" rx="18" fill="#F3F5F8" stroke="#8A94A0" stroke-width="2.5" stroke-dasharray="10 6"/>
+<text x="700" y="172" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="#4A5563" text-anchor="start" >Kernel host — same machine or remote</text>
+<rect x="710" y="295" width="250" height="140" rx="10" fill="white" stroke="#6A4C93" stroke-width="2.5"/>
+<path d="M710 339 V305 a10 10 0 0 1 10 -10 H950 a10 10 0 0 1 10 10 V339 Z" fill="#6A4C93"/>
+<text x="835.0" y="324" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Jupyter server</text>
+<text x="835" y="375" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#5A6573" text-anchor="middle" >notebook's existing</text>
+<text x="835" y="397" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#5A6573" text-anchor="middle" >connection (not cubevis)</text>
+<rect x="1040" y="200" width="490" height="440" rx="10" fill="white" stroke="#3B6EA8" stroke-width="2.5"/>
+<path d="M1040 244 V210 a10 10 0 0 1 10 -10 H1520 a10 10 0 0 1 10 10 V244 Z" fill="#3B6EA8"/>
+<text x="1285.0" y="229" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Kernel process  (ipykernel)</text>
+<rect x="1065" y="262" width="440" height="50" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1285.0" y="293.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >Notebook cells</text>
+<rect x="1065" y="335" width="440" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1285.0" y="362.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >CommMgr</text>
+<text x="1285.0" y="384.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >CommsTransport (Jupyter path)</text>
+<rect x="1065" y="410" width="440" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1285.0" y="437.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >VisibilityPlotter</text>
+<text x="1285.0" y="459.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >Showable.show() into cell output</text>
+<rect x="1065" y="485" width="440" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1285.0" y="512.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >VisibilityRaster / VisibilityScatter</text>
+<text x="1285.0" y="534.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >VisibilityPlot (Bokeh Models)</text>
+<rect x="1065" y="560" width="440" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1285.0" y="587.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >LocalVisibilityReader</text>
+<text x="1285.0" y="609.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >MSv2Backend / MSv4Backend</text>
+<path d="M465 365 L710 365" fill="none" stroke="#6A4C93" stroke-width="5"  marker-start="url(#a-comms)" marker-end="url(#a-comms)"/>
+<path d="M960 365 L1065 365" fill="none" stroke="#6A4C93" stroke-width="5"  marker-start="url(#a-comms)" marker-end="url(#a-comms)"/>
+<text x="600" y="350" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#6A4C93" text-anchor="middle" >Comm</text>
+<text x="1012" y="350" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="bold" fill="#6A4C93" text-anchor="middle" >Comm</text>
+<text x="600" y="390" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="normal" fill="#5A6573" text-anchor="middle" >same channel both ways</text>
+<path d="M1285 620 L1285 665" fill="none" stroke="#555555" stroke-width="5"   marker-end="url(#a-fs)"/>
+<path d="M1135.0 684 V756 A150.0 14 0 0 0 1435.0 756 V684" fill="#FFF7E0" stroke="#A88A2E" stroke-width="2"/>
+<ellipse cx="1285" cy="684" rx="150.0" ry="14" fill="#FFEFC2" stroke="#A88A2E" stroke-width="2"/>
+<text x="1285" y="730.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >Measurement Set</text>
+<text x="1285" y="752.0" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#5A6573" text-anchor="middle" >MSv2 / MSv4 on kernel host</text>
+<text x="40" y="62" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="bold" fill="#1C2733" text-anchor="start" >Jupyter  (JupyterLab / Notebook)</text>
+<text x="40" y="102" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="normal" fill="#4A5563" text-anchor="start" >No connection of its own: cubevis borrows a Jupyter Comm, opened by an invisible anywidget bridge in the page.</text>
+<line x1="40" y1="845" x2="90" y2="845" stroke="#6A4C93" stroke-width="5" />
+<text x="100" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >Jupyter Comm (notebook's own channel)</text>
+<line x1="431.2" y1="845" x2="481.2" y2="845" stroke="#555555" stroke-width="5" />
+<text x="491.2" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >File I/O</text>
+<text x="1560" y="885" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#8A94A0" text-anchor="end" font-style="italic">Draft · v0.3</text>
+</svg>

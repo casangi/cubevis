@@ -1,0 +1,1055 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="next" title="Data formats and access" href="data_access.html"><link rel="prev" title="Coming from plotms" href="from_plotms.html">
+        <link rel="canonical" href="https://casangi.github.io/cubevis/applications/capabilities/from_aips.html">
+
+    <!-- Generated with Sphinx 9.1.1 and Furo 2025.12.19 -->
+        <title>Coming from AIPS - cubevis 1.1</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/s4defs-roles.css?v=4e6db181" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/cubevis-docs.css?v=8a4cc0d1" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+<div class="announcement">
+  <aside class="announcement-content">
+     This is the documentation for cubevis 1.1. The <a href="https://casangi.github.io/cubevis/">latest documentation</a> describes the current development version. 
+  </aside>
+</div>
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../../index.html"><div class="brand">cubevis 1.1</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
+  
+  <span class="sidebar-brand-text">cubevis 1.1</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Installing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../remote_kernels.html">Setting up remote execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../visplot_starting.html">Starting visplot</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../visplot.html">The visplot window</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../visplot_help.html">visplot controls, in full</a></li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">What visplot can do</a><input aria-label="Toggle navigation of What visplot can do" checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="from_plotms.html">Coming from plotms</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Coming from AIPS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_access.html">Data formats and access</a></li>
+<li class="toctree-l2"><a class="reference internal" href="selection.html">Selecting data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="plot_types.html">Rasters, scatter plots and layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="standard_views.html">Standard views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="quantities.html">Plotted quantities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="phase_stability.html">Phase stability: Phase RMS and Coherence</a></li>
+<li class="toctree-l2"><a class="reference internal" href="vector_difference.html">Difference from the mean: Amp V Diff and Phase Diff</a></li>
+<li class="toctree-l2"><a class="reference internal" href="z_score.html">Z-Score</a></li>
+<li class="toctree-l2"><a class="reference internal" href="averaging.html">Averaging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="colormaps.html">Colormaps and color scaling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="flagging.html">Flagging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="output.html">Saving and describing plots</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../iclean_starting.html">Starting iclean</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../iclean_parameters.html">iclean parameters</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Slides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../slides.html">Slide decks</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Background and development</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../contributing.html">Writing this documentation</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../historical/index.html">Historical reference</a><input aria-label="Toggle navigation of Historical reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../historical/intro.html">System Design</a><input aria-label="Toggle navigation of System Design" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../historical/applications/interactive_clean_pathfinder.html">Interactive clean as a pathfinder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../historical/applications/interactive_clean.html">Interactive Clean Design</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../historical/boundary.html">CASA/Viz Boundary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../historical/components/cube_mask.html">Cube Mask Design</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../../_sources/applications/capabilities/from_aips.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section class="tex2jax_ignore mathjax_ignore" id="cap-from-aips">
+<span id="coming-from-aips"></span><h1>Coming from AIPS<a class="headerlink" href="#cap-from-aips" title="Link to this heading">¶</a></h1>
+<p>This page goes through the AIPS tasks that <code class="docutils literal notranslate"><span class="pre">visplot</span></code> takes the place of
+for inspecting and editing visibility data: TVFLG, SPFLG, FTFLG and
+EDITR for editing, and VPLOT, UVPLT, POSSM and LISTR’s matrix listing
+for display. For each display mode, option and menu item it gives the
+<code class="docutils literal notranslate"><span class="pre">visplot</span></code> equivalent: the Python argument, the value, or the setting in
+the window.</p>
+<p><code class="docutils literal notranslate"><span class="pre">visplot</span></code> does not copy the AIPS menus or keyboard use. It is designed
+for a web window, so one AIPS menu item may correspond to a setting
+plus a mouse action.</p>
+<div class="note admonition">
+<p class="admonition-title">Review status</p>
+<p>This table was compiled on 2026-11-16 from AIPS Memo 127 (<em>Interactive
+flagging in AIPS</em>, 2025), the AIPS CookBook and the <code class="docutils literal notranslate"><span class="pre">visplot</span></code> source,
+and <strong>no row has been reviewed yet</strong>. When a tester confirms a row, the
+<em>Reviewed</em> column gets their initials and the date. Corrections are
+welcome, especially for rows marked <em>Different</em>.</p>
+</div>
+<p><strong>Status</strong> means:</p>
+<ul class="simple">
+<li><p><strong>Same</strong>: works the same way.</p></li>
+<li><p><strong>Different</strong>: available, but works differently; the note says how.</p></li>
+<li><p><strong>Partial</strong>: some of it is available.</p></li>
+<li><p><strong>Not yet</strong>: not available.</p></li>
+<li><p><strong>N/A</strong>: does not apply to how <code class="docutils literal notranslate"><span class="pre">visplot</span></code> works.</p></li>
+</ul>
+<section id="tvflg-what-is-shown">
+<h2>TVFLG: what is shown<a class="headerlink" href="#tvflg-what-is-shown" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>AIPS</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Baseline × time display</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">preset=&quot;vplot&quot;</span></code>, or <code class="docutils literal notranslate"><span class="pre">raster_y=&quot;TIME&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">raster_x=&quot;BASELINE&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>Either axis can be on either side</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>SORT BY LENGTH / SORT BY BASELINE</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">baseline_order=&quot;length&quot;</span></code> / <code class="docutils literal notranslate"><span class="pre">&quot;number&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>DPARM(3): show both n−m and m−n</p></td>
+<td><p></p></td>
+<td><p>N/A</p></td>
+<td><p>Each baseline is shown once</p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>ENTER CHANNEL, NCHAV (one channel, or channels averaged)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">spw</span></code> selection</p></td>
+<td><p>Different</p></td>
+<td><p>A Baseline × Time cell averages every selected channel; single channels cannot be selected yet</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>ENTER IF, LOAD NEXT IF/ST</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">spw</span></code>, stepping through spectral windows</p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>DISPLAY STOKES</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">raster_corr</span></code></p></td>
+<td><p>Partial</p></td>
+<td><p>One correlation, or the parallel hands averaged; no conversion to Stokes</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>AMPLITUDE, PHASE</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">raster_qty=&quot;AMPLITUDE&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;PHASE&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>Vector averaged by default; scalar available</p></td>
+<td><p><a class="reference internal" href="quantities.html#cap-quantities"><span class="std std-ref">Quantities</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>RMS, RMS/MEAN (scalar amplitude)</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>Requested</p></td>
+<td><p><a class="reference internal" href="phase_stability.html#cap-phasestab-limits"><span class="std std-ref">Phase stability</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>VECT RMS, VRMS/VAVG</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">PHASE_RMS</span></code>, <code class="docutils literal notranslate"><span class="pre">COHERENCE</span></code></p></td>
+<td><p>Different</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">visplot</span></code> measures the steadiness of <em>phase</em>: the RMS of phase, and vector over scalar amplitude</p></td>
+<td><p><a class="reference internal" href="phase_stability.html#cap-phasestab-calc"><span class="std std-ref">Phase stability</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>AMP V DIFF</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">raster_qty=&quot;AMP_VDIFF&quot;</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>Compared with the mean of the <em>other</em> samples in the window (the sample itself is left out); the windows are fixed blocks</p></td>
+<td><p><a class="reference internal" href="vector_difference.html#cap-vdiff-calc"><span class="std std-ref">Difference</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>PHASE DIFF</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">raster_qty=&quot;PHASE_DIFF&quot;</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>As for AMP V DIFF</p></td>
+<td><p><a class="reference internal" href="vector_difference.html#cap-vdiff-calc"><span class="std std-ref">Difference</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>AMPL DIFF (scalar amplitude difference)</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="vector_difference.html#cap-vdiff-limits"><span class="std std-ref">Difference</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>DPARM(4): divide by the source’s flux density</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="tvflg-averaging">
+<h2>TVFLG: averaging<a class="headerlink" href="#tvflg-averaging" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>AIPS</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>DPARM(6): master grid interval</p></td>
+<td><p></p></td>
+<td><p>N/A</p></td>
+<td><p>Rasters are drawn at the data’s own integrations</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>ENTER SMOOTH TIME (in multiples of DPARM(6))</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>Requested: averaging by a number of integrations. Raster cells cannot yet be averaged in time</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging-limits"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>Averages weighted by the data weights</p></td>
+<td><p></p></td>
+<td><p>Different</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">visplot</span></code> does not use the weights: every unflagged sample counts equally</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging-calc"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>ENTER SCAN TIME (window for the DIFF displays)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">stat_time_window</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>A scan (the default) or a length in seconds, not in integrations</p></td>
+<td><p><a class="reference internal" href="vector_difference.html#cap-vdiff-calc"><span class="std std-ref">Difference</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="tvflg-flagging">
+<h2>TVFLG: flagging<a class="headerlink" href="#tvflg-flagging" title="Link to this heading">¶</a></h2>
+<p>The <em>reaches</em> widen a box the way TVFLG’s flagging switches do. The
+baseline, spectral-window, scan and field reaches apply to a raster box
+with the <em>All selected</em> filter; with other filters only the channel and
+correlation reaches apply (see <a class="reference internal" href="flagging.html#cap-flagging-calc"><span class="std std-ref">How the filters decide</span></a>).</p>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>AIPS</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>FLAG PIXEL, FLAG AREA, FLAG BASELINE-DT</p></td>
+<td><p>flag box</p></td>
+<td><p>Same</p></td>
+<td><p>A box of any size</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>FLAG TIME, FLAG TIME RANGE (all baselines)</p></td>
+<td><p>flag box with the <em>all baselines</em> reach, or a full-width box</p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>FLAG ANTENNA-DT (all baselines to an antenna)</p></td>
+<td><p>flag box with the <em>shared antenna</em> reach (<code class="docutils literal notranslate"><span class="pre">flag_reach=&quot;shared-antenna&quot;</span></code>)</p></td>
+<td><p>Same</p></td>
+<td><p>Drag across two or more baselines of the antenna</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>FLAG BASELINE (all times)</p></td>
+<td><p>full-height flag box</p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>FLAG/CONFIRM</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_preview=True</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>Each box is shown as a proposal, with counts and highlighted samples, to accept or reject</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>CLIP BY SET #S, CLIP BY FORM</p></td>
+<td><p><em>Value range</em> flag filter</p></td>
+<td><p>Partial</p></td>
+<td><p>Only the samples within the box are clipped</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>CLIP INTERACTIV</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>SWITCH ALL-CH FLAG</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_reach=&quot;channels&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>SWITCH ALL-IF FLAG</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_reach=&quot;spw&quot;</span></code></p></td>
+<td><p>Partial</p></td>
+<td><p>All <em>selected</em> spectral windows; no IF range</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>SWITCH SOURCE FLAG</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_reach=&quot;fields&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>ENTER STOKES FLAG</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_reach=&quot;correlations&quot;</span></code></p></td>
+<td><p>Partial</p></td>
+<td><p>All correlations, or the one shown</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_reach=&quot;scan&quot;</span></code></p></td>
+<td><p>(more)</p></td>
+<td><p>Every integration of the scans a box touches</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>LIST FLAGS</p></td>
+<td><p>flag report</p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>UNDO FLAGS, REDO FLAGS</p></td>
+<td><p>undo, redo</p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>SET REASON</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_reason</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>FC table (work survives an interruption)</p></td>
+<td><p>JSON export of pending flags</p></td>
+<td><p>Different</p></td>
+<td><p>Pending flags are kept in memory until written; export them to keep a record</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>EXIT: copy the FG table, then add flags</p></td>
+<td><p>write to the MS</p></td>
+<td><p>Same</p></td>
+<td><p>A backup of the flags it changes is saved first</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>DPARM(5): extend flags in time</p></td>
+<td><p></p></td>
+<td><p>N/A</p></td>
+<td><p>Flags apply to exactly the samples selected</p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="tvflg-display-options">
+<h2>TVFLG: display options<a class="headerlink" href="#tvflg-display-options" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>AIPS</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>OFFCOLOR, TVPSEUDO, TVPHLAME, OFMCOLOR</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">raster_cmap</span></code></p></td>
+<td><p>Partial</p></td>
+<td><p>Seven colormaps. The circular (cyclic) scheme is used automatically for Phase and cannot be chosen by name</p></td>
+<td><p><a class="reference internal" href="colormaps.html#cap-colormaps"><span class="std std-ref">Colormaps</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>Cookbook advice: circular pseudo-coloring for phase</p></td>
+<td><p></p></td>
+<td><p>Same</p></td>
+<td><p>Automatic for Phase</p></td>
+<td><p><a class="reference internal" href="colormaps.html#cap-colormaps"><span class="std std-ref">Colormaps</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>TVTRANSF; LOAD LOG, SQRT, LOG2, LIN</p></td>
+<td><p>color scaling</p></td>
+<td><p>Same</p></td>
+<td><p>Also histogram-equalized (the default), square, gamma or power, threshold</p></td>
+<td><p><a class="reference internal" href="colormaps.html#cap-colormaps"><span class="std std-ref">Colormaps</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>ENTER AMP / PHS / RMS PIXRANGE</p></td>
+<td><p>color range</p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="colormaps.html#cap-colormaps"><span class="std std-ref">Colormaps</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>TVZOOM, AUTO Y ZOOM, ENTER BLC / TRC</p></td>
+<td><p>zoom and pan</p></td>
+<td><p>Same</p></td>
+<td><p>Zoom re-samples the data already read</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>LOAD NEXT / LAST PIECE</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timerange</span></code>, <code class="docutils literal notranslate"><span class="pre">scan</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>Narrow the selection; there is no piece-by-piece loading. A raster over 2 million cells skips rows and columns until the selection is narrowed</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots-calc"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="spflg">
+<h2>SPFLG<a class="headerlink" href="#spflg" title="Link to this heading">¶</a></h2>
+<p>Everything above for TVFLG applies, with these differences:</p>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>AIPS</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Channel × time display, one baseline</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">preset=&quot;waterfall&quot;</span></code> (amplitude), <code class="docutils literal notranslate"><span class="pre">&quot;phase-waterfall&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="standard_views.html#cap-views"><span class="std std-ref">Standard views</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>ENTER BASELINE, LOAD NEXT / LAST BASELINE, LIST BASLS</p></td>
+<td><p>stepping through baselines; baseline list</p></td>
+<td><p>Same</p></td>
+<td><p>Stepping skips baselines with no data</p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>ENTER CH SMOOTH (Gaussian, in channels)</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>Channel averaging is for scatter plots only</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging-limits"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>DPARM(2): cross, auto or both</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">autocorr</span></code></p></td>
+<td><p>Same</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;exclude&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;include&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;only&quot;</span></code></p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>SWITCH BASLIN FLAG (n−m, n−*, m−*, *−*)</p></td>
+<td><p>baselines reach</p></td>
+<td><p>Same</p></td>
+<td><p>As drawn, all baselines to the shared antenna, to every antenna drawn, or all</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>FLAG A CHANNEL, FLAG CHANNEL RANGE, FLAG CHANNEL-DT</p></td>
+<td><p>flag box (full height for all times)</p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>TVPSEUDO: rainbow, circular, step</p></td>
+<td><p></p></td>
+<td><p>Partial</p></td>
+<td><p>See the TVFLG display options</p></td>
+<td><p><a class="reference internal" href="colormaps.html#cap-colormaps"><span class="std std-ref">Colormaps</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>DOCAT=2 / IN2SEQ: build the master grid now, use it later</p></td>
+<td><p></p></td>
+<td><p>N/A</p></td>
+<td><p>There is no master grid</p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="ftflg">
+<h2>FTFLG<a class="headerlink" href="#ftflg" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>AIPS</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Channel × time, all baselines vector averaged</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">preset=&quot;waterfall-all&quot;</span></code> with <code class="docutils literal notranslate"><span class="pre">baseline_combine=&quot;coherent&quot;</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>The preset combines baselines by <em>maximum</em>, so interference on a few baselines is not diluted. Mean, median and coherent (the FTFLG vector average) are also available</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>Each flag applies to all baselines</p></td>
+<td><p>flag box</p></td>
+<td><p>Same</p></td>
+<td><p>A box on such a plot flags every selected baseline</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="editr">
+<h2>EDITR<a class="headerlink" href="#editr" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>AIPS</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Baselines to one antenna against time</p></td>
+<td><p>stepping through antennas, with a Baseline × Time raster or a time series</p></td>
+<td><p>Different</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>Second data set, or second observable (DOTWO)</p></td>
+<td><p>two panels</p></td>
+<td><p>Partial</p></td>
+<td><p>Two panels show two observables of the <em>same</em> data set</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>SHOW COHERENCE</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">COHERENCE</span></code></p></td>
+<td><p>Different</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">visplot</span></code> gives vector over scalar amplitude, from 0 to 1 (1 is fully coherent)</p></td>
+<td><p><a class="reference internal" href="phase_stability.html#cap-phasestab-calc"><span class="std std-ref">Phase stability</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="display-tasks">
+<h2>Display tasks<a class="headerlink" href="#display-tasks" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>AIPS</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>VPLOT: a quantity against time, one baseline per plot</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">preset=&quot;timeseries&quot;</span></code>; <code class="docutils literal notranslate"><span class="pre">layout=&quot;grid&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">iterate_by=&quot;baseline&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="standard_views.html#cap-views"><span class="std std-ref">Standard views</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>UVPLT / VPLOT axes: amplitude, phase, real, imaginary, time, u, v, uv distance, frequency, channel</p></td>
+<td><p>scatter axes</p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>UVPLT / VPLOT axes: hour angle, elevation, azimuth, parallactic angle, position angle, w, log amplitude, weight</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots-limits"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>UVPLT: uv coverage</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scatter_x=&quot;U&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">scatter_y=&quot;V&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>SOLINT (time averaging, in minutes)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scatter_avg_time</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>In seconds, or <code class="docutils literal notranslate"><span class="pre">&quot;scan&quot;</span></code></p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>XINC (plot every n-th sample)</p></td>
+<td><p></p></td>
+<td><p>N/A</p></td>
+<td><p>Every sample is drawn, as density</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>DO3COL (separate IFs, channels, sources or times by color)</p></td>
+<td><p>scatter layer coloring</p></td>
+<td><p>Partial</p></td>
+<td><p>By scan, field, antenna, baseline, spectral window or correlation; not by channel or time</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>POSSM: spectra averaged in time</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">preset=&quot;spectrum&quot;</span></code></p></td>
+<td><p>Partial</p></td>
+<td><p>Each scan averaged, per baseline. Spectra averaged over baselines are not yet available on scatter plots</p></td>
+<td><p><a class="reference internal" href="standard_views.html#cap-views"><span class="std std-ref">Standard views</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>POSSM: plot bandpass and other calibration tables</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="data_access.html#cap-data-limits"><span class="std std-ref">Data</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>LISTR OPTYPE=’MATX’: baseline matrix listing</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">preset=&quot;antmatrix&quot;</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>A raster image rather than a listing, averaged over the whole selection. Narrow by <code class="docutils literal notranslate"><span class="pre">scan</span></code> for one scan</p></td>
+<td><p><a class="reference internal" href="standard_views.html#cap-views"><span class="std std-ref">Standard views</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="automatic-flagging-tasks">
+<h2>Automatic flagging tasks<a class="headerlink" href="#automatic-flagging-tasks" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>AIPS</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>RFLAG (statistical flagging)</p></td>
+<td><p>Z-Score; the <em>Z-Score</em>, <em>Outlier from neighbours</em> and <em>Amplitude outlier</em> flag filters</p></td>
+<td><p>Different</p></td>
+<td><p>Interactive: the filters act within a box that is drawn</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging-calc"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>CLIP (by limits)</p></td>
+<td><p><em>Value range</em> flag filter</p></td>
+<td><p>Partial</p></td>
+<td><p>Within a box</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>UVFLG (flags from a list)</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>Flags can be exported as JSON</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="sources">
+<h2>Sources<a class="headerlink" href="#sources" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>E. W. Greisen, <a class="reference external" href="https://aips.nrao.edu/TEXT/PUBL/AIPSMEM127.PDF"><em>Interactive flagging in AIPS</em></a>, AIPS Memo 127 (2025).</p></li>
+<li><p>The AIPS CookBook: <a class="reference external" href="https://aips.nrao.edu/CookHTML/CookBookse30.html">More editing of uv data</a>, <a class="reference external" href="https://aips.nrao.edu/CookHTML/CookBookse35.html">Plotting</a>, <a class="reference external" href="https://www.aips.nrao.edu/CookHTML/CookBookse58.html">Tools for data examination</a>.</p></li>
+</ul>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="data_access.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Data formats and access</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="from_plotms.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Coming from plotms</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2021-2026 Associated Universities, Inc. Washington DC, USA.
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Coming from AIPS</a><ul>
+<li><a class="reference internal" href="#tvflg-what-is-shown">TVFLG: what is shown</a></li>
+<li><a class="reference internal" href="#tvflg-averaging">TVFLG: averaging</a></li>
+<li><a class="reference internal" href="#tvflg-flagging">TVFLG: flagging</a></li>
+<li><a class="reference internal" href="#tvflg-display-options">TVFLG: display options</a></li>
+<li><a class="reference internal" href="#spflg">SPFLG</a></li>
+<li><a class="reference internal" href="#ftflg">FTFLG</a></li>
+<li><a class="reference internal" href="#editr">EDITR</a></li>
+<li><a class="reference internal" href="#display-tasks">Display tasks</a></li>
+<li><a class="reference internal" href="#automatic-flagging-tasks">Automatic flagging tasks</a></li>
+<li><a class="reference internal" href="#sources">Sources</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../../_static/documentation_options.js?v=56dcb7b8"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script data-current="v1.1/" data-site="/cubevis/" src="../../_static/js/versions.js?v=56d3ce4a"></script>
+    </body>
+</html>

@@ -1,0 +1,26 @@
+[
+ {
+  "kind": "latest",
+  "name": "latest",
+  "commit": "30560f08eb1dee68bd4cf21ed16167fd82c8a5fa",
+  "built": "2026-11-20 19:14 UTC",
+  "title": "latest (main)",
+  "path": ""
+ },
+ {
+  "kind": "release",
+  "name": "1.1",
+  "commit": "30560f08eb1dee68bd4cf21ed16167fd82c8a5fa",
+  "built": "2026-11-20 19:38 UTC",
+  "title": "1.1",
+  "path": "v1.1/"
+ },
+ {
+  "kind": "dev",
+  "name": "docs-site",
+  "commit": "1f5f686be01e60b059a97b8fb5a850fcea2f0e99",
+  "built": "2026-11-18 02:03 UTC",
+  "title": "preview: docs-site",
+  "path": "dev/docs-site/"
+ }
+]

@@ -1,0 +1,93 @@
+/* Text included from the Python source (task-doc, task-params):
+ * a border and a light tint say "this came from the code". */
+div.pydoc-box.container {
+    border: 1px solid var(--color-background-border, #d0d7de);
+    border-left: 4px solid #3572a5;                      /* Python blue */
+    border-radius: 4px;
+    background: var(--color-background-secondary, #f6f8fa);
+    padding: 0.5rem 1.1rem 0.7rem 1.1rem;
+    max-width: none;
+    margin: 1.2rem 0;
+}
+.pydoc-box > p.pydoc-source {
+    font-size: 0.78rem;
+    color: var(--color-foreground-muted, #57606a);
+    margin: 0 0 0.6rem 0;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--color-background-border, #d0d7de);
+}
+.pydoc-box dl.pydoc-params > dt {
+    margin-top: 0.9rem;
+    font-weight: normal;
+}
+.pydoc-box dl.pydoc-params > dt .pydoc-name {
+    font-weight: bold;
+    font-size: 0.95rem;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+.pydoc-box dl.pydoc-params > dt .pydoc-type,
+.pydoc-box dl.pydoc-params > dt .pydoc-default {
+    font-size: 0.8rem;
+    color: var(--color-foreground-muted, #57606a);
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+.pydoc-box dl.pydoc-params > dd {
+    margin-left: 1.5rem;
+    font-size: 0.92rem;
+}
+.pydoc-box dl.pydoc-params > dd > p { margin: 0.25rem 0; }
+.pydoc-box .pydoc-missing { font-style: italic; color: var(--color-foreground-muted, #57606a); }
+
+/* Preformatted descriptions (CASA task docstrings): folded away by default */
+.pydoc-box details.pydoc-more { margin: 0.2rem 0 0.4rem 0; }
+.pydoc-box details.pydoc-more > summary {
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--color-link, #2962ff);
+}
+.pydoc-box details.pydoc-more pre {
+    font-size: 0.78rem;
+    margin: 0.4rem 0 0 0;
+    background: var(--color-background-primary, #fff);
+}
+
+/* Crosswalk tables (applications/capabilities/from_*.md): fixed column
+ * widths so the Notes column is readable; the Reviewed column stays narrow. */
+div.crosswalk table.docutils {
+    table-layout: fixed;
+    width: 100%;
+    font-size: 0.86rem;
+}
+div.crosswalk table.docutils th:nth-child(1) { width: 20%; }
+div.crosswalk table.docutils th:nth-child(2) { width: 21%; }
+div.crosswalk table.docutils th:nth-child(3) { width: 9%; }
+div.crosswalk table.docutils th:nth-child(4) { width: 30%; }
+div.crosswalk table.docutils th:nth-child(5) { width: 10%; }
+div.crosswalk table.docutils th:nth-child(6) { width: 10%; }
+div.crosswalk table.docutils td { overflow-wrap: anywhere; vertical-align: top; }
+
+/* The version menu under the sidebar title (_static/js/versions.js). */
+.cubevis-versions {
+    padding: 0 var(--sidebar-item-spacing-horizontal, 1rem) 0.6rem;
+}
+.cubevis-versions label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: var(--sidebar-item-font-size, 0.9rem);
+    color: var(--color-foreground-secondary);
+}
+.cubevis-versions select {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    color: var(--color-foreground-primary);
+    background: var(--color-background-secondary);
+    border: 1px solid var(--color-background-border);
+    border-radius: 4px;
+    padding: 0.15rem 0.3rem;
+}

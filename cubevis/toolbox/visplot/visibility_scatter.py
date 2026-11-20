@@ -1609,7 +1609,7 @@ window.__cvSetBusy(false);
         except Exception:
             pass
         # Long default titles go on two lines (see wrap_title).
-        return wrap_title(title)
+        return wrap_title(self._titled(title))
 
     def _panel_spec(self) -> PanelSpec:
         """Describe this scatter: one color band per ScatterLayer.

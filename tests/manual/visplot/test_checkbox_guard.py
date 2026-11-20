@@ -120,6 +120,12 @@ def _do_plot_js() -> str:
                 # through ticked rows (iteration_subset.py).
                 "_ITER_SUBSET_JS": _module_level_str(
                     _find_module("iteration_subset.py"), "ITER_SUBSET_JS"),
+                # 2026-11-19: Scan stepping (scan_iteration.py) and the
+                # scan parser it uses (selection_text.py).
+                "_SCAN_TEXT_JS": _module_level_str(
+                    _find_module("selection_text.py"), "SCAN_TEXT_JS"),
+                "_SCAN_ITER_JS": _module_level_str(
+                    _find_module("scan_iteration.py"), "SCAN_ITER_JS"),
             })
     raise RuntimeError("_do_plot_js not found")
 

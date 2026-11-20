@@ -41,10 +41,11 @@ Tick rows to select.
 
 (vp-iteration)=
 
-### Stepping through Field, SPW, Antenna and Baseline
+### Stepping through Field, SPW, Scan, Antenna and Baseline
 
-Field, SPW, Antenna and Baseline each have **Prev**, **✱** and **Next**
-beside their control. Each step plots straight away, and steps wrap
+Field, SPW, Scan, Antenna and Baseline each have **Prev**, **✱** and
+**Next** beside their control (Scan: see {ref}`vp-scan`; it has a text
+box rather than a table, and its ▶ is the line under the box). Each step plots straight away, and steps wrap
 around at the ends.
 
 * **The ▶ marks the row being shown.** It is that axis's *current
@@ -61,8 +62,12 @@ around at the ends.
 * **Stepping ends** when the ticks are changed by hand (a click, the text
   box, ✱, a drill-down from the grid) or when **Plot** is pressed.
   **Plot** always plots what is ticked.
+* **The plot titles** name what is being shown when the selection holds
+  one field, SPW, scan, antenna or baseline of several, for example
+  "… — 1642+689, scan 7": an exported PNG then says which it is.
 * **The grid's Play** steps, in order of preference: the axis with a ▶
-  (the most specific one, if more than one has a ▶); else an axis with
+  (the most specific one, if more than one has a ▶; a current scan
+  counts, between Antenna and SPW); else an axis with
   exactly one row ticked; else the most specific axis with more than one
   row to step.
 
@@ -79,6 +84,15 @@ data's scans.
 * `!5`: all scans but 5. `!` can go before any of the forms above.
 * Several parts are separated by commas.
 * Empty: all scans.
+
+**Stepping through scans.** ◀ and ▶ beside the Scan heading plot one
+scan at a time: the scans the box selects (every scan when it is empty),
+and only those of the field shown when one field is chosen. A line under
+the box says which, for example "▶ Scan 7 · 3 of 5"; the box itself is
+left as it is. Typing in the box, **Plot**, or ✱ (all of the box's scans
+again) ends it. A scan with no data for the chosen spectral windows,
+antennas or time range plots empty; the next step moves on. See also
+{ref}`vp-iteration`.
 
 The text is checked when **Enter** is pressed and when the box loses the
 focus. A problem shows as a ⚠ warning in the status area, which stays
@@ -167,6 +181,15 @@ A raster shows one correlation at a time.
 * **A product**: that one, whether it is ticked or not.
 * Two panels, on RR and on LL, show a problem that is in one hand only.
 
+**How it differs from the Data section's Correlation ticks.** The ticks
+decide what is *read*: a scatter draws one layer for each ticked
+correlation. Correlation shown decides what each *raster* draws, and a
+raster set to a product reads that product itself, so it can show a
+correlation the ticks leave out. That lets the two panels show RR and LL
+side by side while a scatter keeps a single layer, or a scatter show
+both hands while the raster shows one. With *First ticked*, the raster
+simply follows the ticks.
+
 (vp-averaging)=
 
 ### Averaging
@@ -225,6 +248,32 @@ data are drawn side by side either way.
   particular antennas.
 * The cursor readout names the baseline and its length in both.
 
+(vp-time-gaps)=
+
+### Time gaps
+
+How a raster's Time axis treats stretches with no data, such as the time
+spent on other fields between the scans of the one shown.
+
+* **Shown** (the default): time is drawn to scale. A field observed in
+  short scans with long gaps between them shows as thin bands in
+  mostly blank space. The Time axis then lines up with a scatter of
+  X = Time beside it.
+* **Closed**: one row (or column) per time with data, side by side, with
+  one thin blank row where there was a gap, much as the AIPS editors
+  draw time. The ticks read the times, and the axis label says "(gaps
+  closed)". The cursor readout and flag boxes work in real time: a box
+  drawn across a closed gap covers the scans on both sides, and the gap
+  itself, which holds no data of the selection.
+* With the gaps closed the axis no longer runs at a constant rate, so it
+  does not line up with a scatter of X = Time beside it. The linked
+  cursor still follows: over the raster it marks the same time on the
+  scatter, and over a scatter's time in a closed gap it shows nothing on
+  the raster.
+* Zooming in magnifies the cells already read rather than reading finer
+  ones.
+* Each panel has its own setting, in its gear tab. Applied by **Plot**.
+
 (vp-twin)=
 
 ### Time window
@@ -241,6 +290,28 @@ within.
   mean is taken over (Auto and Off mean one scan).
 * Longer windows are steadier but blur changes in time. On the plot they
   show as blocks.
+* **Custom…** opens a box under the list for any length: a number of
+  seconds, or with a unit (`45`, `45s`, `2min`, `1.5h`). **Enter** adds it
+  to the list and selects it. A value that is not a positive length is
+  reported as a warning and changes nothing.
+* A scatter panel has its own Time window, for its Phase RMS and
+  Coherence points: *Auto* is one integration when X is Time, otherwise
+  one scan.
+
+(vp-cwin)=
+
+### Channel window
+
+How many channels each Phase RMS or Coherence value is measured within.
+
+* **Off**: on a raster, the whole band where frequency is not a plot axis
+  and single channels where it is; on a scatter, single channels when X is
+  Frequency or Channel, otherwise the whole band.
+* **A number**: blocks of that many channels.
+* **Custom…** opens a box for any whole number of channels, 2 or more
+  (`12`, `12ch`); **Enter** adds it to the list and selects it.
+* On a Time × Channel waterfall, Phase RMS and Coherence need a channel
+  window, a time window, or both: without one, each cell holds one sample.
 
 (vp-scaling)=
 

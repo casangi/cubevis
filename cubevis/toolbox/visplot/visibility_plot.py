@@ -494,8 +494,9 @@ def wrap_title(text: str, limit: int = TITLE_WRAP_CHARS) -> str:
             break
         left, right = text[:j].rstrip(), text[j:].lstrip()
         if left and right:
-            # "vs" belongs with what follows it.
-            if left.endswith(" vs") or left == "vs":
+            # "vs" belongs with what follows it, and so does the dash
+            # before what the selection is narrowed to (_titled).
+            if left.endswith((" vs", "\u2014")) or left in ("vs", "\u2014"):
                 pass
             else:
                 score = max(len(left), len(right))
@@ -659,6 +660,10 @@ class VisibilityPlot(Model):
         self._width     = width
         self._height    = height
         self._title     = title   # None → subclass auto-generates
+        # What the selection has narrowed to one of (field, SPW, antenna or
+        # baseline), appended to a default title by _titled(): set by the
+        # plotter (VisibilityPlotter._title_context), None elsewhere.
+        self._title_context_fn = None
         self._enable_flagging = enable_flagging
         self._compact_toolbar = compact_toolbar
         self._defer_initial_render = defer_initial_render
@@ -800,6 +805,20 @@ class VisibilityPlot(Model):
     @abc.abstractmethod
     def _effective_title(self) -> str:
         """Return the figure title string (auto-generated or user-set)."""
+
+    def _titled(self, text: str) -> str:
+        """*text* (a default title, before wrap_title) followed by what
+        the selection is narrowed to, e.g. "  \u2014  1642+689, SPW 1,
+        DA41&DV01" (pre-preview feedback #24, debug-0003): PNGs saved
+        while stepping through fields, SPWs, antennas or baselines can
+        then be told apart, since the export has the titles but not the
+        status line.  The double spaces let wrap_title break there."""
+        fn = getattr(self, "_title_context_fn", None)
+        try:
+            ctx = fn() if fn else ""
+        except Exception:                   # a title must never break a render
+            ctx = ""
+        return f"{text}  \u2014  {ctx}" if ctx else text
 
     @abc.abstractmethod
     def _render(self, selection: "SelectionSpec", **kwargs) -> None:

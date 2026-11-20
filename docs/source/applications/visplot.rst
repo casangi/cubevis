@@ -139,7 +139,9 @@ apply when *Plot ▶* is pressed.
 
 * **Raster** — X/Y axis choice, quantity, *Correlation shown* (first
   ticked, the parallel hands averaged, or one product: two panels on RR
-  and LL show a problem in one hand only), and averaging (vector or
+  and LL show a problem in one hand only; a product is shown even when
+  the Data section leaves it unticked, since the ticks decide what the
+  scatters read), and averaging (vector or
   scalar). Besides amplitude, phase,
   real, imaginary, flag and Z-Score, the quantity can be *Phase RMS*
   (scatter of phase, in degrees, over the samples each cell covers) or

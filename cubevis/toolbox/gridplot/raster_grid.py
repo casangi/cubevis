@@ -436,6 +436,143 @@ class BaselineAxis:
         return f"{name} ({extra})" if name else extra
 
 
+TIME_GAP_MODES = ("shown", "closed")
+"""How a raster's Time axis treats stretches with no data (debug-0003)."""
+
+
+def normalize_time_gaps(value) -> str:
+    """``"shown"`` (the default: time is drawn to scale, a gap between
+    scans is blank) or ``"closed"`` (:class:`TimeAxis`)."""
+    v = str(value or "shown").strip().lower()
+    if v in ("shown", "show", "linear", "false", "off", "no"):
+        return "shown"
+    if v in ("closed", "close", "true", "on", "yes"):
+        return "closed"
+    raise ValueError(f"time gaps must be 'shown' or 'closed'; got {value!r}")
+
+
+@dataclass(frozen=True)
+class TimeAxis:
+    """A Time axis with its gaps closed (pre-preview feedback, debug-0003).
+
+    A field observed for a few minutes at a time, with long stretches in
+    between on other fields, fills a to-scale Time axis mostly with blank
+    space (each scan a thin band).  Closed, the axis is laid out like a
+    Baseline axis: one *position* per time cell, side by side, and a
+    single blank position (:attr:`GAP`) where the cells had a gap
+    between them (:func:`cell_edges`) -- AIPS's editors draw time the same
+    way, one row per integration.  The coordinate of the raster's
+    ``time`` dimension becomes the position, and whatever must name a
+    time -- tick labels, the cursor readout, a flag box -- converts back
+    through this object.
+
+    Times that are not one of :attr:`times` (a flag overlay read at a
+    slightly different time) are placed by interpolation within the run
+    they fall in, and outside every run are not shown.
+
+    Attributes
+    ----------
+    times :
+        The cells' times (seconds, as the raster's ``time`` coordinate),
+        ascending.
+    lo, hi :
+        Each cell's real edges (:func:`cell_edges` on *times*).
+    positions :
+        Each cell's position: ``0, 1, 2, ...``, plus :attr:`GAP` after
+        each break.
+    """
+    times:     tuple
+    lo:        tuple
+    hi:        tuple
+    positions: tuple
+
+    HALF = 0.5
+    """Half-width of a position's cell."""
+    GAP = 1
+    """Blank positions drawn where the cells had a gap."""
+
+    @classmethod
+    def build(cls, times) -> "TimeAxis":
+        t = np.unique(np.asarray(times, dtype=np.float64).ravel())
+        t = t[np.isfinite(t)]
+        lo, hi = cell_edges(t)
+        brk = np.zeros(t.size, dtype=np.int64)
+        if t.size > 1:
+            brk[1:] = (lo[1:] > hi[:-1]).astype(np.int64)
+        pos = np.arange(t.size, dtype=np.float64) + cls.GAP * np.cumsum(brk)
+        return cls(times=tuple(t.tolist()), lo=tuple(lo.tolist()), hi=tuple(hi.tolist()),
+                   positions=tuple(pos.tolist()))
+
+    def __len__(self) -> int:
+        return len(self.times)
+
+    @property
+    def n_positions(self) -> int:
+        """Positions along the axis, blank ones included."""
+        return int(self.positions[-1]) + 1 if self.positions else 0
+
+    def positions_of(self, times) -> np.ndarray:
+        """Position of each of *times*; NaN where it lies in no cell.
+
+        A time in a cell maps linearly across that cell's position
+        (its centre to the cell's position), so a time between two
+        neighbouring cells of a run lands between their positions."""
+        t = np.asarray(times, dtype=np.float64).ravel()
+        out = np.full(t.size, np.nan)
+        if not self.times or t.size == 0:
+            return out
+        c = np.asarray(self.times)
+        lo = np.asarray(self.lo)
+        hi = np.asarray(self.hi)
+        p = np.asarray(self.positions)
+        k = np.clip(np.searchsorted(hi, t, side="left"), 0, c.size - 1)
+        inside = (t >= lo[k]) & (t <= hi[k])
+        # Within cell k: its centre is at p[k]; its edges at p[k] +- HALF.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            left = np.where(t < c[k], (t - c[k]) / np.where(c[k] > lo[k], c[k] - lo[k], np.inf),
+                            (t - c[k]) / np.where(hi[k] > c[k], hi[k] - c[k], np.inf))
+        out[inside] = p[k][inside] + self.HALF * left[inside]
+        return out
+
+    def real_span(self, a: float, b: float) -> Optional[tuple]:
+        """The real time range covered by the cells overlapping positions
+        ``[a, b]``: ``(first cell's lower edge, last cell's upper edge)``,
+        or ``None`` if the span holds no cell (all of it blank)."""
+        if not self.times:
+            return None
+        a, b = min(a, b), max(a, b)
+        m = overlapping(np.asarray(self.positions), a, b, half=self.HALF)
+        idx = np.flatnonzero(m)
+        if idx.size == 0:
+            return None
+        return float(self.lo[idx[0]]), float(self.hi[idx[-1]])
+
+    def time_at(self, position: float) -> Optional[float]:
+        """The time of the cell drawn at *position*, or ``None``."""
+        i = self._index_at(position)
+        return None if i is None else float(self.times[i])
+
+    def cell_at(self, position: float) -> Optional[tuple]:
+        """``(lo, hi)``: the real edges of the cell at *position*."""
+        i = self._index_at(position)
+        return None if i is None else (float(self.lo[i]), float(self.hi[i]))
+
+    def _index_at(self, position: float) -> Optional[int]:
+        if not self.times:
+            return None
+        p = np.asarray(self.positions)
+        i = int(np.argmin(np.abs(p - float(position))))
+        return i if abs(p[i] - float(position)) <= self.HALF + 1e-9 else None
+
+    def tick_labels(self, fmt) -> tuple:
+        """What a tick at each position (0 .. n_positions - 1) reads:
+        ``fmt(time)`` at a cell, ``""`` at a blank position."""
+        out = [""] * self.n_positions
+        for t, p in zip(self.times, self.positions):
+            out[int(p)] = fmt(t)
+        return tuple(out)
+
+
 def positions_of(order_ids: Sequence, ids) -> np.ndarray:
     """Position in *order_ids* of each of *ids* (``-1`` where absent).
 

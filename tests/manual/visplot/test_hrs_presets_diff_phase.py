@@ -210,7 +210,7 @@ class _Stub:
     from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster as _VR
     _shade_cmap = _VR._shade_cmap
     _resample = _VR._resample
-    _axis_half = staticmethod(_VR._axis_half)
+    _axis_half = _VR._axis_half
 
     def __init__(self, quantity):
         self._quantity = quantity

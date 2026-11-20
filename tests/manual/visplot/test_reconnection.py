@@ -430,6 +430,104 @@ async def test_requested_shutdown_still_invokes_on_shutdown():
 
 
 # ======================================================================
+# A failed handshake is that attempt's failure, not the session's
+# ======================================================================
+#
+# visplot user testing, 2026-11-20: a browser attempt closed while still
+# CONNECTING (ConnectionClosedOK 1001, "closed before the connection is
+# established") made process_messages report a fatal error and shut the
+# session down -- the reader was closed, and the window, which went on
+# working on its next attempt, got "MSv2Backend is not open" for every
+# later request.  Transport review 2026-11-16, WS-1 / WS-2 / WS-3.
+
+async def _abandoned_attempt(port, *, say=None):
+    """Connect, optionally send *say*, then close without completing the
+    handshake -- what a browser does when it abandons an attempt."""
+    ws = await websockets.connect(f"ws://{HOST}:{port}")
+    if say is not None:
+        await ws.send(say)
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_abandoned_handshake_does_not_shut_down():
+    port = _port()
+    shutdowns = []
+    mgr = _new_mgr(port, on_shutdown=lambda reason=None, description="": shutdowns.append(reason))
+    mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        await _abandoned_attempt(port)                       # closed before any message
+        await _abandoned_attempt(port, say=serialize({"id": "hello", "direction": "j2p"}))
+        await asyncio.sleep(0.5)
+        assert shutdowns == [], "a failed handshake shut the session down"
+        assert mgr.state not in (AppState.ERROR, AppState.STOPPED)
+
+        # ... and a proper frontend still gets in afterwards.
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        assert mgr.state == AppState.RUNNING
+        await fe.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_failed_attempt_leaves_the_live_connection_alone():
+    """A stray attempt must not retire the working transport (WS-2)."""
+    port = _port()
+    shutdowns = []
+    mgr = _new_mgr(port, on_shutdown=lambda reason=None, description="": shutdowns.append(reason))
+    comm = mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        live = mgr._transport
+        generation = mgr.connection_generation
+
+        await _abandoned_attempt(port)
+        await asyncio.sleep(0.5)
+
+        assert shutdowns == []
+        assert mgr._transport is live, "the live transport was replaced by a failed attempt"
+        assert mgr.connection_generation == generation
+        assert mgr.state == AppState.RUNNING
+
+        # The live connection still carries requests.
+        await comm.send("update", {"hello": 1}, callback=lambda reply: None)
+        await asyncio.wait_for(fe.got_request.wait(), 3)
+        await fe.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_silent_peer_times_out_of_the_handshake():
+    """A client that connects and says nothing cannot hold the slot."""
+    port = _port()
+    shutdowns = []
+    mgr = _new_mgr(port, on_shutdown=lambda reason=None, description="": shutdowns.append(reason))
+    mgr._handshake_timeout = 0.5
+    mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        silent = await websockets.connect(f"ws://{HOST}:{port}")
+        await asyncio.sleep(1.0)
+        assert shutdowns == [] and mgr._transport is None
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        assert mgr.state == AppState.RUNNING
+        await fe.close()
+        await silent.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+# ======================================================================
 # Waiting forever must not be silent
 # ======================================================================
 #

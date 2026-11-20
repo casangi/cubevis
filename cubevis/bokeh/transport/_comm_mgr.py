@@ -313,6 +313,13 @@ class CommMgr( Model, BokehInit ):
         # reconnect_grace_period property below.
         self._reconnect_grace_period: Optional[float] = 3.0
 
+        # Seconds a new WebSocket connection has to complete the cubevis
+        # handshake (the frontend's `initialize` message and our ack).
+        # Longer than the browser's own 5 s deadline (low_level_transport.ts),
+        # so the browser gives up first; a peer that connects and says
+        # nothing cannot hold the slot (transport review WS-2).
+        self._handshake_timeout: float = 10.0
+
         # Handler context (shared across all handlers)
         self._context = HandlerContext(self)
 
@@ -861,6 +868,9 @@ class CommMgr( Model, BokehInit ):
         # transport it just built and connected --
         # AttributeError: 'NoneType' object has no attribute 'run'.
         transport = None
+        # True when this invocation's connection attempt failed its
+        # handshake: nothing of the live session is touched on the way out.
+        handshake_failed = False
 
         try:
             if self.transport_type == 'websocket':
@@ -869,21 +879,65 @@ class CommMgr( Model, BokehInit ):
 
                 from ._low_level_transport import WebSocketTransport
 
-                ### A new connection can arrive while the previous handler is
-                ### still unwinding. This is common on wake-from-sleep: the
-                ### browser notices the socket is dead and reconnects before the
-                ### server has finished tearing the old one down. Retire the old
-                ### transport first so it is not orphaned and so its in-flight
-                ### requests are re-queued rather than lost.
-                if self._transport is not None:
+                def transport_abort(error):
+                    # Only report truly fatal errors
+                    logger.error(f"Transport abort: {error}")
+                    self.report_error(error, fatal=True)
+
+                ### Handshake FIRST, on a transport of this attempt's own,
+                ### and only then let it replace the live one (transport
+                ### review 2026-11-16, WS-1 / WS-2 / WS-3; debug-0003).
+                ###
+                ### Until 2026-11-20 the live transport was retired before
+                ### the newcomer had said a word, and any failure in the
+                ### handshake was fatal to the whole application.  A browser
+                ### that abandons an attempt mid-handshake -- the frontend's
+                ### reconnect logic can start a second attempt and close the
+                ### first while it is still CONNECTING (review JS-1); the
+                ### close arrives here as ConnectionClosedOK 1001 "closed
+                ### before the connection is established" -- then shut the
+                ### session down: the reader was closed under a window that
+                ### went on working on its next attempt, and every later
+                ### request failed with "MSv2Backend is not open" (visplot,
+                ### user testing 2026-11-20).  A failed attempt is now just
+                ### that attempt: closed, logged, and the live connection
+                ### (if any) left alone.
+                candidate = WebSocketTransport(
+                    self.comm_mgr_id,
+                    websocket,
+                    abort=transport_abort
+                )
+                candidate.set_message_callback(self._route_message)
+                try:
+                    await asyncio.wait_for(candidate.connect(), timeout=self._handshake_timeout)
+                except Exception as e:                       # noqa: BLE001
+                    handshake_failed = True
+                    quiet = isinstance(e, (ConnectionClosedError, ConnectionClosedOK,
+                                           asyncio.TimeoutError))
+                    (logger.info if quiet else logger.warning)(
+                        f"A WebSocket connection attempt failed during the handshake "
+                        f"({type(e).__name__}: {e}); the session continues"
+                        + ("" if self._transport is None else " on its current connection")
+                    )
+                    try:
+                        await candidate.close()
+                    except Exception:
+                        logger.debug("Error closing the failed attempt", exc_info=True)
+                    return
+
+                ### Validated. Retire the previous transport now -- its
+                ### in-flight requests are re-queued by
+                ### _reset_for_reconnect() -- without waiting for its close
+                ### to finish: closing a half-open socket can take the
+                ### library's close_timeout, which must not delay the new
+                ### connection (review WS-3).
+                old = self._transport
+                if old is not None:
                     logger.debug(
                         "New connection while a transport is still active; retiring the old one"
                     )
-                    try:
-                        await self._transport.close()
-                    except Exception:
-                        logger.exception("Error closing superseded transport")
                     self._reset_for_reconnect()
+                    asyncio.ensure_future(self._close_retired(old))
 
                 ### The frontend is here, so the "never came back" timer no
                 ### longer applies. This must come *after* the retire block
@@ -892,27 +946,11 @@ class CommMgr( Model, BokehInit ):
 
                 is_reconnect = self._connection_generation > 0
 
-                def transport_abort(error):
-                    # Only report truly fatal errors
-                    logger.error(f"Transport abort: {error}")
-                    self.report_error(error, fatal=True)
-
-                # Create WebSocket transport
-                self._transport = WebSocketTransport(
-                    self.comm_mgr_id,
-                    websocket,
-                    abort=transport_abort
-                )
+                self._transport = candidate
                 # Captured immediately -- see this method's own comment
                 # above for why everything below uses `transport`, not
                 # `self._transport`, from here on.
-                transport = self._transport
-
-                # Set callback
-                transport.set_message_callback(self._route_message)
-
-                # Connect (performs handshake)
-                await transport.connect()
+                transport = candidate
 
                 self._initialized = True
                 self.state = AppState.RUNNING
@@ -1002,6 +1040,11 @@ class CommMgr( Model, BokehInit ):
             should_shutdown = True
 
         finally:
+            if handshake_failed:
+                # Only this attempt failed (see above); the session and any
+                # live connection carry on, so none of the end-of-connection
+                # bookkeeping below applies.
+                return
             ### Ask the transport how the connection ended *before* discarding
             ### it. A close frame means the browser deliberately went away (tab
             ### closed or reloaded); its absence means the peer vanished (sleep,
@@ -1110,6 +1153,15 @@ class CommMgr( Model, BokehInit ):
     ########################################################################
     # Reconnection support
     ########################################################################
+    @staticmethod
+    async def _close_retired(old) -> None:
+        """Close a transport a newer connection has replaced, off the new
+        connection's critical path (transport review WS-3)."""
+        try:
+            await old.close()
+        except Exception:
+            logger.exception("Error closing superseded transport")
+
     def _reset_for_reconnect(self, clean_close: Optional[bool] = None) -> None:
         """
         Discard per-connection state while keeping this CommMgr alive.

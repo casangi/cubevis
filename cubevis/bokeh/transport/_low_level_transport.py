@@ -318,9 +318,11 @@ class WebSocketTransport(TransportBase):
                 )
 
         except Exception as e:
-            logger.error(f"Error during WebSocket initialization: {e}")
-            if self.abort:
-                self.abort(e)
+            # A failed handshake is this connection attempt's failure, not
+            # the application's: the caller (CommMgr.process_messages)
+            # decides, and keeps the session (transport review WS-1).  So
+            # no self.abort() here, which reports a fatal error.
+            logger.debug(f"WebSocket initialization failed: {type(e).__name__}: {e}")
             raise
 
     async def send_message(self, message: Dict[str, Any]) -> None:

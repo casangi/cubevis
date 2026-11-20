@@ -48,9 +48,9 @@ File shorthand:
 
 | ID | Sev | One line |
 |---|---|---|
-| WS-1 | S1 | Any failure during the handshake of *any* incoming WebSocket connection shuts the whole application down |
-| WS-2 | S1 | A new connection retires the live transport *before* the newcomer has proved itself (handshake) — a stray or second-tab connection kills the working one |
-| WS-3 | S1 | Retiring a half-open socket can take `close_timeout` (10 s default) while the JS handshake deadline is 5 s → guaranteed first-attempt failure, which then hits WS-1 |
+| WS-1 ✅ | S1 | Any failure during the handshake of *any* incoming WebSocket connection shuts the whole application down |
+| WS-2 (part) | S1 | A new connection retires the live transport *before* the newcomer has proved itself (handshake) — a stray or second-tab connection kills the working one |
+| WS-3 ✅ | S1 | Retiring a half-open socket can take `close_timeout` (10 s default) while the JS handshake deadline is 5 s → guaranteed first-attempt failure, which then hits WS-1 |
 | RP-1 | S1 | In-flight requests are replayed after reconnect with no de-duplication; a handler can run twice (JS reuses the request id, so a Python-side fix is cheap) |
 | HB-1 | S1/S2 | A synchronous handler longer than 10 s makes the browser declare a healthy socket dead → reconnect + replay (RP-1) → the long handler runs a second time |
 | JS-1 | S1/S2 | `cm.ts` reconnect is not single-flight and reads `this.transport` across awaits (the bug Python fixed with a local reference is still present in TypeScript) |
@@ -76,6 +76,12 @@ would turn each of these from a hang into a visible failure.
 ## 2. WebSocket leg (Python ↔ browser tab)
 
 ### WS-1 [C] S1 — handshake failure is fatal to the application
+
+> **Fixed in `debug-0003` (2026-11-20).** Hit in visplot user testing: a browser attempt closed while
+> still CONNECTING (`ConnectionClosedOK` 1001) shut the session down, and the window, which carried on
+> with its next attempt, then got "MSv2Backend is not open" for every request. `connect()` no longer
+> calls `abort`; `process_messages` closes a failed attempt, logs it and returns without touching the
+> live connection. Regression tests in `tests/manual/visplot/test_reconnection.py`.
 `llt.py:320-324` (`WebSocketTransport.connect`): every exception calls `self.abort(e)` and re-raises.
 `abort` is `transport_abort` (`cm.py:895-898`) → `report_error(fatal=True)` → state `ERROR`.
 The re-raise lands in `process_messages`' outer `except Exception` (`cm.py:995-1002`) →
@@ -94,6 +100,11 @@ connection, return. Only escalate to fatal for errors that are about the applica
 Remove the `abort` call from `connect()` (or make `transport_abort` non-fatal for connect-phase errors).
 
 ### WS-2 [C] S1 — the old transport is retired before the new one is validated
+
+> **Partly fixed in `debug-0003` (2026-11-20):** the handshake now runs first, on the attempt's own
+> transport, with a 10 s timeout (`CommMgr._handshake_timeout`); only a completed handshake retires the
+> live transport. **Still open:** the second-tab policy (a valid second tab still takes over) and the
+> `backend_id` mismatch that only warns.
 `cm.py:878-886`: on *any* new connection, `self._transport.close()` and `_reset_for_reconnect()` run
 before `WebSocketTransport.connect()` has even read the first frame. Consequences:
 - A second browser tab (or anything else that connects) closes the first tab's working socket. The
@@ -112,6 +123,9 @@ deliberately — but not both tabs oscillating. `frontend_id` already distinguis
 from "another tab".
 
 ### WS-3 [L] S1 — slow close of a dead socket outlasts the browser's handshake deadline
+
+> **Fixed in `debug-0003` (2026-11-20):** the retired transport is closed in a separate task
+> (`CommMgr._close_retired`), off the new connection's path.
 `cm.py:883` awaits `WebSocketTransport.close()` → `websocket.close()` (`llt.py:497`). For a half-open
 peer the `websockets` library waits up to `close_timeout` before giving up. visplot passes
 `close_timeout=5, ping_interval=20, ping_timeout=10` (`visibility_plotter.py:4624-4631`; iclean's call at

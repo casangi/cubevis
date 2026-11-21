@@ -340,6 +340,10 @@ class VisplotRemoteBackend:
         out = self._reader.baselines_with_rows(selection)
         return None if out is None else [list(p) for p in out]
 
+    def scans_with_rows(self, selection=None):
+        out = self._reader.scans_with_rows(selection)
+        return None if out is None else [str(n) for n in out]
+
     # ------------------------------------------------------------------ #
     # Extra methods LocalVisibilityReader also exposes                    #
     # ------------------------------------------------------------------ #

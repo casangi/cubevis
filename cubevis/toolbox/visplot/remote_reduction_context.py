@@ -207,7 +207,7 @@ DEFAULT_CALL_TIMEOUT = 30.0
 DEFAULT_DATA_CALL_TIMEOUT = 600.0
 DATA_METHODS = frozenset({
     "query_raster", "query_columns", "probe_scatter_region",
-    "identity_tables", "baselines_with_rows", "axis_info",
+    "identity_tables", "baselines_with_rows", "scans_with_rows", "axis_info",
     "evaluate_flag_request", "probe_flag_region",
     "set_pending_flags", "sync_pending_flags", "preload",
 })
@@ -219,7 +219,8 @@ DATA_METHODS = frozenset({
 #: -- fail saying the connection was interrupted (Scenario A, 2026-11-10).
 REPEATABLE_METHODS = frozenset({
     "query_raster", "query_columns", "probe_scatter_region", "probe_flag_region",
-    "identity_tables", "baselines_with_rows", "axis_info", "available_axes",
+    "identity_tables", "baselines_with_rows", "scans_with_rows", "axis_info",
+    "available_axes",
     "evaluate_flag_request", "metadata", "backend_kind", "spw_casa_ids", "flag_spw_table",
     "flag_commit_capabilities", "list_flag_backups", "software_versions", "runtime_info",
     "set_pending_flags", "sync_pending_flags", "set_frame_cache_limit_mb",
@@ -709,6 +710,19 @@ class RemoteReductionContext(ReductionContext):
         out = self._memo_call("baselines_with_rows", selection, (),
                               dict(selection=selection, timeout=timeout))
         return None if out is None else [tuple(p) for p in out]
+
+    def scans_with_rows(self, selection=None, timeout: Optional[float] = None):
+        # Coordinates only (UVW presence, scan names): memoised like
+        # baselines_with_rows (issue #37).  The answer ignores the scan and
+        # antenna / baseline choice, so the memo does too: stepping through
+        # the scans is then no round trip at all.
+        if selection is not None:
+            import dataclasses
+            selection = dataclasses.replace(selection, scan=None,
+                                            antenna_names=None, baselines=None)
+        out = self._memo_call("scans_with_rows", selection, (),
+                              dict(selection=selection, timeout=timeout))
+        return None if out is None else [str(n) for n in out]
 
     def metadata(self, timeout: Optional[float] = None) -> dict:
         return self._call("metadata", timeout=timeout)

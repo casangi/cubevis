@@ -931,6 +931,15 @@ def scale_cell_widths(agg, strides: dict):
     return agg.assign_coords(add) if add else agg
 
 
+def _scan_sort_key(name: str):
+    """Scan names in scan order: numbers numerically, then the rest."""
+    s = str(name).strip()
+    try:
+        return (0, int(s), s)
+    except ValueError:
+        return (1, 0, s)
+
+
 def _cell_bounds(coords: np.ndarray, idx: int,
                  half: Optional[float] = None,
                  width=None) -> tuple[float, float]:
@@ -2979,6 +2988,58 @@ class XArrayReader(abc.ABC):
             a2 = np.asarray(sub.coords["baseline_antenna2_name"].values).astype(str)
             found.update(zip(a1[present].tolist(), a2[present].tolist()))
         out = sorted(found) if seen_uvw else None
+        cache[key] = out
+        return out
+
+    def scans_with_rows(self, selection=None) -> Optional[list]:
+        """``["7", "9", ...]``: the names of the scans with at least one
+        row in what *selection* picks by field, spectral window, time
+        range, UV range and autocorrelations.  Its scan choice is ignored
+        -- this answers "which scans are there to step through", for Scan
+        Prev / Next (issue #37) -- and so is its antenna / baseline
+        choice, as in ``baselines_with_rows``: a tick change does not ask
+        the reader again (stage, then plot), so the answer cannot go stale
+        between Plots, and it never hides a scan that has data.
+
+        A row is as in ``baselines_with_rows`` (finite UVW; flags do not
+        matter, so a fully flagged scan counts).  Cached per field / SPW /
+        time range / UV range / autocorrelations, so stepping through the
+        scans asks nothing new.  Names in scan order (numerically where
+        they are numbers).  ``[]`` when no partition matches the selection
+        (nothing has data); ``None`` when it cannot be told (no UVW or no
+        ``scan_name``), meaning "do not narrow".
+        """
+        import dataclasses
+        sel = selection if selection is not None else SelectionSpec()
+        key = repr((sel.field_names, sel.spw, sel.time_range,
+                    getattr(sel, "uv_range", None), getattr(sel, "autocorr", None)))
+        cache = self.__dict__.setdefault("_scan_rows_cache", {})
+        if key in cache:
+            return cache[key]
+        sel = dataclasses.replace(sel, scan=None, antenna_names=None, baselines=None)
+        found: set = set()
+        seen = False
+        n_parts = 0
+        for ds in self._iter_visibility_partitions(sel):
+            n_parts += 1
+            if "UVW" not in ds.data_vars or "scan_name" not in ds.coords:
+                continue
+            sub = self._apply_selection(ds, sel)
+            seen = True
+            if sub.sizes.get("time", 0) == 0:
+                continue
+            uvw = sub["UVW"]
+            first = uvw.isel(uvw_label=0) if "uvw_label" in uvw.dims else uvw
+            other = [d for d in first.dims if d != "time"]
+            ok = np.isfinite(first)
+            present = np.asarray((ok.any(other) if other else ok).values, bool)
+            names = np.asarray(sub.coords["scan_name"].values).astype(str)
+            if names.shape != present.shape:        # scan_name not on time alone
+                seen = False
+                break
+            found.update(np.unique(names[present]).tolist())
+        out = (sorted(found, key=_scan_sort_key) if seen
+               else [] if n_parts == 0 else None)
         cache[key] = out
         return out
 

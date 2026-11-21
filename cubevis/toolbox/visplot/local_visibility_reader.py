@@ -290,6 +290,9 @@ class LocalVisibilityReader:
     def baselines_with_rows(self, selection=None):
         return self._backend.baselines_with_rows(selection)
 
+    def scans_with_rows(self, selection=None):
+        return self._backend.scans_with_rows(selection)
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"LocalVisibilityReader({self._backend!r})"
 

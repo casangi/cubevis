@@ -647,6 +647,8 @@ ctrl.send(ids['rows'], {
     if (resp.ant_has_data && ant_src && ant_src.data['has_data']) {
         ant_src.data['has_data'] = resp.ant_has_data; ant_src.change.emit();
     }
+    // The scans with data, for Scan Prev / Next (scan_iteration.py, #37).
+    if ('scan_has_data' in resp) window.__cvScanHas = {names: resp.scan_has_data};
 });
 """
 
@@ -5859,7 +5861,9 @@ for (const dt of other.tools) {
             scan=scan_sel, time_range=tr, uv_range=uv,
             autocorr=ac if ac in ("exclude", "include", "only") else self._selection.autocorr)
         bl_has, ant_has = await asyncio.to_thread(self._rows_with_data, sel)
-        return {"status": "ok", "bl_has_data": bl_has, "ant_has_data": ant_has}
+        scan_has = await asyncio.to_thread(self._scans_with_data, sel)
+        return {"status": "ok", "bl_has_data": bl_has, "ant_has_data": ant_has,
+                "scan_has_data": scan_has}
 
     async def _handle_summary(self, msg, context=None):
         """The "Describe this plot" toolbar button: the page for one panel,
@@ -6718,6 +6722,7 @@ for (const dt of other.tools) {
                 "panels":       panels_response,
                 "bl_has_data":  bl_has,
                 "ant_has_data": ant_has,
+                "scan_has_data": self._scans_with_data(),
             }
         self._notify("")   # clear any previous warning
         bl_has, ant_has = self._rows_with_data()
@@ -6728,6 +6733,7 @@ for (const dt of other.tools) {
             "panels":      panels_response,
             "bl_has_data":  bl_has,
             "ant_has_data": ant_has,
+            "scan_has_data": self._scans_with_data(),
         }
 
     async def _handle_done(self, msg, context=None):
@@ -7087,6 +7093,20 @@ cvApplySelectionText(
         ants = {a for p in have for a in p}
         return ([1 if b.pair in have else 0 for b in bls],
                 [1 if a.name in ants else 0 for a in self._meta.antennas])
+
+    def _scans_with_data(self, selection=None) -> Optional[list]:
+        """The names of the scans with rows in the current field / SPW /
+        time range / UV range / autocorrelation choice
+        (``reader.scans_with_rows``): Scan Prev / Next step over these only
+        (issue #37).  ``None`` when the reader cannot tell; nothing is
+        then narrowed."""
+        try:
+            out = self._reader.scans_with_rows(
+                selection if selection is not None else self._selection)
+        except Exception:
+            log.debug("scans_with_rows failed", exc_info=True)
+            return None
+        return None if out is None else [str(n) for n in out]
 
     def _antenna_baseline_selection(self) -> tuple:
         """``(antenna_names, baselines)`` for the current selection.
@@ -8810,6 +8830,9 @@ for (let i = 0; i < cols.length; i++) {
             log.debug("scan fields unavailable", exc_info=True)
             _scans = meta.scans
         self._scan_tab = _scanit.scan_table(_scans)
+        # The scans with data, for stepping (issue #37); refreshed with
+        # the Antenna / Baseline tables' flags (_ROWS_REFRESH_JS, Plot).
+        self._scan_tab["has"] = self._scans_with_data()
         scan_heading = _section("Scan", width=_IterButtons.LABEL_WIDTH, margin=(0, 0, 0, 0))
         self._scan_iter = _IterButtons(
             axis_label="scan", control=scan_heading,
@@ -10628,6 +10651,11 @@ function doPlot(reload) {
             }
             if (resp.ant_has_data && ant_src && ant_src.data['has_data']) {
                 ant_src.data['has_data'] = resp.ant_has_data; ant_src.change.emit();
+            }
+            // The scans with data, for Scan Prev / Next (#37).
+            if ('scan_has_data' in resp) {
+                window.__cvScanHas = {names: resp.scan_has_data};
+                if (typeof cvScanShow === 'function') cvScanShow();
             }
         } catch (e) { console.warn('has_data update failed:', e); }
         console.log('[visplot doPlot] received status:', resp.status,

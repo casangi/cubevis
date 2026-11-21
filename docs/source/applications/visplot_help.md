@@ -90,9 +90,11 @@ scan at a time: the scans the box selects (every scan when it is empty),
 and only those of the field shown when one field is chosen. A line under
 the box says which, for example "▶ Scan 7 · 3 of 5"; the box itself is
 left as it is. Typing in the box, **Plot**, or ✱ (all of the box's scans
-again) ends it. A scan with no data for the chosen spectral windows,
-antennas or time range plots empty; the next step moves on. See also
-{ref}`vp-iteration`.
+again) ends it. Scans with no data for the chosen field, spectral
+windows, time range or UV range are skipped, and are not counted in
+"3 of 5". The Antenna and Baseline ticks do not count here: with only
+some antennas ticked, a scan that none of them took part in can still
+plot empty. See also {ref}`vp-iteration`.
 
 The text is checked when **Enter** is pressed and when the box loses the
 focus. A problem shows as a ⚠ warning in the status area, which stays

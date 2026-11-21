@@ -5,11 +5,11 @@ between (other fields observed then) drew as thin bands in mostly blank
 space.  The gaps are real -- the time axis is to scale, so that it lines
 up with a scatter of X = Time and a box covers the times it seems to --
 and now, optionally, they can be closed (``raster_grid.TimeAxis``, a
-``GapAxis``): since #36 (debug-0004) each run of data stays to scale with
-a small fixed blank between runs, the runs coming from the reader at
-full resolution (``axis_runs``), so a zoomed detail query shares the
-axis; ticks read the real times, the readout and flag boxes convert
-back, and a faint line marks each blank.
+``GapAxis``): since #36 (debug-0004) each run of data stays to scale and
+the runs sit side by side with every gap removed, the runs coming from
+the reader at full resolution (``axis_runs``), so a zoomed detail query
+shares the axis; ticks read the real times, the readout and flag boxes
+convert back.
 
 Run:  python -m pytest test_time_gaps.py -q
 """
@@ -26,76 +26,59 @@ from cubevis.toolbox.gridplot.raster_grid import TimeAxis, normalize_time_gaps  
 
 
 class TestTimeAxis:
-    """The runs-based closed axis (#36, debug-0004): runs to scale, a
-    blank of min(2 %, 10 % / gaps) of their total between them."""
+    """The runs-based closed axis (#36, debug-0004): runs to scale, side
+    by side, every gap removed (2026-11-21)."""
     T = [0, 8, 16, 60, 68, 76, 300]
 
     def _ax(self, t=None):
         return TimeAxis.build(self.T if t is None else t, width=8.0)
 
-    def test_runs_starts_and_blank(self):
+    def test_runs_side_by_side(self):
         ax = self._ax(self.T[::-1] + [8])                # any order, repeats
         assert ax.lo == (-4.0, 56.0, 296.0) and ax.hi == (20.0, 80.0, 304.0)
-        # 56 s of data, two gaps: 2 % each (10 % / 2 would be more)
-        assert ax.gap == pytest.approx(1.12)
-        assert ax.starts == pytest.approx((0.0, 25.12, 50.24))
-        assert ax.extent == pytest.approx((0.0, 58.24))
-        assert ax.blanks == pytest.approx((1.12, 1.12))
-        assert ax.blank_centres() == pytest.approx((24.56, 49.68))
+        assert ax.starts == pytest.approx((0.0, 24.0, 48.0))
+        assert ax.ends == pytest.approx((24.0, 48.0, 56.0))
+        assert ax.extent == pytest.approx((0.0, 56.0))
+        assert ax.boundaries() == pytest.approx((24.0, 48.0))
 
-    def test_a_short_gap_keeps_its_real_width(self):
-        """Closing only shrinks a gap (2026-11-21): a 1 s gap is not
-        widened to the blank, and the blank is shared among the long
-        gaps only."""
+    def test_short_and_long_gaps_alike(self):
         ax = TimeAxis.from_runs([(0, 100), (101, 200), (1000, 1100)])
-        assert ax.gap == pytest.approx(0.02 * 299)
-        assert ax.blanks == pytest.approx((1.0, 0.02 * 299))
-        assert ax.starts == pytest.approx((0.0, 101.0, 200.0 + 0.02 * 299))
-
-    def test_never_more_breaks_than_shown(self):
-        # Many short pauses inside long stretches, two long gaps: only
-        # the two long ones shrink.
-        runs = [(i * 61.0, i * 61.0 + 60.0) for i in range(30)]
-        runs += [(5000.0 + i * 61.0, 5000.0 + i * 61.0 + 60.0) for i in range(30)]
-        ax = TimeAxis.from_runs(runs)
-        real = np.asarray(ax.lo[1:]) - np.asarray(ax.hi[:-1])
-        assert np.all(np.asarray(ax.blanks) <= real + 1e-9)
-        assert sum(b < r - 1e-9 for b, r in zip(ax.blanks, real)) == 1
-
-    def test_many_gaps_share_ten_percent(self):
-        t = [100.0 * i for i in range(11)]               # 11 lone cells, 10 gaps
-        ax = TimeAxis.build(t, width=8.0)
-        assert ax.gap == pytest.approx(0.10 * 88.0 / 10)
-        assert 10 * ax.gap / (ax.extent[1] - ax.extent[0]) == pytest.approx(0.10 / 1.10)
+        assert ax.starts == pytest.approx((0.0, 100.0, 199.0))
+        assert ax.extent == pytest.approx((0.0, 299.0))
 
     def test_positions_of_and_back(self):
         ax = self._ax()
         p = ax.positions_of([8, 60, 4, 30, 302])
-        assert p[0] == pytest.approx(12.0) and p[1] == pytest.approx(29.12)
+        assert p[0] == pytest.approx(12.0) and p[1] == pytest.approx(28.0)
         assert p[2] == pytest.approx(8.0)
         assert np.isnan(p[3])                            # in the gap: not shown
-        assert p[4] == pytest.approx(56.24)
+        assert p[4] == pytest.approx(54.0)
         back = ax.real_of(p[~np.isnan(p)])
         assert back == pytest.approx([8, 60, 4, 302])
-        assert np.isnan(ax.real_of([24.56])[0])           # the blank: no time
-        assert ax.time_at(29.12) == pytest.approx(60.0) and ax.time_at(24.56) is None
+        # where two runs meet, the later one's start
+        assert ax.time_at(24.0) == pytest.approx(56.0)
+        assert ax.time_at(-1.0) is None and ax.time_at(57.0) is None
 
     def test_real_span(self):
         ax = self._ax()
-        assert ax.real_span(12.0, 29.12) == pytest.approx((8.0, 60.0))
-        assert ax.real_span(24.2, 25.0) is None          # only the blank
+        assert ax.real_span(12.0, 28.0) == pytest.approx((8.0, 60.0))
+        assert ax.real_span(23.0, 25.0) == pytest.approx((19.0, 57.0))   # across a gap
         assert ax.real_span(-10.0, 100.0) == pytest.approx((-4.0, 304.0))
+        assert ax.real_span(60.0, 70.0) is None          # outside the axis
+        # a range starting where a run starts is not in the run before
+        assert ax.real_span(24.0, 30.0) == pytest.approx((56.0, 62.0))
+        assert ax.real_span(24.0, 24.0) == pytest.approx((56.0, 56.0))
 
     def test_from_runs_merges(self):
         ax = TimeAxis.from_runs([(10, 20), (0, 12), (30, 40), (40, 45)])
         assert ax.lo == (0.0, 30.0) and ax.hi == (20.0, 45.0)
-        assert TimeAxis.from_runs([(5, 9)]).gap == 0.0
+        assert ax.starts == (0.0, 20.0)
 
     def test_cells_stay_in_their_run(self):
         from cubevis.toolbox.gridplot.raster_grid import cell_edges
         ax = self._ax()
         u = ax.positions_of(self.T)
-        # widths that would reach across the 1.12 blank
+        # widths that would reach into the next run
         lo, hi = cell_edges(u, width=40.0, runs=ax.run_bounds())
         st, en = ax.run_bounds()
         assert hi[2] <= en[0] + 1e-9 and lo[3] >= st[1] - 1e-9
@@ -195,10 +178,15 @@ class TestClosedRaster:
         box = {"x0": -0.5, "x1": 7.5, "y0": float(u[2]) - 1, "y1": float(u[3]) + 1}
         req = plotter._flags.build_request(r, "raster", box, True)
         assert (req["y0"], req["y1"]) == pytest.approx(ta.real_span(box["y0"], box["y1"]))
-        sep = ta.blank_centres()[0]
-        with pytest.raises(ValueError, match="only a gap"):
+        # a box across where two scans meet: both scans, and the gap
+        b = ta.boundaries()[0]
+        req = plotter._flags.build_request(
+            r, "raster", {"x0": -0.5, "x1": 7.5, "y0": b - 1.0, "y1": b + 1.0}, True)
+        assert (req["y0"], req["y1"]) == pytest.approx((ta.hi[0] - 1.0, ta.lo[1] + 1.0))
+        with pytest.raises(ValueError, match="outside the data"):
+            e = ta.extent[1]
             plotter._flags.build_request(
-                r, "raster", {"x0": -0.5, "x1": 7.5, "y0": sep - 0.01, "y1": sep + 0.01}, True)
+                r, "raster", {"x0": -0.5, "x1": 7.5, "y0": e + 5, "y1": e + 6}, True)
 
     def test_zoom_queries_detail_when_closed(self, plotter):
         """#36: the closed axis comes from the runs, so a finer query
@@ -214,24 +202,28 @@ class TestClosedRaster:
         assert d is not None
         du = np.asarray(d.agg.coords["time"].values, dtype=np.float64)
         assert du.size and np.isfinite(du).all()
+        # every cell on the axis (the overscan margin may reach the end
+        # of the scan before), and the viewport's own cells there
+        assert np.isfinite(ta.real_of(du)).all()
         st, en = ta.run_bounds()
-        assert ((du >= st[1] - 1e-6) & (du <= en[1] + 1e-6)).all()
+        assert ((du >= st[1]) & (du <= u1)).sum() >= 1
         # the same cells as the full aggregate, at the same closed times
         full_u = np.asarray(r._agg.coords["time"].values)
         assert np.isin(np.round(du, 6), np.round(full_u, 6)).all()
 
-    def test_blanks_are_left_empty(self, plotter):
-        """A blank shows the panel background, as a gap does with the
-        gaps shown (2026-11-21: no separator line)."""
+    def test_scans_meet(self, plotter):
+        """No blank between runs: the row where two scans meet has data
+        (2026-11-21: every gap removed)."""
         r = _raster(plotter)
         r.update_axes(time_gaps="closed")
         img = np.asarray(r._image_source.data["image"][0])
         rgba = img.view(np.uint8).reshape(img.shape + (4,))
         h = img.shape[0]
         y0, y1 = r._y_range
-        for c in r._time_axis.blank_centres():
-            row = int(np.floor((c - y0) / (y1 - y0) * h))
-            assert (rgba[row, :, 3] == 0).all()
+        for b in r._time_axis.boundaries():
+            for row in (int(np.floor((b - y0) / (y1 - y0) * h)) - 1,
+                        int(np.floor((b - y0) / (y1 - y0) * h)) + 1):
+                assert (rgba[row, :, 3] > 0).any()
 
 
 def test_wired_in_the_gear_tab_and_plot():
@@ -289,3 +281,11 @@ def test_linked_cursor_converts_through_real_time(plotter):
     assert b is None                       # the blank: no time (NaN)
     assert c == pytest.approx(31.0)        # 62 s: 6 s into the run starting at 25
     assert d is None                       # 40 s: in the closed gap
+
+
+def test_light_mode_reaches_the_status_area(plotter):
+    """The container under the status line had a fixed dark background
+    the theme toggle never reached (debug-0004)."""
+    from cubevis.toolbox.visplot.visibility_plotter import _THEME_RESTYLE_JS
+    assert plotter._theme_restyle_args["status_col"] is plotter._status_col
+    assert "status_col.styles = s;" in _THEME_RESTYLE_JS

@@ -2637,8 +2637,8 @@ window.__cvSetBusy(false);
                     "status": "no_data",
                     "info_html": self._probe_region_page(
                         f"No data {self._rect_title(x_range, y_range)}",
-                        "<p>That is a gap between scans, where there is "
-                        "no data.</p>",
+                        "<p>That is outside the data on the time "
+                        "axis.</p>",
                     ),
                 }
             x_range = real

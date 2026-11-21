@@ -492,11 +492,11 @@ class TestRealRaster:
         assert len(ax) == 3                       # the lone integration is a run
         assert (ax.lo[1], ax.hi[1]) == pytest.approx((t - DUMP / 2, t + DUMP / 2),
                                                      rel=0, abs=1e-3)
-        # drawn its own width on the closed axis, between two blanks
+        # drawn its own width on the closed axis, between its neighbours
         u = float(ax.positions_of([t])[0])
         assert ax.real_span(u - DUMP / 2, u + DUMP / 2) == pytest.approx(
             (t - DUMP / 2, t + DUMP / 2), rel=0, abs=1e-3)
-        assert ax.starts[1] - ax.ends[0] == pytest.approx(ax.gap)
+        assert ax.starts[1] == pytest.approx(ax.ends[0])      # gaps removed
 
 
 # ---------------------------------------------------------------------------

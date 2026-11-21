@@ -227,12 +227,11 @@ class TestRaster:
         t = _times(backend, F0)
         assert np.isin(np.round(ax.real_of(du), 3), np.round(t, 3)).all()
 
-    def test_a_zoom_into_the_blank_asks_for_nothing(self, backend):
+    def test_a_zoom_outside_the_data_asks_for_nothing(self, backend):
         vr = _raster(backend, max_cells=NTIME * NCHAN // 4)
         vr.update_axes(time_gaps="closed")
-        ax = vr._time_axis
-        s = ax.blank_centres()[0]
-        assert vr._detail_selection(vr._x_range, (s - ax.gap / 4, s + ax.gap / 4)) is None
+        e = vr._time_axis.extent[1]
+        assert vr._detail_selection(vr._x_range, (e + 5.0, e + 6.0)) is None
 
     def test_old_kernel_falls_back_on_the_aggregate(self, backend, monkeypatch):
         def boom(*a, **k):

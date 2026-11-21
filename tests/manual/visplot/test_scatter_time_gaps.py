@@ -175,7 +175,7 @@ class TestBackend:
         assert len(ta) == 4                                   # FIELD-1's scans
         assert s._x_range[0] >= ta.extent[0] - 1e-6 and s._x_range[1] <= ta.extent[1] + 1e-6
         assert real[1] - real[0] > 150                        # real: 3 gaps of 36 s+
-        assert s._x_range[1] - s._x_range[0] < 100            # closed: 4 x 16 s + blanks
+        assert s._x_range[1] - s._x_range[0] < 100            # closed: 4 runs, no gaps
 
 
 class TestWidget:
@@ -204,18 +204,11 @@ class TestWidget:
         r.update_axes(time_gaps="closed")
         assert r._time_axis.state() == s._time_axis.state()
 
-    def test_blanks_are_left_empty(self, plotter):
-        """A blank shows the panel background, as on the raster."""
+    def test_scans_meet(self, plotter):
+        """No blank between runs, as on the raster (2026-11-21)."""
         s = _scatter(plotter)
-        d = s._image_source.data
-        img = np.asarray(d["image"][0])
-        rgba = img.view(np.uint8).reshape(img.shape + (4,))
-        x0, w = d["x"][0], d["dw"][0]
-        cols = [int(np.floor((p - x0) / w * img.shape[1])) for p in s._time_axis.blank_centres()]
-        assert cols
-        for c in cols:
-            if 0 <= c < img.shape[1]:
-                assert (rgba[:, c, 3] == 0).all()
+        ta = s._time_axis
+        assert ta.ends[:-1] == pytest.approx(ta.starts[1:])
 
     def test_flag_box_becomes_real_times(self, plotter):
         s = _scatter(plotter)
@@ -224,17 +217,17 @@ class TestWidget:
         box = {"x0": ta.starts[1] + 1.0, "x1": ta.starts[2] + 1.0, "y0": y0, "y1": y1}
         req = plotter._flags.build_request(s, "scatter", box, True)
         assert (req["x0"], req["x1"]) == pytest.approx(ta.real_span(box["x0"], box["x1"]))
-        sep = ta.blank_centres()[0]
-        with pytest.raises(ValueError, match="only a gap"):
+        e = ta.extent[1]
+        with pytest.raises(ValueError, match="outside the data"):
             plotter._flags.build_request(
-                s, "scatter", {"x0": sep - 0.01, "x1": sep + 0.01, "y0": y0, "y1": y1}, True)
+                s, "scatter", {"x0": e + 5, "x1": e + 6, "y0": y0, "y1": y1}, True)
 
-    def test_exact_identity_in_a_gap_says_so(self, plotter):
+    def test_exact_identity_outside_the_data_says_so(self, plotter):
         s = _scatter(plotter)
-        sep = s._time_axis.blank_centres()[0]
+        e = s._time_axis.extent[1]
         y0, y1 = s._y_range
         resp = asyncio.run(s._handle_probe_region(
-            {"tool": "info_box", "x0": sep - 0.01, "x1": sep + 0.01, "y0": y0, "y1": y1}))
+            {"tool": "info_box", "x0": e + 5, "x1": e + 6, "y0": y0, "y1": y1}))
         assert resp["status"] == "no_data"
 
     def test_exact_identity_names_real_times(self, plotter):

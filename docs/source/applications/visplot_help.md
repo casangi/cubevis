@@ -263,15 +263,10 @@ scatter's with X = Time.
   mostly blank space. The Time axis then lines up with a scatter of
   X = Time beside it.
 * **Closed**: each stretch with data (a scan, or scans back to back)
-  is kept to scale, and a long gap between stretches shrinks to a small
-  blank, left empty as with the gaps shown. A blank is 2% of the axis,
-  or less when there are many long gaps: all of them together take at
-  most a tenth of it. A short gap (a slew between scans, a pause
-  between subscans) keeps its real width, so closing never shows more
-  breaks than the gaps shown do. With very many long gaps a blank can
-  be narrower than a pixel until you zoom in. The ticks read the real
-  times, and the axis
-  label says "(gaps closed)". The cursor readout and flag boxes work in
+  is kept to scale, and the stretches sit side by side: every gap is
+  removed, long or short, so the axis is just the time that has data.
+  The ticks read the real times, so they show where time jumps, and
+  the axis label says "(gaps closed)". The cursor readout and flag boxes work in
   real time: a box drawn across a closed gap covers the scans on both
   sides, and the gap itself, which holds no data of the selection.
 * A raster and a scatter of X = Time with their gaps closed share one

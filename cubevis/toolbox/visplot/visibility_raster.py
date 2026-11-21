@@ -2092,7 +2092,7 @@ window.__cvSetBusy(false);
                 # Closed gaps: the viewport is in closed coordinates (#36).
                 span = self._time_axis.real_span(lo, hi)
                 if span is None:
-                    return None           # all of it blank: nothing finer
+                    return None           # outside the data: nothing finer
                 lo, hi = span
             if dim == "time":
                 if sel.time_range is not None:

@@ -563,8 +563,8 @@ class GapAxis:
     between on other fields, fills a to-scale Time axis mostly with blank
     space (each scan a thin band); spectral windows far apart do the same
     to a Frequency axis.  Closed, the axis keeps each *run* -- a stretch
-    with data -- to scale, side by side, with a fixed :attr:`gap` between
-    neighbouring runs.  The coordinate of the raster's dimension becomes
+    with data -- to scale, and puts the runs side by side: every gap is
+    removed.  The coordinate of the raster's dimension becomes
     the *closed* coordinate, and whatever must name a real value -- tick
     labels, the cursor readout, a flag box, a narrower (zoomed) query --
     converts back through this object.
@@ -576,17 +576,16 @@ class GapAxis:
     its own, which a finer query could not share: zooming in magnified
     the full aggregate instead).
 
-    Closing only ever shrinks a gap.  Each gap becomes the smaller of
-    its real width and the *blank*: :attr:`BLANK_FRACTION` of the runs'
-    total length, or :attr:`BLANK_TOTAL` of it shared out among the gaps
-    wider than the blank, whichever is smaller -- so a long gap stays
-    visible at any zoom, ten of them do not leave a fifth of the axis
-    empty, and a short one (a slew between scans, a pause between
-    subscans) keeps its real width, as invisible as with the gaps shown.
-    (Until 2026-11-21 every gap got the blank, which widened the short
-    ones: a closed axis showed more breaks than a shown one.)  A blank
-    is left empty, the panel's background, as a gap is with the gaps
-    shown.
+    Every gap is removed, long or short (2026-11-21, decided after
+    trying blanks on real data).  A blank between runs -- first one of
+    fixed size, then the smaller of the gap and a share of the axis --
+    could not be made to read like the shown axis: closing rescales the
+    axis, so a pause between subscans or a slew between fields that was
+    under a pixel with the gaps shown became a visible break, and a
+    closed axis showed many more breaks than the shown one.  With no
+    blanks the closed axis is simply the time that has data, the same
+    at any panel size or zoom; where time jumps the tick labels say.
+    Blanks can come back if users ask for them.
 
     Attributes
     ----------
@@ -594,19 +593,11 @@ class GapAxis:
         Each run's real edges, ascending and not overlapping.
     starts :
         Where each run starts on the closed axis.
-    gap :
-        The blank, in closed units: what a gap wider than it shrinks to.
-    blanks :
-        What each gap became: ``min(real width, gap)``.
     """
     lo:     tuple
     hi:     tuple
     starts: tuple
-    gap:    float
-    blanks: tuple = ()
 
-    BLANK_FRACTION = 0.02
-    BLANK_TOTAL = 0.10
     HALF = None
     """No fixed half-width: the closed axis is to scale within a run
     (kept for callers that ask, as of the positional axis before #36)."""
@@ -628,39 +619,11 @@ class GapAxis:
                 merged.append([a, b])
         lo = np.array([m[0] for m in merged], dtype=np.float64)
         hi = np.array([m[1] for m in merged], dtype=np.float64)
-        real = lo[1:] - hi[:-1] if lo.size > 1 else np.zeros(0)
-        gap = cls.blank_for(real, float(np.sum(hi - lo)) if lo.size else 0.0)
-        blanks = np.minimum(real, gap)
         starts = np.zeros(lo.size)
         if lo.size > 1:
-            starts[1:] = np.cumsum((hi - lo)[:-1] + blanks)
+            starts[1:] = np.cumsum((hi - lo)[:-1])
         return cls(lo=tuple(lo.tolist()), hi=tuple(hi.tolist()),
-                   starts=tuple(starts.tolist()), gap=float(gap),
-                   blanks=tuple(blanks.tolist()))
-
-    @classmethod
-    def blank_for(cls, gaps, total: float) -> float:
-        """The blank for real gap widths *gaps* between runs of total
-        length *total*: ``total * min(BLANK_FRACTION, BLANK_TOTAL / n)``,
-        *n* the number of gaps wider than the blank itself (found by
-        iterating: fewer wide gaps, a larger share each, which may make
-        another gap narrow).  ``0.0`` with no gaps."""
-        g = np.asarray(gaps, dtype=np.float64)
-        if g.size == 0:
-            return 0.0
-        if not total > 0:
-            total = float(np.sum(g)) or 1.0       # runs of zero length
-        n = g.size
-        blank = total * min(cls.BLANK_FRACTION, cls.BLANK_TOTAL / n)
-        for _ in range(64):
-            wide = int(np.count_nonzero(g > blank))
-            if wide == 0:
-                break
-            nxt = total * min(cls.BLANK_FRACTION, cls.BLANK_TOTAL / wide)
-            if nxt == blank:
-                break
-            blank = nxt
-        return float(blank)
+                   starts=tuple(starts.tolist()))
 
     @staticmethod
     def runs_of(coords, width=None) -> list:
@@ -739,13 +702,20 @@ class GapAxis:
     def real_span(self, a: float, b: float) -> Optional[tuple]:
         """The real range covered by closed coordinates ``[a, b]``: from
         where it enters the first run it touches to where it leaves the
-        last, or ``None`` if all of it is blank.  Across a blank that
-        includes the gap itself, which holds no data of the selection."""
+        last, or ``None`` if it touches none (outside the axis).  Across
+        a closed gap that includes the gap itself, which holds no data of
+        the selection."""
         if not self.lo:
             return None
         a, b = min(a, b), max(a, b)
         st, en = np.asarray(self.starts), np.asarray(self.ends)
-        idx = np.flatnonzero((en >= a) & (st <= b))
+        # Runs the range overlaps by more than a point: with the gaps
+        # removed a run ends exactly where the next starts, and a range
+        # starting there is not in the earlier one.  A point (a == b)
+        # is in the run it touches.
+        idx = np.flatnonzero((en > a) & (st < b))
+        if idx.size == 0:
+            idx = np.flatnonzero((en >= a) & (st <= b))[-1:]
         if idx.size == 0:
             return None
         i, j = idx[0], idx[-1]
@@ -759,9 +729,9 @@ class GapAxis:
         of another."""
         return np.asarray(self.starts, dtype=np.float64), np.asarray(self.ends, dtype=np.float64)
 
-    def blank_centres(self) -> tuple:
-        """Closed coordinate of the middle of each blank (between runs)."""
-        return tuple(e + (s - e) / 2.0 for e, s in zip(self.ends[:-1], self.starts[1:]))
+    def boundaries(self) -> tuple:
+        """Closed coordinate where each run meets the next (a closed gap)."""
+        return tuple(self.starts[1:])
 
     def state(self) -> list:
         """``[starts, lo, hi]`` for the browser (tick labels, the linked

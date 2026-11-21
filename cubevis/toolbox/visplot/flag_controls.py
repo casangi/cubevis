@@ -426,8 +426,7 @@ class FlagController:
                 k0, k1 = ("x0", "x1") if x_ax == Axis.TIME else ("y0", "y1")
                 span = t_axis.real_span(req[k0], req[k1])
                 if span is None:
-                    raise ValueError("the box covers only a gap between scans, "
-                                     "where there is no data")
+                    raise ValueError("the box is outside the data on the time axis")
                 req[k0], req[k1] = span
 
             def _span(ax, a, b):
@@ -447,8 +446,7 @@ class FlagController:
             if t_axis is not None and x_ax == Axis.TIME:
                 span = t_axis.real_span(req["x0"], req["x1"])
                 if span is None:
-                    raise ValueError("the box covers only a gap between scans, "
-                                     "where there is no data")
+                    raise ValueError("the box is outside the data on the time axis")
                 req["x0"], req["x1"] = span
             prov = (f"scatter box {x_ax.name} {_rng(x_ax, req['x0'], req['x1'])} x "
                     f"{_rng(None, req['y0'], req['y1'])} on "

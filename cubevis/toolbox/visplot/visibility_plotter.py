@@ -281,9 +281,9 @@ _STATIC_HINTS = {
     "bcombine": (
         "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines (a raster without Baseline on an axis). Averaging applies within each baseline; this is how the baselines are combined  | <b>Mean</b>: the general picture  | <b>Median</b>: what most baselines share  | <b>Maximum</b>: a problem shows even on one baseline  | <b>Vector (coherent)</b>: a complex sum, for a calibrated point source; Vector averaging only", "vp-bcombine"),
     "s_tgaps": (
-        "<b>Time gaps</b> \u2014 with X = Time, how this scatter treats stretches with no data  | <b>Shown</b>: time to scale  | <b>Closed</b>: each stretch with data to scale, side by side; a long gap shrinks to a small blank, as on a raster; the ticks read the real times  | Applied by Plot", "vp-time-gaps"),
+        "<b>Time gaps</b> \u2014 with X = Time, how this scatter treats stretches with no data  | <b>Shown</b>: time to scale  | <b>Closed</b>: each stretch with data to scale, side by side, every gap removed, as on a raster; the ticks read the real times  | Applied by Plot", "vp-time-gaps"),
     "tgaps": (
-        "<b>Time gaps</b> \u2014 how this raster's Time axis treats stretches with no data  | <b>Shown</b>: time to scale; a field observed in short scans is mostly blank space between thin bands  | <b>Closed</b>: each stretch with data to scale, side by side; a long gap shrinks to a small blank, a short one keeps its width; the ticks read the real times  | Applied by Plot", "vp-time-gaps"),
+        "<b>Time gaps</b> \u2014 how this raster's Time axis treats stretches with no data  | <b>Shown</b>: time to scale; a field observed in short scans is mostly blank space between thin bands  | <b>Closed</b>: each stretch with data to scale, side by side, every gap removed; the ticks read the real times  | Applied by Plot", "vp-time-gaps"),
     "border": (
         "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out  | <b>By number</b>: the Baseline table\u2019s order; baselines to one antenna sit together  | <b>By length</b>: shortest first. Trouble that grows along the axis is about distance; trouble in scattered columns is about particular antennas", "vp-border"),
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
@@ -2587,6 +2587,15 @@ _step('info divs', () => {
     }
     recolor_div(status_div, page_bg, status_c);
     recolor_div(notify_div, page_bg, light ? '#b02a37' : '#f38ba8');
+    // The status area's container (debug-0004): it showed dark below the
+    // status line in light mode.
+    if (typeof status_col !== 'undefined' && status_col) {
+        try {
+            const s = Object.assign({}, status_col.styles);
+            s['background'] = page_bg;
+            status_col.styles = s;
+        } catch(e) { console.error('[visplot theme] status area failed:', e); }
+    }
 
     // Config-field hint divs (added 2026-08-03, fixing a reported gap) —
     // same page_bg as status_div, distinct text color from status_c to
@@ -12171,6 +12180,10 @@ doPlot();
                 "sidebar":      self._sidebar_col,
                 "status_div":   self._status_div,
                 "notify_div":   self._notify_div,
+                # The status area's own container: its fixed dark
+                # background showed below the status line in light
+                # mode (debug-0004).
+                "status_col":   self._status_col,
                 # Two light-mode gaps fixed 2026-08-03, found during
                 # testing — neither was ever covered by any part of the
                 # existing dark/light mechanism (the config-field hint

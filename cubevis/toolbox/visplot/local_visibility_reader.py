@@ -293,6 +293,9 @@ class LocalVisibilityReader:
     def scans_with_rows(self, selection=None):
         return self._backend.scans_with_rows(selection)
 
+    def axis_runs(self, selection=None, dim="time"):
+        return self._backend.axis_runs(selection, dim)
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"LocalVisibilityReader({self._backend!r})"
 

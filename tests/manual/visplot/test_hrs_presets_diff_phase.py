@@ -212,6 +212,7 @@ class _Stub:
     _resample = _VR._resample
     _axis_half = _VR._axis_half
     _axis_width = _VR._axis_width          # issue #38
+    _axis_runs = _VR._axis_runs            # issue #36
 
     def __init__(self, quantity):
         self._quantity = quantity

@@ -207,8 +207,8 @@ DEFAULT_CALL_TIMEOUT = 30.0
 DEFAULT_DATA_CALL_TIMEOUT = 600.0
 DATA_METHODS = frozenset({
     "query_raster", "query_columns", "probe_scatter_region",
-    "identity_tables", "baselines_with_rows", "scans_with_rows", "axis_info",
-    "evaluate_flag_request", "probe_flag_region",
+    "identity_tables", "baselines_with_rows", "scans_with_rows", "axis_runs",
+    "axis_info", "evaluate_flag_request", "probe_flag_region",
     "set_pending_flags", "sync_pending_flags", "preload",
 })
 
@@ -219,8 +219,8 @@ DATA_METHODS = frozenset({
 #: -- fail saying the connection was interrupted (Scenario A, 2026-11-10).
 REPEATABLE_METHODS = frozenset({
     "query_raster", "query_columns", "probe_scatter_region", "probe_flag_region",
-    "identity_tables", "baselines_with_rows", "scans_with_rows", "axis_info",
-    "available_axes",
+    "identity_tables", "baselines_with_rows", "scans_with_rows", "axis_runs",
+    "axis_info", "available_axes",
     "evaluate_flag_request", "metadata", "backend_kind", "spw_casa_ids", "flag_spw_table",
     "flag_commit_capabilities", "list_flag_backups", "software_versions", "runtime_info",
     "set_pending_flags", "sync_pending_flags", "set_frame_cache_limit_mb",
@@ -723,6 +723,18 @@ class RemoteReductionContext(ReductionContext):
         out = self._memo_call("scans_with_rows", selection, (),
                               dict(selection=selection, timeout=timeout))
         return None if out is None else [str(n) for n in out]
+
+    def axis_runs(self, selection=None, dim: str = "time",
+                  timeout: Optional[float] = None):
+        # Coordinates only: memoised like baselines_with_rows (#36).  The
+        # answer ignores the antenna / baseline choice, so the memo does.
+        if selection is not None:
+            import dataclasses
+            selection = dataclasses.replace(selection, antenna_names=None,
+                                            baselines=None)
+        out = self._memo_call("axis_runs", selection, (str(dim),),
+                              dict(selection=selection, dim=str(dim), timeout=timeout))
+        return None if out is None else [[float(a), float(b)] for a, b in out]
 
     def metadata(self, timeout: Optional[float] = None) -> dict:
         return self._call("metadata", timeout=timeout)

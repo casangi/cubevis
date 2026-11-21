@@ -229,3 +229,58 @@ class TestMatplotlibFormatter:
         assert f(1000.0, 0) == "15m 00s"
         g = mpl_formatter(False)
         assert g(1234.5678, 0) == "1234.5678"
+
+
+# ---------------------------------------------------------------------------
+# An axis with its gaps closed (raster_grid.GapAxis, #36)
+# ---------------------------------------------------------------------------
+
+from cubevis.toolbox.gridplot.tick_format import GOLDEN_RUNS, GAP_AXIS_JS  # noqa: E402
+
+_RUNS_HARNESS = """
+const cases = %s;
+function fmt(tick, is_time, t0, runs, mode, step) {
+%s
+}
+const out = cases.map(c => fmt(c[0], c[2], c[1], c[3], c[4], 10));
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def test_closed_gap_golden_python():
+    for tick, t0, is_time, runs, mode, want in GOLDEN_RUNS:
+        assert format_tick(tick, is_time, t0, runs=runs, time_mode=mode, step=10) == want, tick
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_closed_gap_golden_javascript():
+    script = _RUNS_HARNESS % (json.dumps([list(c[:5]) for c in GOLDEN_RUNS]), _JS_CORE)
+    res = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30)
+    assert res.returncode == 0, res.stderr
+    assert json.loads(res.stdout) == [c[5] for c in GOLDEN_RUNS]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_gap_axis_js_matches_python_both_ways():
+    """cvGapReal / cvGapPos (cursor and ticks) against GapAxis."""
+    import random
+    import numpy as np
+    from cubevis.toolbox.gridplot.raster_grid import GapAxis
+    rng = random.Random(36)
+    t = sorted({round(rng.uniform(0, 5000) / 8) * 8.0 for _ in range(300)})
+    ax = GapAxis.build(t, width=8.0)
+    us = [rng.uniform(-10, ax.extent[1] + 10) for _ in range(400)] + list(ax.starts) + list(ax.ends)
+    ts = [rng.uniform(-10, 5010) for _ in range(400)] + list(ax.lo) + list(ax.hi)
+    script = (GAP_AXIS_JS + f"const r = {json.dumps(ax.state())};"
+              f"const us = {json.dumps(us)}, ts = {json.dumps(ts)};"
+              "process.stdout.write(JSON.stringify([us.map(u => cvGapReal(r, u)),"
+              " ts.map(t => cvGapPos(r, t))]));")
+    res = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30)
+    assert res.returncode == 0, res.stderr
+    js_real, js_pos = json.loads(res.stdout)
+    py_real = ax.real_of(us)
+    py_pos = ax.positions_of(ts)
+    for a, b in ((js_real, py_real), (js_pos, py_pos)):
+        a = np.array([np.nan if v is None else v for v in a])
+        assert np.array_equal(np.isnan(a), np.isnan(b))
+        assert np.allclose(a[~np.isnan(a)], b[~np.isnan(b)], rtol=0, atol=1e-6)

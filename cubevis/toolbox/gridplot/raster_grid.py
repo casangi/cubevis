@@ -136,7 +136,7 @@ def _as_widths(width, n: int) -> Optional[np.ndarray]:
 
 
 def cell_edges(coords, half: Optional[float] = None,
-               width=None) -> tuple[np.ndarray, np.ndarray]:
+               width=None, runs=None) -> tuple[np.ndarray, np.ndarray]:
     """``(lo, hi)``: the edges of the cell centred on each of *coords*.
 
     *coords* may be in any order; the result is aligned with it.
@@ -155,6 +155,11 @@ def cell_edges(coords, half: Optional[float] = None,
     neighbour is capped at half the distance to that neighbour, so cells
     never overlap.  A single coordinate with neither *half* nor *width*
     has zero width.
+
+    *runs* -- ``(starts, ends)``, ascending, as :meth:`GapAxis.run_bounds`
+    gives them -- keeps each cell inside the run its centre is in, and
+    never joins cells of two runs: on an axis with its gaps closed the
+    blank between runs can be narrower than a cell (#36).
     """
     c = np.asarray(coords, dtype=np.float64).ravel()
     n = c.size
@@ -166,8 +171,10 @@ def cell_edges(coords, half: Optional[float] = None,
     if n == 1:
         own = w[0] / 2.0 if w is not None else np.nan
         if np.isfinite(own) and own > 0:
-            return c - own, c + own
-        return c.copy(), c.copy()
+            lo1, hi1 = c - own, c + own
+        else:
+            lo1, hi1 = c.copy(), c.copy()
+        return _clip_to_runs(c, lo1, hi1, runs)
 
     order = np.argsort(c, kind="stable")
     cs = c[order]
@@ -186,6 +193,9 @@ def cell_edges(coords, half: Optional[float] = None,
     hi_s = cs + h
     hsum = h[:-1] + h[1:]
     joined = d <= GAP_FACTOR * hsum
+    if runs is not None:
+        k = _run_index(cs, runs)
+        joined &= k[:-1] == k[1:]
     # A shared edge divides the spacing in proportion to the two widths
     # (the midpoint when they are equal).
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -194,6 +204,7 @@ def cell_edges(coords, half: Optional[float] = None,
     hi_s[:-1] = np.where(joined, edge, hi_s[:-1])
     lo_s[1:] = np.where(joined, edge, lo_s[1:])
 
+    lo_s, hi_s = _clip_to_runs(cs, lo_s, hi_s, runs)
     lo = np.empty(n)
     hi = np.empty(n)
     lo[order] = lo_s
@@ -201,22 +212,39 @@ def cell_edges(coords, half: Optional[float] = None,
     return lo, hi
 
 
+def _run_index(c: np.ndarray, runs) -> np.ndarray:
+    starts = np.asarray(runs[0], dtype=np.float64)
+    if starts.size == 0:
+        return np.zeros(c.size, dtype=np.int64)
+    return np.clip(np.searchsorted(starts, c, side="right") - 1, 0, starts.size - 1)
+
+
+def _clip_to_runs(c, lo, hi, runs):
+    """*lo*, *hi* kept inside the run each centre *c* is in."""
+    if runs is None or np.asarray(runs[0]).size == 0:
+        return lo, hi
+    k = _run_index(c, runs)
+    starts = np.asarray(runs[0], dtype=np.float64)
+    ends = np.asarray(runs[1], dtype=np.float64)
+    return np.maximum(lo, starts[k]), np.minimum(hi, ends[k])
+
+
 def extent(coords, half: Optional[float] = None,
-           width=None) -> Optional[tuple[float, float]]:
+           width=None, runs=None) -> Optional[tuple[float, float]]:
     """Outer edges of the cells of *coords*, or ``None`` if there are none."""
-    lo, hi = cell_edges(coords, half, width)
+    lo, hi = cell_edges(coords, half, width, runs)
     if lo.size == 0:
         return None
     return float(lo.min()), float(hi.max())
 
 
 def locate(coords, value: float, half: Optional[float] = None,
-           width=None) -> int:
+           width=None, runs=None) -> int:
     """Index of the cell containing *value*, or ``-1`` (a gap, or outside)."""
     c = np.asarray(coords, dtype=np.float64).ravel()
     if c.size == 0:
         return -1
-    lo, hi = cell_edges(c, half, width)
+    lo, hi = cell_edges(c, half, width, runs)
     inside = np.flatnonzero((lo <= value) & (value <= hi))
     if inside.size == 0:
         return -1
@@ -227,13 +255,13 @@ def locate(coords, value: float, half: Optional[float] = None,
 
 
 def overlapping(coords, lo: float, hi: float,
-                half: Optional[float] = None, width=None) -> np.ndarray:
+                half: Optional[float] = None, width=None, runs=None) -> np.ndarray:
     """Mask of the cells of *coords* that overlap ``[lo, hi]``."""
     c = np.asarray(coords, dtype=np.float64).ravel()
     lo, hi = min(lo, hi), max(lo, hi)
     if c.size == 0:
         return np.zeros(0, dtype=bool)
-    clo, chi = cell_edges(c, half, width)
+    clo, chi = cell_edges(c, half, width, runs)
     return (chi >= lo) & (clo <= hi)
 
 
@@ -302,7 +330,7 @@ def _reduce(sums: np.ndarray, counts: np.ndarray, first, last, axis: int):
 def resample(values, y_coords, x_coords, x_range, y_range,
              width: int, height: int, *,
              y_half: Optional[float] = None, x_half: Optional[float] = None,
-             y_width=None, x_width=None,
+             y_width=None, x_width=None, y_runs=None, x_runs=None,
              how: str = "mean") -> np.ndarray:
     """Draw a grid of cells into a ``height x width`` array of pixels.
 
@@ -319,6 +347,8 @@ def resample(values, y_coords, x_coords, x_range, y_range,
         Fixed half-width for an index axis (see :func:`cell_edges`).
     y_width, x_width :
         True cell widths (see :func:`cell_edges`).
+    y_runs, x_runs :
+        An axis with its gaps closed: its runs (see :func:`cell_edges`).
     how :
         ``"mean"``: a pixel covering several cells shows the mean of
         their finite values.  ``"any"``: a pixel is 1.0 if any of its
@@ -353,8 +383,8 @@ def resample(values, y_coords, x_coords, x_range, y_range,
     if x0 == x1 or y0 == y1:
         return blank
 
-    ylo, yhi = cell_edges(yc, y_half, y_width)
-    xlo, xhi = cell_edges(xc, x_half, x_width)
+    ylo, yhi = cell_edges(yc, y_half, y_width, y_runs)
+    xlo, xhi = cell_edges(xc, x_half, x_width, x_runs)
     fy, ly = _pixel_cells(ylo, yhi, yc, y0, y1, height)
     fx, lx = _pixel_cells(xlo, xhi, xc, x0, x1, width)
 
@@ -515,7 +545,7 @@ TIME_GAP_MODES = ("shown", "closed")
 
 def normalize_time_gaps(value) -> str:
     """``"shown"`` (the default: time is drawn to scale, a gap between
-    scans is blank) or ``"closed"`` (:class:`TimeAxis`)."""
+    scans is blank) or ``"closed"`` (:class:`GapAxis`)."""
     v = str(value or "shown").strip().lower()
     if v in ("shown", "show", "linear", "false", "off", "no"):
         return "shown"
@@ -525,133 +555,195 @@ def normalize_time_gaps(value) -> str:
 
 
 @dataclass(frozen=True)
-class TimeAxis:
-    """A Time axis with its gaps closed (pre-preview feedback, debug-0003).
+class GapAxis:
+    """An axis with its gaps closed (debug-0003; runs-based since
+    debug-0004, issue #36).
 
     A field observed for a few minutes at a time, with long stretches in
     between on other fields, fills a to-scale Time axis mostly with blank
-    space (each scan a thin band).  Closed, the axis is laid out like a
-    Baseline axis: one *position* per time cell, side by side, and a
-    single blank position (:attr:`GAP`) where the cells had a gap
-    between them (:func:`cell_edges`) -- AIPS's editors draw time the same
-    way, one row per integration.  The coordinate of the raster's
-    ``time`` dimension becomes the position, and whatever must name a
-    time -- tick labels, the cursor readout, a flag box -- converts back
-    through this object.
+    space (each scan a thin band); spectral windows far apart do the same
+    to a Frequency axis.  Closed, the axis keeps each *run* -- a stretch
+    with data -- to scale, side by side, with a fixed :attr:`gap` between
+    neighbouring runs.  The coordinate of the raster's dimension becomes
+    the *closed* coordinate, and whatever must name a real value -- tick
+    labels, the cursor readout, a flag box, a narrower (zoomed) query --
+    converts back through this object.
 
-    Times that are not one of :attr:`times` (a flag overlay read at a
-    slightly different time) are placed by interpolation within the run
-    they fall in, and outside every run are not shown.
+    The mapping comes from the runs alone, not from the cells of any one
+    aggregate, so a decimated full view, a finer query for a zoomed
+    viewport and a scatter of the same selection all share it (until
+    debug-0004 each cell of the panel's own aggregate had a position of
+    its own, which a finer query could not share: zooming in magnified
+    the full aggregate instead).
+
+    The blank between two runs is :attr:`BLANK_FRACTION` of the runs'
+    total length, or :attr:`BLANK_TOTAL` of it shared out among all the
+    gaps, whichever is smaller -- so it stays visible at any zoom, and
+    ten gaps do not leave a fifth of the axis empty.  A separator line is
+    drawn in each blank (:meth:`separators`), so a break stays visible
+    when its blank is narrower than a pixel.
 
     Attributes
     ----------
-    times :
-        The cells' times (seconds, as the raster's ``time`` coordinate),
-        ascending.
     lo, hi :
-        Each cell's real edges (:func:`cell_edges` on *times*).
-    positions :
-        Each cell's position: ``0, 1, 2, ...``, plus :attr:`GAP` after
-        each break.
+        Each run's real edges, ascending and not overlapping.
+    starts :
+        Where each run starts on the closed axis.
+    gap :
+        The blank between neighbouring runs, in closed units.
     """
-    times:     tuple
-    lo:        tuple
-    hi:        tuple
-    positions: tuple
+    lo:     tuple
+    hi:     tuple
+    starts: tuple
+    gap:    float
 
-    HALF = 0.5
-    """Half-width of a position's cell."""
-    GAP = 1
-    """Blank positions drawn where the cells had a gap."""
+    BLANK_FRACTION = 0.02
+    BLANK_TOTAL = 0.10
+    HALF = None
+    """No fixed half-width: the closed axis is to scale within a run
+    (kept for callers that ask, as of the positional axis before #36)."""
+
+    # -- building --------------------------------------------------------
 
     @classmethod
-    def build(cls, times, width=None) -> "TimeAxis":
-        """*width*: the cells' true widths (one number, or one per entry
-        of *times*), so a lone integration's real span is its own (#38)."""
-        raw = np.asarray(times, dtype=np.float64).ravel()
+    def from_runs(cls, runs) -> "GapAxis":
+        """From ``[(lo, hi), ...]`` real run edges (any order; touching or
+        overlapping runs are merged)."""
+        r = sorted((float(a), float(b)) for a, b in (runs or ())
+                   if np.isfinite(a) and np.isfinite(b))
+        merged: list = []
+        for a, b in r:
+            a, b = min(a, b), max(a, b)
+            if merged and a <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        lo = np.array([m[0] for m in merged], dtype=np.float64)
+        hi = np.array([m[1] for m in merged], dtype=np.float64)
+        n_gaps = max(lo.size - 1, 0)
+        total = float(np.sum(hi - lo)) if lo.size else 0.0
+        if n_gaps == 0:
+            gap = 0.0
+        else:
+            gap = total * min(cls.BLANK_FRACTION, cls.BLANK_TOTAL / n_gaps)
+            if not gap > 0:
+                gap = 1.0                  # runs of zero length: any blank
+        starts = np.zeros(lo.size)
+        if lo.size > 1:
+            starts[1:] = np.cumsum((hi - lo)[:-1] + gap)
+        return cls(lo=tuple(lo.tolist()), hi=tuple(hi.tolist()),
+                   starts=tuple(starts.tolist()), gap=float(gap))
+
+    @staticmethod
+    def runs_of(coords, width=None) -> list:
+        """``[(lo, hi), ...]``: the runs of cells centred on *coords*
+        (:func:`cell_edges`, with their true *width*): neighbouring cells
+        whose edges meet are one run."""
+        raw = np.asarray(coords, dtype=np.float64).ravel()
         w = _as_widths(width, raw.size)
         ok = np.isfinite(raw)
         t, inv = np.unique(raw[ok], return_inverse=True)
+        if t.size == 0:
+            return []
         tw = None
         if w is not None:
             tw = np.full(t.size, np.nan)
             np.fmax.at(tw, inv, w[ok])
         lo, hi = cell_edges(t, width=tw)
-        brk = np.zeros(t.size, dtype=np.int64)
-        if t.size > 1:
-            brk[1:] = (lo[1:] > hi[:-1]).astype(np.int64)
-        pos = np.arange(t.size, dtype=np.float64) + cls.GAP * np.cumsum(brk)
-        return cls(times=tuple(t.tolist()), lo=tuple(lo.tolist()), hi=tuple(hi.tolist()),
-                   positions=tuple(pos.tolist()))
+        brk = np.flatnonzero(lo[1:] > hi[:-1]) + 1
+        first = np.concatenate([[0], brk])
+        last = np.concatenate([brk - 1, [t.size - 1]])
+        return [(float(lo[a]), float(hi[b])) for a, b in zip(first, last)]
+
+    @classmethod
+    def build(cls, coords, width=None) -> "GapAxis":
+        """From cells (:meth:`runs_of`) -- when the reader cannot say what
+        the runs are, a panel's own aggregate decides."""
+        return cls.from_runs(cls.runs_of(coords, width))
+
+    # -- the mapping -----------------------------------------------------
 
     def __len__(self) -> int:
-        return len(self.times)
+        return len(self.lo)
 
     @property
-    def n_positions(self) -> int:
-        """Positions along the axis, blank ones included."""
-        return int(self.positions[-1]) + 1 if self.positions else 0
+    def ends(self) -> tuple:
+        """Where each run ends on the closed axis."""
+        return tuple(s + (b - a) for s, a, b in zip(self.starts, self.lo, self.hi))
 
-    def positions_of(self, times) -> np.ndarray:
-        """Position of each of *times*; NaN where it lies in no cell.
+    @property
+    def extent(self) -> Optional[tuple]:
+        """``(start, end)`` of the closed axis, or ``None`` if empty."""
+        if not self.lo:
+            return None
+        return float(self.starts[0]), float(self.ends[-1])
 
-        A time in a cell maps linearly across that cell's position
-        (its centre to the cell's position), so a time between two
-        neighbouring cells of a run lands between their positions."""
-        t = np.asarray(times, dtype=np.float64).ravel()
-        out = np.full(t.size, np.nan)
-        if not self.times or t.size == 0:
+    def positions_of(self, values) -> np.ndarray:
+        """Closed coordinate of each real value; NaN outside every run."""
+        v = np.asarray(values, dtype=np.float64).ravel()
+        out = np.full(v.size, np.nan)
+        if not self.lo or v.size == 0:
             return out
-        c = np.asarray(self.times)
-        lo = np.asarray(self.lo)
-        hi = np.asarray(self.hi)
-        p = np.asarray(self.positions)
-        k = np.clip(np.searchsorted(hi, t, side="left"), 0, c.size - 1)
-        inside = (t >= lo[k]) & (t <= hi[k])
-        # Within cell k: its centre is at p[k]; its edges at p[k] +- HALF.
-        with np.errstate(invalid="ignore", divide="ignore"):
-            left = np.where(t < c[k], (t - c[k]) / np.where(c[k] > lo[k], c[k] - lo[k], np.inf),
-                            (t - c[k]) / np.where(hi[k] > c[k], hi[k] - c[k], np.inf))
-        out[inside] = p[k][inside] + self.HALF * left[inside]
+        lo, hi, st = (np.asarray(x) for x in (self.lo, self.hi, self.starts))
+        k = np.clip(np.searchsorted(lo, v, side="right") - 1, 0, lo.size - 1)
+        inside = (v >= lo[k]) & (v <= hi[k])
+        out[inside] = st[k][inside] + (v[inside] - lo[k][inside])
         return out
 
-    def real_span(self, a: float, b: float) -> Optional[tuple]:
-        """The real time range covered by the cells overlapping positions
-        ``[a, b]``: ``(first cell's lower edge, last cell's upper edge)``,
-        or ``None`` if the span holds no cell (all of it blank)."""
-        if not self.times:
-            return None
-        a, b = min(a, b), max(a, b)
-        m = overlapping(np.asarray(self.positions), a, b, half=self.HALF)
-        idx = np.flatnonzero(m)
-        if idx.size == 0:
-            return None
-        return float(self.lo[idx[0]]), float(self.hi[idx[-1]])
+    def real_of(self, positions) -> np.ndarray:
+        """Real value at each closed coordinate; NaN in a blank."""
+        u = np.asarray(positions, dtype=np.float64).ravel()
+        out = np.full(u.size, np.nan)
+        if not self.lo or u.size == 0:
+            return out
+        lo, st, en = (np.asarray(x) for x in (self.lo, self.starts, self.ends))
+        k = np.clip(np.searchsorted(st, u, side="right") - 1, 0, st.size - 1)
+        tol = 1e-9 * max(abs(en[-1]), 1.0)
+        inside = (u >= st[k] - tol) & (u <= en[k] + tol)
+        out[inside] = lo[k][inside] + (u[inside] - st[k][inside])
+        return out
 
     def time_at(self, position: float) -> Optional[float]:
-        """The time of the cell drawn at *position*, or ``None``."""
-        i = self._index_at(position)
-        return None if i is None else float(self.times[i])
+        """The real value at *position*, or ``None`` in a blank."""
+        v = float(self.real_of([position])[0])
+        return None if not np.isfinite(v) else v
 
-    def cell_at(self, position: float) -> Optional[tuple]:
-        """``(lo, hi)``: the real edges of the cell at *position*."""
-        i = self._index_at(position)
-        return None if i is None else (float(self.lo[i]), float(self.hi[i]))
-
-    def _index_at(self, position: float) -> Optional[int]:
-        if not self.times:
+    def real_span(self, a: float, b: float) -> Optional[tuple]:
+        """The real range covered by closed coordinates ``[a, b]``: from
+        where it enters the first run it touches to where it leaves the
+        last, or ``None`` if all of it is blank.  Across a blank that
+        includes the gap itself, which holds no data of the selection."""
+        if not self.lo:
             return None
-        p = np.asarray(self.positions)
-        i = int(np.argmin(np.abs(p - float(position))))
-        return i if abs(p[i] - float(position)) <= self.HALF + 1e-9 else None
+        a, b = min(a, b), max(a, b)
+        st, en = np.asarray(self.starts), np.asarray(self.ends)
+        idx = np.flatnonzero((en >= a) & (st <= b))
+        if idx.size == 0:
+            return None
+        i, j = idx[0], idx[-1]
+        r0 = self.lo[i] + max(a - st[i], 0.0)
+        r1 = self.lo[j] + min(b, en[j]) - st[j]
+        return float(r0), float(r1)
 
-    def tick_labels(self, fmt) -> tuple:
-        """What a tick at each position (0 .. n_positions - 1) reads:
-        ``fmt(time)`` at a cell, ``""`` at a blank position."""
-        out = [""] * self.n_positions
-        for t, p in zip(self.times, self.positions):
-            out[int(p)] = fmt(t)
-        return tuple(out)
+    def run_bounds(self) -> tuple:
+        """``(starts, ends)`` on the closed axis, for :func:`cell_edges`
+        (``runs=``): a cell stays inside its run and never joins a cell
+        of another."""
+        return np.asarray(self.starts, dtype=np.float64), np.asarray(self.ends, dtype=np.float64)
+
+    def separators(self) -> tuple:
+        """Closed coordinate of the middle of each blank."""
+        return tuple(e + self.gap / 2.0 for e in self.ends[:-1])
+
+    def state(self) -> list:
+        """``[starts, lo, hi]`` for the browser (tick labels, the linked
+        cursor): ``tick_format.GAP_AXIS_JS`` converts with it."""
+        return [list(self.starts), list(self.lo), list(self.hi)]
+
+
+TimeAxis = GapAxis
+"""A Time axis with its gaps closed: :class:`GapAxis` (the name used
+since debug-0003)."""
 
 
 def positions_of(order_ids: Sequence, ids) -> np.ndarray:

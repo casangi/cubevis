@@ -176,16 +176,18 @@ class TestTimeAxisWithWidths:
 
     T = [0.0, 8.0, 16.0, 400.0, 700.0, 708.0]
 
+    # A closed Time axis (GapAxis, runs-based since #36): a lone
+    # integration is a run of its own width.
+
     def test_a_lone_integration_spans_its_own_time(self):
         ax = rg.TimeAxis.build(self.T, width=8.0)
-        i = ax.times.index(400.0)
-        assert (ax.lo[i], ax.hi[i]) == (396.0, 404.0)
-        assert ax.positions == (0.0, 1.0, 2.0, 4.0, 6.0, 7.0)
-        assert ax.real_span(3.6, 4.4) == (396.0, 404.0)
+        assert ax.lo == (-4.0, 396.0, 696.0) and ax.hi == (20.0, 404.0, 712.0)
+        u = ax.positions_of([400.0])[0]
+        assert ax.real_span(u - 4.0, u + 4.0) == pytest.approx((396.0, 404.0))
 
     def test_without_widths_as_before(self):
         ax = rg.TimeAxis.build(self.T)
-        i = ax.times.index(400.0)
+        i = list(ax.lo).index(min(lo for lo in ax.lo if lo > 100))
         assert ax.hi[i] - ax.lo[i] >= 300
 
     def test_repeated_times_take_the_larger_width(self):
@@ -487,11 +489,14 @@ class TestRealRaster:
         t = _times(vr.agg)[LONE]
         vr.update_axes(time_gaps="closed")
         ax = vr._time_axis
-        i = ax.times.index(t)
-        assert (ax.lo[i], ax.hi[i]) == pytest.approx((t - DUMP / 2, t + DUMP / 2),
+        assert len(ax) == 3                       # the lone integration is a run
+        assert (ax.lo[1], ax.hi[1]) == pytest.approx((t - DUMP / 2, t + DUMP / 2),
                                                      rel=0, abs=1e-3)
-        assert ax.positions[i] - ax.positions[i - 1] == 2       # one blank each side
-        assert ax.positions[i + 1] - ax.positions[i] == 2
+        # drawn its own width on the closed axis, between two blanks
+        u = float(ax.positions_of([t])[0])
+        assert ax.real_span(u - DUMP / 2, u + DUMP / 2) == pytest.approx(
+            (t - DUMP / 2, t + DUMP / 2), rel=0, abs=1e-3)
+        assert ax.starts[1] - ax.ends[0] == pytest.approx(ax.gap)
 
 
 # ---------------------------------------------------------------------------

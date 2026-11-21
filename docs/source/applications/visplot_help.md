@@ -261,19 +261,20 @@ spent on other fields between the scans of the one shown.
   short scans with long gaps between them shows as thin bands in
   mostly blank space. The Time axis then lines up with a scatter of
   X = Time beside it.
-* **Closed**: one row (or column) per time with data, side by side, with
-  one thin blank row where there was a gap, much as the AIPS editors
-  draw time. The ticks read the times, and the axis label says "(gaps
-  closed)". The cursor readout and flag boxes work in real time: a box
-  drawn across a closed gap covers the scans on both sides, and the gap
-  itself, which holds no data of the selection.
-* With the gaps closed the axis no longer runs at a constant rate, so it
-  does not line up with a scatter of X = Time beside it. The linked
-  cursor still follows: over the raster it marks the same time on the
-  scatter, and over a scatter's time in a closed gap it shows nothing on
-  the raster.
-* Zooming in magnifies the cells already read rather than reading finer
-  ones.
+* **Closed**: each stretch with data (a scan, or scans back to back)
+  is kept to scale, and the stretches sit side by side with a small
+  blank between them, marked by a faint line. A blank is 2% of the
+  axis, or less when there are many gaps: all of them together take at
+  most a tenth of it. The line shows each break even when its blank is
+  narrower than a pixel. The ticks read the real times, and the axis
+  label says "(gaps closed)". The cursor readout and flag boxes work in
+  real time: a box drawn across a closed gap covers the scans on both
+  sides, and the gap itself, which holds no data of the selection.
+* With the gaps closed the axis does not line up with a scatter of
+  X = Time beside it. The linked cursor still follows: over the raster
+  it marks the same time on the scatter, and over a scatter's time in a
+  closed gap it shows nothing on the raster.
+* Zooming in reads finer cells, as with the gaps shown.
 * Each panel has its own setting, in its gear tab. Applied by **Plot**.
 
 (vp-twin)=

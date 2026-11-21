@@ -112,6 +112,7 @@ from .selection import (
     SelectionSpec, normalize_averaging, normalize_baseline_combine,
 )
 from ..gridplot.raster_grid import normalize_baseline_order, normalize_time_gaps
+from ..gridplot.tick_format import GAP_AXIS_JS
 from .data._raster_stats import normalize_chan_window, normalize_time_window
 from .data._scatter_average import normalize_avg_chan, normalize_avg_time
 from . import antenna_baseline_select as _abs
@@ -280,7 +281,7 @@ _STATIC_HINTS = {
     "bcombine": (
         "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines (a raster without Baseline on an axis). Averaging applies within each baseline; this is how the baselines are combined  | <b>Mean</b>: the general picture  | <b>Median</b>: what most baselines share  | <b>Maximum</b>: a problem shows even on one baseline  | <b>Vector (coherent)</b>: a complex sum, for a calibrated point source; Vector averaging only", "vp-bcombine"),
     "tgaps": (
-        "<b>Time gaps</b> \u2014 how this raster's Time axis treats stretches with no data  | <b>Shown</b>: time to scale; a field observed in short scans is mostly blank space between thin bands  | <b>Closed</b>: one row per time with data, a thin blank row where there was a gap; the ticks read the times  | Applied by Plot", "vp-time-gaps"),
+        "<b>Time gaps</b> \u2014 how this raster's Time axis treats stretches with no data  | <b>Shown</b>: time to scale; a field observed in short scans is mostly blank space between thin bands  | <b>Closed</b>: each stretch with data to scale, side by side, with a small blank and a faint line where there was a gap; the ticks read the real times  | Applied by Plot", "vp-time-gaps"),
     "border": (
         "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out  | <b>By number</b>: the Baseline table\u2019s order; baselines to one antenna sit together  | <b>By length</b>: shortest first. Trouble that grows along the axis is about distance; trouble in scattered columns is about particular antennas", "vp-border"),
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
@@ -12457,8 +12458,8 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             _cursor_panels.append({
                 "id": panel.vr_id, "fig": panel.figure,
                 "vspan": vspan, "hspan": hspan,
-                # x_tcells / y_tcells: a raster Time axis with its gaps
-                # closed (VisibilityRaster._state_data).
+                # x_runs / y_runs: an axis with its gaps closed
+                # (PanelSpec, raster_grid.GapAxis.state(), #36).
                 "state": panel._state_source,
             })
 
@@ -12469,7 +12470,7 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
                 "cursor_src": cursor_src,
                 "panels":     _cursor_panels,
             },
-            code="""
+            code=GAP_AXIS_JS + """
 const x      = cursor_src.data['x'][0];
 const y      = cursor_src.data['y'][0];
 const fig_id = cursor_src.data['fig'] ? cursor_src.data['fig'][0] : '';
@@ -12481,32 +12482,26 @@ for (const p of panels) {
     p.hspan.location = NaN;
 }
 
-// A raster Time axis with its gaps closed (debug-0003) is in positions,
-// one per time cell, with "(gaps closed)" in its label: a cursor there is
-// converted to the real time for the other panels, and a real time to
-// the position on a closed axis.  [positions, lo, hi] per axis, or null.
+// An axis with its gaps closed (debug-0003; runs-based since #36) is in
+// closed coordinates, with "(gaps closed)" in its label: a cursor there
+// is converted to the real value for the other panels, and a real value
+// to the closed coordinate on a closed axis.  GapAxis.state() --
+// [starts, lo, hi] -- per axis, or null; cvGapReal / cvGapPos are
+// tick_format.GAP_AXIS_JS, which the tick labels use too.
 const cells = (p, ax) => {
     const d = p.state && p.state.data;
-    const c = d && d[ax + '_tcells'];
+    const c = d && d[ax + '_runs'];
     return (c && c[0]) || null;
 };
 const toReal = (c, v) => {
     if (!c) return v;
-    const [pos, lo, hi] = c;
-    for (let i = 0; i < pos.length; i++)
-        if (Math.abs(pos[i] - v) <= 0.5) return lo[i] + (v - (pos[i] - 0.5)) * (hi[i] - lo[i]);
-    return NaN;                       // a blank row: no time
+    const r = cvGapReal(c, v);
+    return r === null ? NaN : r;      // a blank: no time
 };
 const toPos = (c, t) => {
     if (!c) return t;
-    const [pos, lo, hi] = c;
-    let a = 0, b = pos.length - 1;
-    while (a <= b) {
-        const m = (a + b) >> 1;
-        if (t < lo[m]) b = m - 1; else if (t > hi[m]) a = m + 1;
-        else return pos[m] - 0.5 + (hi[m] > lo[m] ? (t - lo[m]) / (hi[m] - lo[m]) : 0.5);
-    }
-    return NaN;                       // in a closed gap: not shown
+    const u = cvGapPos(c, t);
+    return u === null ? NaN : u;      // in a closed gap: not shown
 };
 const norm = (l) => (l || '').replace(' (gaps closed)', '');
 

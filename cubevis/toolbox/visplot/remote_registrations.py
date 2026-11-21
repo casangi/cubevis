@@ -344,6 +344,10 @@ class VisplotRemoteBackend:
         out = self._reader.scans_with_rows(selection)
         return None if out is None else [str(n) for n in out]
 
+    def axis_runs(self, selection=None, dim="time"):
+        out = self._reader.axis_runs(selection, dim)
+        return None if out is None else [[float(a), float(b)] for a, b in out]
+
     # ------------------------------------------------------------------ #
     # Extra methods LocalVisibilityReader also exposes                    #
     # ------------------------------------------------------------------ #

@@ -942,7 +942,7 @@ def _scan_sort_key(name: str):
 
 def _cell_bounds(coords: np.ndarray, idx: int,
                  half: Optional[float] = None,
-                 width=None) -> tuple[float, float]:
+                 width=None, runs=None) -> tuple[float, float]:
     """Data-space ``(lo, hi)`` bounds of cell *idx* in *coords*.
 
     The rule is ``raster_grid.cell_edges`` -- the same one the image is
@@ -967,7 +967,7 @@ def _cell_bounds(coords: np.ndarray, idx: int,
         raise IndexError("empty coordinate array")
     if not (0 <= idx < n):
         raise IndexError(f"index {idx} out of range for {n} coordinates")
-    lo, hi = cell_edges(coords, half, width)
+    lo, hi = cell_edges(coords, half, width, runs)
     return float(lo[idx]), float(hi[idx])
 
 
@@ -3040,6 +3040,45 @@ class XArrayReader(abc.ABC):
             found.update(np.unique(names[present]).tolist())
         out = (sorted(found, key=_scan_sort_key) if seen
                else [] if n_parts == 0 else None)
+        cache[key] = out
+        return out
+
+    def axis_runs(self, selection=None, dim: str = "time") -> Optional[list]:
+        """``[[lo, hi], ...]``: the stretches of *dim* (``"time"`` or
+        ``"frequency"``) with data in what *selection* picks, at full
+        resolution -- what an axis with its gaps closed lays out
+        (``raster_grid.GapAxis``, issue #36).
+
+        Each partition's cells (its coordinate, with their true widths:
+        ``partition_cell_width``) make runs where their edges meet
+        (``GapAxis.runs_of``); runs of all partitions that touch or
+        overlap are merged.  From coordinates only, so cheap, and cached
+        per selection.  The antenna / baseline choice is ignored (times
+        and frequencies are shared by every baseline of a partition), and
+        so are flags.  ``[]`` when nothing is selected; ``None`` when
+        *dim* is not one of the two.
+        """
+        import dataclasses
+        from ...gridplot.raster_grid import GapAxis
+        if dim not in ("time", "frequency"):
+            return None
+        sel = selection if selection is not None else SelectionSpec()
+        key = repr((dim, sel.field_names, sel.spw, sel.scan, sel.time_range,
+                    getattr(sel, "uv_range", None), getattr(sel, "autocorr", None),
+                    getattr(sel, "freq_range", None), getattr(sel, "channel_range", None)))
+        cache = self.__dict__.setdefault("_axis_runs_cache", {})
+        if key in cache:
+            return cache[key]
+        sel = dataclasses.replace(sel, antenna_names=None, baselines=None)
+        runs: list = []
+        for ds in self._iter_visibility_partitions(sel):
+            sub = self._apply_selection(ds, sel)
+            if dim not in sub.coords or sub.sizes.get(dim, 0) == 0:
+                continue
+            v = np.asarray(sub.coords[dim].values, dtype=np.float64)
+            runs.extend(GapAxis.runs_of(v, partition_cell_width(sub, dim)))
+        ax = GapAxis.from_runs(runs)
+        out = [[float(a), float(b)] for a, b in zip(ax.lo, ax.hi)]
         cache[key] = out
         return out
 

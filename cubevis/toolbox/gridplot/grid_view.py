@@ -62,10 +62,11 @@ MIN_FRAME = (120, 90)
 
 #: the PanelSpec.to_state_data keys the tick formatter reads
 _AXIS_KEYS = ("x_is_time", "y_is_time", "x_t0", "y_t0", "x_scale", "y_scale", "x_cat",
-              "y_cat", "time_labels", "x_day0", "y_day0")
+              "y_cat", "time_labels", "x_day0", "y_day0", "x_runs", "y_runs")
 _AXIS_DEFAULT = {"x_is_time": [0], "y_is_time": [0], "x_t0": [0.0], "y_t0": [0.0],
                  "x_scale": [1.0], "y_scale": [1.0], "x_cat": [None], "y_cat": [None],
-                 "time_labels": ["utc"], "x_day0": [None], "y_day0": [None]}
+                 "time_labels": ["utc"], "x_day0": [None], "y_day0": [None],
+                 "x_runs": [None], "y_runs": [None]}
 
 
 def _axis_state(spec) -> Optional[dict]:
@@ -444,7 +445,7 @@ class GridView:
                 axes.formatter = CustomJSTickFormatter(
                     args={"state": st, "axis_key": f"{k}_is_time", "t0_key": f"{k}_t0",
                           "scale_key": f"{k}_scale", "cat_key": f"{k}_cat",
-                          "day_key": f"{k}_day0"},
+                          "day_key": f"{k}_day0", "runs_key": f"{k}_runs"},
                     code=TICK_FORMATTER_JS)
             states.append(st)
             src = ColumnDataSource({"image": [np.zeros((1, 1), np.uint32)], "x": [x0], "y": [y0],

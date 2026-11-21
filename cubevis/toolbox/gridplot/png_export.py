@@ -324,11 +324,13 @@ def _style_axes(ax, theme: Theme, spec: Optional[PanelSpec],
         ax.xaxis.set_major_formatter(
             mpl_formatter(src.x_is_time, src.axis_origin("x"),
                           src.axis_scale("x")[0], src.axis_ticks("x"),
-                          time_mode=tl, day0=src.time_day0("x")))
+                          time_mode=tl, day0=src.time_day0("x"),
+                          runs=getattr(src, "x_runs", None)))
         ax.yaxis.set_major_formatter(
             mpl_formatter(src.y_is_time, src.axis_origin("y"),
                           src.axis_scale("y")[0], src.axis_ticks("y"),
-                          time_mode=tl, day0=src.time_day0("y")))
+                          time_mode=tl, day0=src.time_day0("y"),
+                          runs=getattr(src, "y_runs", None)))
         # A UTC axis ticks on whole seconds / minutes / hours, at the
         # spacing the browser's base-60 ticker would choose.
         from matplotlib.ticker import MaxNLocator, MultipleLocator

@@ -43,7 +43,7 @@ import numpy as np
 from bokeh.models import ColumnDataSource
 
 import dataclasses
-from .visibility_plot import _composite_flag_mask, _paint_separators, _gaps_closed
+from .visibility_plot import _composite_flag_mask, _gaps_closed
 from .visibility_plot import _CV_SET_BUSY_JS
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
@@ -1936,7 +1936,6 @@ window.__cvSetBusy(false);
             shaded = self._shade_agg(ds_agg)
             img32  = _img_to_uint32(shaded)
             self._apply_flag_overlays(img32, (x0, x1), (y0, y1))
-            self._paint_gap_separators(img32, (x0, x1), (y0, y1), agg)
 
         new_data = {
             "image": [img32],
@@ -2647,23 +2646,8 @@ window.__cvSetBusy(false);
 
         ds_agg = self._resample(agg, (x0, x1), (y0, y1))
         shaded = self._shade_agg(ds_agg)
-        img32 = self._apply_flag_overlays(_img_to_uint32(shaded), (x0, x1), (y0, y1),
-                                          overlays=overlays)
-        return self._paint_gap_separators(img32, (x0, x1), (y0, y1), agg)
-
-    def _paint_gap_separators(self, img32, x_range, y_range, agg):
-        """A faint line in each blank of a Time axis with its gaps
-        closed (#36), so a break shows even when its blank is narrower
-        than a pixel (many scans, a small grid panel)."""
-        ta = getattr(self, "_time_axis", None)
-        if ta is None or agg is None or getattr(agg, "ndim", 0) != 2:
-            return img32
-        sep = ta.separators()
-        if agg.dims[1] == "time":
-            _paint_separators(img32, sep, float(x_range[0]), float(x_range[1]), "x")
-        elif agg.dims[0] == "time":
-            _paint_separators(img32, sep, float(y_range[0]), float(y_range[1]), "y")
-        return img32
+        return self._apply_flag_overlays(_img_to_uint32(shaded), (x0, x1), (y0, y1),
+                                         overlays=overlays)
 
     # ------------------------------------------------------------------ #
     # FlagDB v2 overlays                                                   #

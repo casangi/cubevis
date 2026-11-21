@@ -384,37 +384,6 @@ def _gaps_closed(label: str, closed) -> str:
     return (label[:i] + " (gaps closed)" + label[i:]) if i >= 0 else label + " (gaps closed)"
 
 
-GAP_SEPARATOR_RGBA = (128, 128, 128, 110)
-"""The faint line drawn in each blank of an axis with its gaps closed
-(#36), so a break stays visible when its blank is under a pixel."""
-
-
-def _paint_separators(img32: np.ndarray, positions, lo: float, hi: float,
-                      axis: str, rgba: tuple = GAP_SEPARATOR_RGBA) -> np.ndarray:
-    """Paint a 1-pixel line across *img32* (in place) at each of
-    *positions* along *axis* (``"x"``: columns, ``"y"``: rows) of a
-    viewport ``[lo, hi]``, on empty (transparent) pixels only.  Byte
-    order as ``_img_to_uint32``.  Returns *img32*."""
-    if img32 is None or not len(positions) or not hi > lo:
-        return img32
-    h, w = img32.shape
-    n = w if axis == "x" else h
-    idx = np.floor((np.asarray(positions, dtype=np.float64) - lo) / (hi - lo) * n).astype(np.int64)
-    idx = np.unique(idx[(idx >= 0) & (idx < n)])
-    if idx.size == 0:
-        return img32
-    px = np.frombuffer(bytes(bytearray(rgba[:4])), dtype=np.uint32)[0]
-    alpha = img32.view(np.uint8).reshape(h, w, 4)[..., 3]
-    for i in idx:
-        if axis == "x":
-            col = alpha[:, i] == 0
-            img32[col, i] = px
-        else:
-            row = alpha[i, :] == 0
-            img32[i, row] = px
-    return img32
-
-
 def _img_to_uint32(img) -> np.ndarray:
     """Convert a Datashader Image or PIL RGBA Image to a Bokeh uint32 array.
 

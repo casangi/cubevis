@@ -231,7 +231,7 @@ class TestRaster:
         vr = _raster(backend, max_cells=NTIME * NCHAN // 4)
         vr.update_axes(time_gaps="closed")
         ax = vr._time_axis
-        s = ax.separators()[0]
+        s = ax.blank_centres()[0]
         assert vr._detail_selection(vr._x_range, (s - ax.gap / 4, s + ax.gap / 4)) is None
 
     def test_old_kernel_falls_back_on_the_aggregate(self, backend, monkeypatch):

@@ -204,17 +204,18 @@ class TestWidget:
         r.update_axes(time_gaps="closed")
         assert r._time_axis.state() == s._time_axis.state()
 
-    def test_separators_are_drawn(self, plotter):
+    def test_blanks_are_left_empty(self, plotter):
+        """A blank shows the panel background, as on the raster."""
         s = _scatter(plotter)
         d = s._image_source.data
         img = np.asarray(d["image"][0])
         rgba = img.view(np.uint8).reshape(img.shape + (4,))
         x0, w = d["x"][0], d["dw"][0]
-        cols = [int(np.floor((p - x0) / w * img.shape[1])) for p in s._time_axis.separators()]
+        cols = [int(np.floor((p - x0) / w * img.shape[1])) for p in s._time_axis.blank_centres()]
         assert cols
         for c in cols:
             if 0 <= c < img.shape[1]:
-                assert tuple(rgba[0, c]) == (128, 128, 128, 110)
+                assert (rgba[:, c, 3] == 0).all()
 
     def test_flag_box_becomes_real_times(self, plotter):
         s = _scatter(plotter)
@@ -223,14 +224,14 @@ class TestWidget:
         box = {"x0": ta.starts[1] + 1.0, "x1": ta.starts[2] + 1.0, "y0": y0, "y1": y1}
         req = plotter._flags.build_request(s, "scatter", box, True)
         assert (req["x0"], req["x1"]) == pytest.approx(ta.real_span(box["x0"], box["x1"]))
-        sep = ta.separators()[0]
+        sep = ta.blank_centres()[0]
         with pytest.raises(ValueError, match="only a gap"):
             plotter._flags.build_request(
                 s, "scatter", {"x0": sep - 0.01, "x1": sep + 0.01, "y0": y0, "y1": y1}, True)
 
     def test_exact_identity_in_a_gap_says_so(self, plotter):
         s = _scatter(plotter)
-        sep = s._time_axis.separators()[0]
+        sep = s._time_axis.blank_centres()[0]
         y0, y1 = s._y_range
         resp = asyncio.run(s._handle_probe_region(
             {"tool": "info_box", "x0": sep - 0.01, "x1": sep + 0.01, "y0": y0, "y1": y1}))

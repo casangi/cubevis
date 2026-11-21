@@ -576,12 +576,17 @@ class GapAxis:
     its own, which a finer query could not share: zooming in magnified
     the full aggregate instead).
 
-    The blank between two runs is :attr:`BLANK_FRACTION` of the runs'
-    total length, or :attr:`BLANK_TOTAL` of it shared out among all the
-    gaps, whichever is smaller -- so it stays visible at any zoom, and
-    ten gaps do not leave a fifth of the axis empty.  A separator line is
-    drawn in each blank (:meth:`separators`), so a break stays visible
-    when its blank is narrower than a pixel.
+    Closing only ever shrinks a gap.  Each gap becomes the smaller of
+    its real width and the *blank*: :attr:`BLANK_FRACTION` of the runs'
+    total length, or :attr:`BLANK_TOTAL` of it shared out among the gaps
+    wider than the blank, whichever is smaller -- so a long gap stays
+    visible at any zoom, ten of them do not leave a fifth of the axis
+    empty, and a short one (a slew between scans, a pause between
+    subscans) keeps its real width, as invisible as with the gaps shown.
+    (Until 2026-11-21 every gap got the blank, which widened the short
+    ones: a closed axis showed more breaks than a shown one.)  A blank
+    is left empty, the panel's background, as a gap is with the gaps
+    shown.
 
     Attributes
     ----------
@@ -590,12 +595,15 @@ class GapAxis:
     starts :
         Where each run starts on the closed axis.
     gap :
-        The blank between neighbouring runs, in closed units.
+        The blank, in closed units: what a gap wider than it shrinks to.
+    blanks :
+        What each gap became: ``min(real width, gap)``.
     """
     lo:     tuple
     hi:     tuple
     starts: tuple
     gap:    float
+    blanks: tuple = ()
 
     BLANK_FRACTION = 0.02
     BLANK_TOTAL = 0.10
@@ -620,19 +628,39 @@ class GapAxis:
                 merged.append([a, b])
         lo = np.array([m[0] for m in merged], dtype=np.float64)
         hi = np.array([m[1] for m in merged], dtype=np.float64)
-        n_gaps = max(lo.size - 1, 0)
-        total = float(np.sum(hi - lo)) if lo.size else 0.0
-        if n_gaps == 0:
-            gap = 0.0
-        else:
-            gap = total * min(cls.BLANK_FRACTION, cls.BLANK_TOTAL / n_gaps)
-            if not gap > 0:
-                gap = 1.0                  # runs of zero length: any blank
+        real = lo[1:] - hi[:-1] if lo.size > 1 else np.zeros(0)
+        gap = cls.blank_for(real, float(np.sum(hi - lo)) if lo.size else 0.0)
+        blanks = np.minimum(real, gap)
         starts = np.zeros(lo.size)
         if lo.size > 1:
-            starts[1:] = np.cumsum((hi - lo)[:-1] + gap)
+            starts[1:] = np.cumsum((hi - lo)[:-1] + blanks)
         return cls(lo=tuple(lo.tolist()), hi=tuple(hi.tolist()),
-                   starts=tuple(starts.tolist()), gap=float(gap))
+                   starts=tuple(starts.tolist()), gap=float(gap),
+                   blanks=tuple(blanks.tolist()))
+
+    @classmethod
+    def blank_for(cls, gaps, total: float) -> float:
+        """The blank for real gap widths *gaps* between runs of total
+        length *total*: ``total * min(BLANK_FRACTION, BLANK_TOTAL / n)``,
+        *n* the number of gaps wider than the blank itself (found by
+        iterating: fewer wide gaps, a larger share each, which may make
+        another gap narrow).  ``0.0`` with no gaps."""
+        g = np.asarray(gaps, dtype=np.float64)
+        if g.size == 0:
+            return 0.0
+        if not total > 0:
+            total = float(np.sum(g)) or 1.0       # runs of zero length
+        n = g.size
+        blank = total * min(cls.BLANK_FRACTION, cls.BLANK_TOTAL / n)
+        for _ in range(64):
+            wide = int(np.count_nonzero(g > blank))
+            if wide == 0:
+                break
+            nxt = total * min(cls.BLANK_FRACTION, cls.BLANK_TOTAL / wide)
+            if nxt == blank:
+                break
+            blank = nxt
+        return float(blank)
 
     @staticmethod
     def runs_of(coords, width=None) -> list:
@@ -731,9 +759,9 @@ class GapAxis:
         of another."""
         return np.asarray(self.starts, dtype=np.float64), np.asarray(self.ends, dtype=np.float64)
 
-    def separators(self) -> tuple:
-        """Closed coordinate of the middle of each blank."""
-        return tuple(e + self.gap / 2.0 for e in self.ends[:-1])
+    def blank_centres(self) -> tuple:
+        """Closed coordinate of the middle of each blank (between runs)."""
+        return tuple(e + (s - e) / 2.0 for e, s in zip(self.ends[:-1], self.starts[1:]))
 
     def state(self) -> list:
         """``[starts, lo, hi]`` for the browser (tick labels, the linked

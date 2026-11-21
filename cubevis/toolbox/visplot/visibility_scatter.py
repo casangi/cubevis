@@ -66,7 +66,7 @@ import xarray as xr
 from bokeh.models import ColumnDataSource
 
 import dataclasses
-from .visibility_plot import _composite_flag_mask, _paint_separators, _gaps_closed
+from .visibility_plot import _composite_flag_mask, _gaps_closed
 from ..gridplot.raster_grid import GapAxis, normalize_time_gaps
 from .visibility_plot import _CV_SET_BUSY_JS
 from .visibility_plot import (
@@ -1669,15 +1669,6 @@ window.__cvSetBusy(false);
             return (a, b)
         return ta.real_span(a, b)
 
-    def _paint_gap_separators(self, img32, x_range):
-        """A faint line in each blank of a closed Time axis, as on the
-        raster (#36)."""
-        ta = getattr(self, "_time_axis", None)
-        if ta is None or img32 is None or getattr(img32, "ndim", 0) != 2 or x_range is None:
-            return img32
-        return _paint_separators(img32, ta.separators(),
-                                 float(x_range[0]), float(x_range[1]), "x")
-
     def _panel_spec(self) -> PanelSpec:
         """Describe this scatter: one color band per ScatterLayer.
 
@@ -1878,9 +1869,7 @@ window.__cvSetBusy(false);
                 x0, x1, y0, y1 = viewport
                 xr, yr = (x0, x1), (y0, y1)
             self._render_all_layers(self._selection, x_range=xr, y_range=yr)
-            img = self._collapse_and_composite()
-            return self._paint_gap_separators(
-                img, xr if xr is not None else self._x_range)
+            return self._collapse_and_composite()
         finally:
             (self._layer_images, self._layer_n_in_view, self._layer_peak,
              self._layer_hist_counts, self._layer_hist_edges,
@@ -3353,7 +3342,6 @@ window.__cvSetBusy(false);
                 spread_sparse(img32, float(self._width) / img32.shape[1])
         except Exception:                                   # display only
             log.debug("spread_sparse failed", exc_info=True)
-        self._paint_gap_separators(img32, x_range)
         new_data = {
             "image": [img32],
             "x":     [x0],

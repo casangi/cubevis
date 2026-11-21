@@ -40,7 +40,27 @@ class TestTimeAxis:
         assert ax.gap == pytest.approx(1.12)
         assert ax.starts == pytest.approx((0.0, 25.12, 50.24))
         assert ax.extent == pytest.approx((0.0, 58.24))
-        assert ax.separators() == pytest.approx((24.56, 49.68))
+        assert ax.blanks == pytest.approx((1.12, 1.12))
+        assert ax.blank_centres() == pytest.approx((24.56, 49.68))
+
+    def test_a_short_gap_keeps_its_real_width(self):
+        """Closing only shrinks a gap (2026-11-21): a 1 s gap is not
+        widened to the blank, and the blank is shared among the long
+        gaps only."""
+        ax = TimeAxis.from_runs([(0, 100), (101, 200), (1000, 1100)])
+        assert ax.gap == pytest.approx(0.02 * 299)
+        assert ax.blanks == pytest.approx((1.0, 0.02 * 299))
+        assert ax.starts == pytest.approx((0.0, 101.0, 200.0 + 0.02 * 299))
+
+    def test_never_more_breaks_than_shown(self):
+        # Many short pauses inside long stretches, two long gaps: only
+        # the two long ones shrink.
+        runs = [(i * 61.0, i * 61.0 + 60.0) for i in range(30)]
+        runs += [(5000.0 + i * 61.0, 5000.0 + i * 61.0 + 60.0) for i in range(30)]
+        ax = TimeAxis.from_runs(runs)
+        real = np.asarray(ax.lo[1:]) - np.asarray(ax.hi[:-1])
+        assert np.all(np.asarray(ax.blanks) <= real + 1e-9)
+        assert sum(b < r - 1e-9 for b, r in zip(ax.blanks, real)) == 1
 
     def test_many_gaps_share_ten_percent(self):
         t = [100.0 * i for i in range(11)]               # 11 lone cells, 10 gaps
@@ -175,7 +195,7 @@ class TestClosedRaster:
         box = {"x0": -0.5, "x1": 7.5, "y0": float(u[2]) - 1, "y1": float(u[3]) + 1}
         req = plotter._flags.build_request(r, "raster", box, True)
         assert (req["y0"], req["y1"]) == pytest.approx(ta.real_span(box["y0"], box["y1"]))
-        sep = ta.separators()[0]
+        sep = ta.blank_centres()[0]
         with pytest.raises(ValueError, match="only a gap"):
             plotter._flags.build_request(
                 r, "raster", {"x0": -0.5, "x1": 7.5, "y0": sep - 0.01, "y1": sep + 0.01}, True)
@@ -200,17 +220,18 @@ class TestClosedRaster:
         full_u = np.asarray(r._agg.coords["time"].values)
         assert np.isin(np.round(du, 6), np.round(full_u, 6)).all()
 
-    def test_separators_are_drawn(self, plotter):
+    def test_blanks_are_left_empty(self, plotter):
+        """A blank shows the panel background, as a gap does with the
+        gaps shown (2026-11-21: no separator line)."""
         r = _raster(plotter)
         r.update_axes(time_gaps="closed")
         img = np.asarray(r._image_source.data["image"][0])
         rgba = img.view(np.uint8).reshape(img.shape + (4,))
         h = img.shape[0]
         y0, y1 = r._y_range
-        for s in r._time_axis.separators():
-            row = int(np.floor((s - y0) / (y1 - y0) * h))
-            assert (rgba[row, :, 3] > 0).all()           # the faint line
-            assert tuple(rgba[row, 0]) == (128, 128, 128, 110)
+        for c in r._time_axis.blank_centres():
+            row = int(np.floor((c - y0) / (y1 - y0) * h))
+            assert (rgba[row, :, 3] == 0).all()
 
 
 def test_wired_in_the_gear_tab_and_plot():

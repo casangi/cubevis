@@ -873,8 +873,67 @@ class _PartitionScanLookup:
 # geometry with the same defects; see the 2026-08 probe-miss notes in
 # VisibilityScatter._handle_probe.
 
+def partition_cell_width(ds, dim: str) -> Optional[float]:
+    """The true width of one cell of partition *ds* along *dim*, or ``None``.
+
+    ``time``: the integration time; ``frequency``: the channel width --
+    both as xarray-ms and xradio store them in the coordinate's attrs,
+    a number or ``{"attrs": {...}, "data": value}``.  The same attrs the
+    backends already read for the Time range box and the channel axis.
+    It is a raster cell's own width (``raster_grid.cell_edges``, issue
+    #38), so a lone integration or channel is drawn as wide as it is,
+    not as wide as the gap beside it.  The width is a magnitude:
+    a lower-sideband window's negative channel width counts as positive.
+    """
+    key = {"time": "integration_time", "frequency": "channel_width"}.get(dim)
+    coords = getattr(ds, "coords", None)
+    if key is None or coords is None or dim not in coords:
+        return None
+    v = getattr(coords[dim], "attrs", {}).get(key)
+    if isinstance(v, dict):
+        v = v.get("data")
+    try:
+        v = abs(float(np.asarray(v, dtype=np.float64).ravel()[0]))
+    except (TypeError, ValueError, IndexError):
+        return None
+    return v if np.isfinite(v) and v > 0 else None
+
+
+def with_cell_widths(arr, ds):
+    """*arr* (a partition's 2-D raster) with the true cell widths of *ds*
+    as coordinates on its ``time`` / ``frequency`` dimensions
+    (``raster_grid.cell_width_name``), where *ds* says what they are.
+    Carried through decimation (``isel``), the partition merge and the
+    remote wire format, for ``raster_grid.cell_edges`` (issue #38)."""
+    from ...gridplot.raster_grid import cell_width_name
+    if arr is None:
+        return arr
+    add = {}
+    for dim in ("time", "frequency"):
+        if dim in arr.dims:
+            w = partition_cell_width(ds, dim)
+            if w is not None:
+                add[cell_width_name(dim)] = (dim, np.full(arr.sizes[dim], w))
+    return arr.assign_coords(add) if add else arr
+
+
+def scale_cell_widths(agg, strides: dict):
+    """*agg* after striding (``_decimate_agg``): each cell now stands for
+    *stride* cells along its dimension, so its width is that many times
+    wider.  Without this a decimated run would be drawn as separate
+    narrow cells with gaps between (``raster_grid.cell_edges``, #38)."""
+    from ...gridplot.raster_grid import cell_width_name
+    add = {}
+    for dim, k in strides.items():
+        name = cell_width_name(dim)
+        if k and k > 1 and name in agg.coords:
+            add[name] = (dim, np.asarray(agg.coords[name].values, dtype=np.float64) * k)
+    return agg.assign_coords(add) if add else agg
+
+
 def _cell_bounds(coords: np.ndarray, idx: int,
-                 half: Optional[float] = None) -> tuple[float, float]:
+                 half: Optional[float] = None,
+                 width=None) -> tuple[float, float]:
     """Data-space ``(lo, hi)`` bounds of cell *idx* in *coords*.
 
     The rule is ``raster_grid.cell_edges`` -- the same one the image is
@@ -889,8 +948,9 @@ def _cell_bounds(coords: np.ndarray, idx: int,
     (wrong across gaps), then half the distance to each neighbour
     (2026-08; right inside a run, but the cell beside a gap reached
     halfway across it).  *half* gives an index axis (Baseline position)
-    its fixed half-width.  Handles the single-element case (zero width
-    unless *half* is given).
+    its fixed half-width; *width* the cells' true widths (what the
+    aggregate carries, issue #38).  Handles the single-element case
+    (zero width unless *half* or *width* is given).
     """
     from ...gridplot.raster_grid import cell_edges
     n = len(coords)
@@ -898,7 +958,7 @@ def _cell_bounds(coords: np.ndarray, idx: int,
         raise IndexError("empty coordinate array")
     if not (0 <= idx < n):
         raise IndexError(f"index {idx} out of range for {n} coordinates")
-    lo, hi = cell_edges(coords, half)
+    lo, hi = cell_edges(coords, half, width)
     return float(lo[idx]), float(hi[idx])
 
 
@@ -1354,6 +1414,19 @@ def to_channel_index(agg, axis: str, ref_freq: "np.ndarray"):
     idx = np.where(take_left, left, pos).astype(np.int64)
 
     out = agg.assign_coords({dim: idx})
+    from ...gridplot.raster_grid import cell_width_name
+    if cell_width_name(dim) in out.coords:
+        # The widths were in Hz.  On a channel index a channel is 1 wide,
+        # and a cell of a decimated axis as many channels as it stands
+        # for (its Hz width already carries the stride).
+        whz = np.asarray(out.coords[cell_width_name(dim)].values, dtype=np.float64)
+        step = float(np.median(np.abs(np.diff(ref)))) if ref.size > 1 else 0.0
+        if step > 0:
+            with np.errstate(invalid="ignore"):
+                wi = np.where(np.isfinite(whz), np.maximum(1.0, np.rint(whz / step)), 1.0)
+        else:
+            wi = np.ones(idx.size)
+        out = out.assign_coords({cell_width_name(dim): (dim, wi)})
     out.attrs = dict(agg.attrs)
     out.attrs[CHANNEL_AXIS_ATTR] = axis
     out.attrs[CHANNEL_REF_ATTR] = ref

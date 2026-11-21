@@ -693,6 +693,15 @@ class VisibilityRaster(VisibilityPlot):
             return TimeAxis.HALF
         return None
 
+    def _axis_width(self, agg, dim_name: str):
+        """The true cell widths *agg* carries along *dim_name* (one per
+        cell; ``raster_grid.cell_edges``, issue #38) -- or ``None``: on an
+        axis with a fixed half-width (``_axis_half``), or when the reader
+        sent none (a kernel from before #38: drawn as before)."""
+        if self._axis_half(dim_name) is not None:
+            return None
+        return _rg.cell_widths(agg, dim_name)
+
     @property
     def time_gaps(self) -> str:
         return self._time_gaps
@@ -710,7 +719,7 @@ class VisibilityRaster(VisibilityPlot):
             return agg
         t = np.asarray(agg.coords["time"].values, dtype=np.float64)
         if primary:
-            self._time_axis = TimeAxis.build(t)
+            self._time_axis = TimeAxis.build(t, width=_rg.cell_widths(agg, "time"))
         axis = self._time_axis
         if axis is None:
             return agg
@@ -783,7 +792,8 @@ class VisibilityRaster(VisibilityPlot):
         """
         out = []
         for dim, (b0, b1) in ((agg.dims[1], x_range), (agg.dims[0], y_range)):
-            ext = _rg.extent(agg.coords[dim].values, self._axis_half(dim))
+            ext = _rg.extent(agg.coords[dim].values, self._axis_half(dim),
+                             self._axis_width(agg, dim))
             if ext is None or ext[0] == ext[1]:
                 out.append((float(b0), float(b1)))
             elif (dim == "baseline_id" or dim in _ANT_DIMS
@@ -825,7 +835,9 @@ class VisibilityRaster(VisibilityPlot):
         y_name, x_name = agg.dims
         yc = np.asarray(agg.coords[y_name].values, dtype=np.float64)
         xc = np.asarray(agg.coords[x_name].values, dtype=np.float64)
-        kw = dict(y_half=self._axis_half(y_name), x_half=self._axis_half(x_name))
+        kw = dict(y_half=self._axis_half(y_name), x_half=self._axis_half(x_name),
+                  y_width=self._axis_width(agg, y_name),
+                  x_width=self._axis_width(agg, x_name))
 
         def draw(values):
             return _rg.resample(values, yc, xc, x_range, y_range,
@@ -1603,7 +1615,8 @@ window.__cvSetBusy(false);
             for which, dim, rng_ in (("x", agg.dims[1], self._x_range),
                                      ("y", agg.dims[0], self._y_range)):
                 lo, hi = _rg.cell_edges(agg.coords[dim].values,
-                                        self._axis_half(dim))
+                                        self._axis_half(dim),
+                                        self._axis_width(agg, dim))
                 w = np.median(hi - lo) if lo.size else 0.0
                 if w > 0 and rng_[1] > rng_[0]:
                     n = max(1, int(round((rng_[1] - rng_[0]) / w)))
@@ -1981,7 +1994,8 @@ window.__cvSetBusy(false);
     already on the axis, see ``_detail_selection``)."""
 
     def _typical_cell(self, agg, dim: str) -> float:
-        lo, hi = _rg.cell_edges(agg.coords[dim].values, self._axis_half(dim))
+        lo, hi = _rg.cell_edges(agg.coords[dim].values, self._axis_half(dim),
+                                self._axis_width(agg, dim))
         return float(np.median(hi - lo)) if lo.size else 0.0
 
     def _finer_than(self, agg, extent_x, extent_y, x0, x1, y0, y1) -> bool:
@@ -2290,8 +2304,10 @@ window.__cvSetBusy(false);
         y_coords = agg.coords[y_dim_name].values
         x_centre = float(x_coords[gx])
         y_centre = float(y_coords[gy])
-        x_range  = _cell_bounds(x_coords, gx, self._axis_half(x_dim_name))
-        y_range  = _cell_bounds(y_coords, gy, self._axis_half(y_dim_name))
+        x_range  = _cell_bounds(x_coords, gx, self._axis_half(x_dim_name),
+                                self._axis_width(agg, x_dim_name))
+        y_range  = _cell_bounds(y_coords, gy, self._axis_half(y_dim_name),
+                                self._axis_width(agg, y_dim_name))
 
         t_range = bl_range = freq_range = None
         if {x_dim_name, y_dim_name} <= set(_ANT_DIMS):
@@ -2689,6 +2705,8 @@ window.__cvSetBusy(false);
                     hit, oagg.coords[y_name].values, oagg.coords[x_name].values,
                     tuple(x_range), tuple(y_range), img32.shape[1], img32.shape[0],
                     y_half=self._axis_half(y_name), x_half=self._axis_half(x_name),
+                    y_width=self._axis_width(oagg, y_name),
+                    x_width=self._axis_width(oagg, x_name),
                     how="any") > 0
                 _composite_flag_mask(img32, mask, rgba)
             except Exception:
@@ -2715,15 +2733,17 @@ window.__cvSetBusy(false);
         # which in a gap is a cell the cursor is not on.  A point beyond
         # either end of an axis still clips to the end cell, as it
         # always has (callers range-check first).
-        def find(coords, v, half):
-            ext = _rg.extent(coords, half)
+        def find(coords, v, half, width):
+            ext = _rg.extent(coords, half, width)
             if v <= ext[0]:
                 return int(np.argmin(coords))
             if v >= ext[1]:
                 return int(np.argmax(coords))
-            return _rg.locate(coords, v, half)
-        px = find(x_coords, x, self._axis_half(x_dim_name))
-        py = find(y_coords, y, self._axis_half(y_dim_name))
+            return _rg.locate(coords, v, half, width)
+        px = find(x_coords, x, self._axis_half(x_dim_name),
+                  self._axis_width(agg, x_dim_name))
+        py = find(y_coords, y, self._axis_half(y_dim_name),
+                  self._axis_width(agg, y_dim_name))
         if px < 0 or py < 0:
             return None, None
         return px, py

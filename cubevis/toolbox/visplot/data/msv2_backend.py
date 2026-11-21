@@ -76,6 +76,8 @@ from .reader import (
     select_polarization,
     channel_axis_is_unambiguous,
     to_channel_index,
+    with_cell_widths,
+    scale_cell_widths,
     XArrayReader,
     _compute_axis_values,
     ScatterLayerSpec,
@@ -1828,6 +1830,10 @@ class MSv2Backend(XArrayReader):
                 _n = arr.attrs.get('zscore_n_reduced')
                 if _n is not None:
                     zscore_n_list.append(int(_n))
+                # The true cell widths (integration time, channel width),
+                # for a cell with no neighbour to take a width from
+                # (raster_grid.cell_edges, issue #38).
+                arr = with_cell_widths(arr, ds)
                 # Decimate per-partition before .compute() so Dask only
                 # reads the strided rows from disk.  Each partition's stride
                 # is computed independently from its local cell count; the
@@ -2778,7 +2784,8 @@ def _decimate_agg(
         {y_name: slice(None, None, stride_y),
          x_name: slice(None, None, stride_x)},
     )
-    return agg_out, True
+    # Each kept cell stands for a stride's worth (issue #38).
+    return scale_cell_widths(agg_out, {y_name: stride_y, x_name: stride_x}), True
 
 
 def _count_selected_time(ds: xr.Dataset, sel: SelectionSpec) -> int:

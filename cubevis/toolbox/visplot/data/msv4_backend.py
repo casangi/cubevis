@@ -121,6 +121,8 @@ from .reader import (
     select_polarization,
     channel_axis_is_unambiguous,
     to_channel_index,
+    with_cell_widths,
+    scale_cell_widths,
     XArrayReader,
     _compute_axis_values,
     ScatterLayerSpec,
@@ -2039,6 +2041,10 @@ class MSv4Backend(XArrayReader):
                 _n = arr.attrs.get('zscore_n_reduced')
                 if _n is not None:
                     zscore_n_list.append(int(_n))
+                # The true cell widths (integration time, channel width),
+                # for a cell with no neighbour to take a width from
+                # (raster_grid.cell_edges, issue #38).
+                arr = with_cell_widths(arr, ds)
                 arr, _dec = _decimate_agg(arr, y_name, x_name, max_cells)
                 any_partition_decimated = any_partition_decimated or _dec
                 lazy_arrs.append(arr)
@@ -3147,10 +3153,12 @@ def _decimate_agg(
         max_cells,
     )
 
-    return agg.isel(
+    out = agg.isel(
         {y_name: slice(None, None, stride_y),
          x_name: slice(None, None, stride_x)},
-    ), True
+    )
+    # Each kept cell stands for a stride's worth (issue #38).
+    return scale_cell_widths(out, {y_name: stride_y, x_name: stride_x}), True
 
 
 def _count_selected_time(ds: xr.Dataset, sel: SelectionSpec) -> int:

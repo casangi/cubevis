@@ -42,6 +42,16 @@ Each coordinate is the centre of its cell.
   box that covers only the gap selects nothing.
 * An *index* axis (Baseline position, Channel number) has cells of
   half-width 0.5 about each integer; pass ``half=0.5``.
+* A cell with no neighbour close by (a lone integration between two
+  gaps, a single channel, an axis of one cell) has nothing to take a
+  width from: its nearer neighbour is across a gap, and until 2026-11-20
+  (issue #38) such a cell was drawn as wide as that gap -- and two lone
+  cells took their widths from each other and were drawn joined.  When
+  the data says how wide a cell is (``width=``: the integration time,
+  the channel width, times the stride after decimation), that width is
+  the cell's own, in the gap test as well.  The widths travel with a
+  raster aggregate as a coordinate on its dimension
+  (:func:`cell_width_name`).
 
 The baseline axis
 -----------------
@@ -90,12 +100,61 @@ def normalize_baseline_order(value) -> str:
 # Cells                                                                    #
 # ---------------------------------------------------------------------- #
 
-def cell_edges(coords, half: Optional[float] = None) -> tuple[np.ndarray, np.ndarray]:
+CELL_WIDTH_SUFFIX = "_cell_width"
+"""A raster aggregate's true cell widths along dimension ``d`` ride as the
+coordinate ``d + CELL_WIDTH_SUFFIX`` on ``d`` (issue #38)."""
+
+
+def cell_width_name(dim: str) -> str:
+    """The name of the cell-width coordinate on dimension *dim*."""
+    return f"{dim}{CELL_WIDTH_SUFFIX}"
+
+
+def cell_widths(agg, dim: str) -> Optional[np.ndarray]:
+    """The true cell widths an aggregate carries along *dim* (aligned with
+    its *dim* coordinate), or ``None`` when it carries none."""
+    coords = getattr(agg, "coords", None)
+    name = cell_width_name(dim)
+    if coords is None or name not in coords:
+        return None
+    w = np.asarray(coords[name].values, dtype=np.float64).ravel()
+    n = np.asarray(coords[dim].values).size if dim in coords else w.size
+    return w if w.size == n else None
+
+
+def _as_widths(width, n: int) -> Optional[np.ndarray]:
+    """*width* (``None``, one number or one per cell) as *n* full widths;
+    NaN where unknown."""
+    if width is None:
+        return None
+    w = np.abs(np.asarray(width, dtype=np.float64).ravel())
+    if w.size == 1:
+        w = np.full(n, w[0])
+    if w.size != n:
+        raise ValueError(f"cell_edges: {w.size} widths for {n} coordinates")
+    return w
+
+
+def cell_edges(coords, half: Optional[float] = None,
+               width=None) -> tuple[np.ndarray, np.ndarray]:
     """``(lo, hi)``: the edges of the cell centred on each of *coords*.
 
-    *coords* may be in any order; the result is aligned with it.  A
-    single coordinate with no *half* has zero width (there is nothing to
-    measure a width from).
+    *coords* may be in any order; the result is aligned with it.
+
+    *half* fixes every cell's half-width (an index axis).
+
+    *width* is how much of the axis each cell stands for -- the
+    integration time or channel width, times the stride when the
+    aggregate was decimated -- one number, or one per coordinate, NaN
+    where unknown.  Where it is known it is the cell's own width: in the
+    test for a gap, and for a side with no neighbour joined to it (see
+    the module docstring).  Without it a cell's width is taken from its
+    nearer neighbour, as before #38.  Joined cells share an edge as
+    before, so a run whose spacing is up to ``GAP_FACTOR`` times the
+    width is still drawn without stripes; a side with no joined
+    neighbour is capped at half the distance to that neighbour, so cells
+    never overlap.  A single coordinate with neither *half* nor *width*
+    has zero width.
     """
     c = np.asarray(coords, dtype=np.float64).ravel()
     n = c.size
@@ -103,16 +162,25 @@ def cell_edges(coords, half: Optional[float] = None) -> tuple[np.ndarray, np.nda
         return np.zeros(0), np.zeros(0)
     if half is not None:
         return c - half, c + half
+    w = _as_widths(width, n)
     if n == 1:
+        own = w[0] / 2.0 if w is not None else np.nan
+        if np.isfinite(own) and own > 0:
+            return c - own, c + own
         return c.copy(), c.copy()
 
     order = np.argsort(c, kind="stable")
     cs = c[order]
     d = np.diff(cs)
-    # Own half-width: half the distance to the nearer neighbour.
+    # Half the distance to the nearer neighbour: the most a cell can
+    # take without overlapping it, and its width when nothing says more.
     left = np.concatenate([[np.inf], d])
     right = np.concatenate([d, [np.inf]])
-    h = np.minimum(left, right) / 2.0
+    h_near = np.minimum(left, right) / 2.0
+    h = h_near
+    if w is not None:
+        own = w[order] / 2.0
+        h = np.where(np.isfinite(own) & (own > 0), np.minimum(own, h_near), h_near)
 
     lo_s = cs - h
     hi_s = cs + h
@@ -133,20 +201,22 @@ def cell_edges(coords, half: Optional[float] = None) -> tuple[np.ndarray, np.nda
     return lo, hi
 
 
-def extent(coords, half: Optional[float] = None) -> Optional[tuple[float, float]]:
+def extent(coords, half: Optional[float] = None,
+           width=None) -> Optional[tuple[float, float]]:
     """Outer edges of the cells of *coords*, or ``None`` if there are none."""
-    lo, hi = cell_edges(coords, half)
+    lo, hi = cell_edges(coords, half, width)
     if lo.size == 0:
         return None
     return float(lo.min()), float(hi.max())
 
 
-def locate(coords, value: float, half: Optional[float] = None) -> int:
+def locate(coords, value: float, half: Optional[float] = None,
+           width=None) -> int:
     """Index of the cell containing *value*, or ``-1`` (a gap, or outside)."""
     c = np.asarray(coords, dtype=np.float64).ravel()
     if c.size == 0:
         return -1
-    lo, hi = cell_edges(c, half)
+    lo, hi = cell_edges(c, half, width)
     inside = np.flatnonzero((lo <= value) & (value <= hi))
     if inside.size == 0:
         return -1
@@ -157,13 +227,13 @@ def locate(coords, value: float, half: Optional[float] = None) -> int:
 
 
 def overlapping(coords, lo: float, hi: float,
-                half: Optional[float] = None) -> np.ndarray:
+                half: Optional[float] = None, width=None) -> np.ndarray:
     """Mask of the cells of *coords* that overlap ``[lo, hi]``."""
     c = np.asarray(coords, dtype=np.float64).ravel()
     lo, hi = min(lo, hi), max(lo, hi)
     if c.size == 0:
         return np.zeros(0, dtype=bool)
-    clo, chi = cell_edges(c, half)
+    clo, chi = cell_edges(c, half, width)
     return (chi >= lo) & (clo <= hi)
 
 
@@ -232,6 +302,7 @@ def _reduce(sums: np.ndarray, counts: np.ndarray, first, last, axis: int):
 def resample(values, y_coords, x_coords, x_range, y_range,
              width: int, height: int, *,
              y_half: Optional[float] = None, x_half: Optional[float] = None,
+             y_width=None, x_width=None,
              how: str = "mean") -> np.ndarray:
     """Draw a grid of cells into a ``height x width`` array of pixels.
 
@@ -246,6 +317,8 @@ def resample(values, y_coords, x_coords, x_range, y_range,
         end of *y_range*.
     y_half, x_half :
         Fixed half-width for an index axis (see :func:`cell_edges`).
+    y_width, x_width :
+        True cell widths (see :func:`cell_edges`).
     how :
         ``"mean"``: a pixel covering several cells shows the mean of
         their finite values.  ``"any"``: a pixel is 1.0 if any of its
@@ -280,8 +353,8 @@ def resample(values, y_coords, x_coords, x_range, y_range,
     if x0 == x1 or y0 == y1:
         return blank
 
-    ylo, yhi = cell_edges(yc, y_half)
-    xlo, xhi = cell_edges(xc, x_half)
+    ylo, yhi = cell_edges(yc, y_half, y_width)
+    xlo, xhi = cell_edges(xc, x_half, x_width)
     fy, ly = _pixel_cells(ylo, yhi, yc, y0, y1, height)
     fx, lx = _pixel_cells(xlo, xhi, xc, x0, x1, width)
 
@@ -492,10 +565,18 @@ class TimeAxis:
     """Blank positions drawn where the cells had a gap."""
 
     @classmethod
-    def build(cls, times) -> "TimeAxis":
-        t = np.unique(np.asarray(times, dtype=np.float64).ravel())
-        t = t[np.isfinite(t)]
-        lo, hi = cell_edges(t)
+    def build(cls, times, width=None) -> "TimeAxis":
+        """*width*: the cells' true widths (one number, or one per entry
+        of *times*), so a lone integration's real span is its own (#38)."""
+        raw = np.asarray(times, dtype=np.float64).ravel()
+        w = _as_widths(width, raw.size)
+        ok = np.isfinite(raw)
+        t, inv = np.unique(raw[ok], return_inverse=True)
+        tw = None
+        if w is not None:
+            tw = np.full(t.size, np.nan)
+            np.fmax.at(tw, inv, w[ok])
+        lo, hi = cell_edges(t, width=tw)
         brk = np.zeros(t.size, dtype=np.int64)
         if t.size > 1:
             brk[1:] = (lo[1:] > hi[:-1]).astype(np.int64)

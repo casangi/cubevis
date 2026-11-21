@@ -235,3 +235,37 @@ def test_a_cubevis_without_a_root_has_a_fingerprint_that_differs(tmp_path):
     assert not ok and "code differs" in why
     with pytest.raises(FileNotFoundError):              # closure itself still insists
         F.closure(root=old)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_changed_says_whether_the_kernel_side_needs_a_new_fingerprint(tmp_path, capsys):
+    """``python -m cubevis._fingerprint --changed REF`` (debug-0004): the
+    fingerprint at REF and here, and the kernel-side modules whose code
+    (not comments or docstrings) differs."""
+    root = _pkg(tmp_path, {
+        "cubevis/__init__.py": "",
+        "cubevis/remote/__init__.py": "",
+        "cubevis/remote/worker_main.py": "from ..util import k\n",
+        "cubevis/util/__init__.py": "",
+        "cubevis/util/k.py": "K = 1\n",
+        "cubevis/gui.py": "G = 1\n",
+    })
+    git = lambda *a: subprocess.run(("git", "-C", root) + a, check=True,
+                                    capture_output=True, text=True)
+    git("init", "-q")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "add", ".")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    r = F.changed("HEAD", root)
+    assert r["before"] == r["after"] and r["modules"] == []
+    (tmp_path / "cubevis/gui.py").write_text("G = 2\n")             # not kernel side
+    (tmp_path / "cubevis/util/k.py").write_text("# a note\nK = 1\n")   # comment only
+    assert F.changed("HEAD", root)["modules"] == []
+    (tmp_path / "cubevis/util/k.py").write_text("K = 2\n")
+    r = F.changed("HEAD", root)
+    assert r["before"] != r["after"] and r["modules"] == ["cubevis.util.k"]
+    assert F.main(["--changed", "HEAD", "--root", root]) == 0
+    out = capsys.readouterr().out
+    assert "CHANGED" in out and "cubevis.util.k" in out
+    assert F.main(["--list", "--root", root]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == F.fingerprint(root=root) and "  cubevis.util.k" in lines

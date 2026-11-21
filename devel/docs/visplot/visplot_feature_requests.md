@@ -40,7 +40,12 @@ spacing of its neighbours (`raster_grid.cell_edges`), so a lone channel
 of an SPW, or a lone integration of a scan, is drawn as wide as the
 distance to the next one (two one-channel SPWs each filling half a
 Frequency axis).  The fix is to carry the true channel widths and
-integration intervals with the aggregate.
+integration intervals with the aggregate.  **Fixed in `debug-0004`
+(issue #38)**: the aggregate carries `time_cell_width` /
+`frequency_cell_width` (times the stride after decimation), and
+`cell_edges` uses a cell's own width wherever it is known, in the gap
+test as well, so two lone cells no longer take their widths from each
+other; `tests/manual/visplot/test_cell_widths.py`.
 
 The sections below are the original planning notes.
 

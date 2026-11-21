@@ -155,6 +155,7 @@ class LocalVisibilityReader:
         height: int = 600,
         probe_grid_max_cells: int = 3072,
         ref_scale: Optional[float] = None,
+        x_runs: Optional[list] = None,
     ):
         """Delegate to ``backend.query_columns``.
 
@@ -169,7 +170,7 @@ class LocalVisibilityReader:
                 x_range=x_range, y_range=y_range, color_mode=color_mode,
                 width=width, height=height,
                 probe_grid_max_cells=probe_grid_max_cells,
-                ref_scale=ref_scale,
+                ref_scale=ref_scale, x_runs=x_runs,
             )
 
     def probe_scatter_region(

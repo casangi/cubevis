@@ -43,7 +43,7 @@ import numpy as np
 from bokeh.models import ColumnDataSource
 
 import dataclasses
-from .visibility_plot import _composite_flag_mask, _paint_separators
+from .visibility_plot import _composite_flag_mask, _paint_separators, _gaps_closed
 from .visibility_plot import _CV_SET_BUSY_JS
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
@@ -114,17 +114,6 @@ _DEFAULT_SCALING = "eq_hist"
 _COMBINE_WORDS = {"mean": "mean of baselines", "max": "max of baselines",
                   "median": "median of baselines",
                   "coherent": "baselines added coherently"}
-
-
-def _gaps_closed(label: str, closed) -> str:
-    """*label* with "(gaps closed)" after the name and before any unit
-    ("Time (gaps closed) [s]"), when *closed* says the axis has its gaps
-    closed: the axis label keeps the name, drops the unit and adds the
-    date (PanelSpec.axis_label), so the note must sit in the name."""
-    if not closed:
-        return label
-    i = label.find(" [")
-    return (label[:i] + " (gaps closed)" + label[i:]) if i >= 0 else label + " (gaps closed)"
 
 
 def _auto_title(quantity: "Axis", y_label: str, x_label: str,

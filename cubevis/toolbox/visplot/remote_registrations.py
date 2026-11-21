@@ -200,7 +200,8 @@ class VisplotRemoteBackend:
                        x_range=None, y_range=None, color_mode="global",
                        width: int = 800, height: int = 600,
                        probe_grid_max_cells: int = 3072,
-                       ref_scale: Optional[float] = None):
+                       ref_scale: Optional[float] = None,
+                       x_runs: Optional[list] = None):
         # See RemoteReductionContext.query_columns's comment: this now
         # relays a bounded ScatterRenderResult, not raw DataFrames --
         # MSv2Backend.query_columns does the binning+shading (2026-09).
@@ -223,7 +224,7 @@ class VisplotRemoteBackend:
             x_range=x_range, y_range=y_range, color_mode=color_mode,
             width=width, height=height,
             probe_grid_max_cells=probe_grid_max_cells,
-            ref_scale=ref_scale,
+            ref_scale=ref_scale, x_runs=x_runs,
         )
 
     def probe_scatter_region(self, x_axis, yaxes, selection, x_range, y_range,

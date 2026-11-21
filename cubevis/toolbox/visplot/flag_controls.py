@@ -417,8 +417,8 @@ class FlagController:
             bl_axis = getattr(panel, "_bl_axis", None)
             if bl_axis is not None and Axis.BASELINE in (x_ax, y_ax):
                 req["baseline_order"] = [int(i) for i in bl_axis.ids]
-            # A Time axis with its gaps closed (debug-0003) is in positions
-            # too: the box becomes the real times of the cells it covers.
+            # A Time axis with its gaps closed (debug-0003; runs-based
+            # since #36): the box becomes the real times it covers.
             # Across a closed gap that includes the gap itself, which holds
             # nothing of this selection.
             t_axis = getattr(panel, "_time_axis", None)
@@ -441,6 +441,15 @@ class FlagController:
         else:
             layers = scatter_layer_entries(panel)
             req.update(x_axis=x_ax.name, layers=layers)
+            # X = Time with its gaps closed (#36): the box as real times,
+            # as on the raster.
+            t_axis = getattr(panel, "_time_axis", None)
+            if t_axis is not None and x_ax == Axis.TIME:
+                span = t_axis.real_span(req["x0"], req["x1"])
+                if span is None:
+                    raise ValueError("the box covers only a gap between scans, "
+                                     "where there is no data")
+                req["x0"], req["x1"] = span
             prov = (f"scatter box {x_ax.name} {_rng(x_ax, req['x0'], req['x1'])} x "
                     f"{_rng(None, req['y0'], req['y1'])} on "
                     + ", ".join(f"{l['y_axis']}({l['polarization']})" for l in layers))

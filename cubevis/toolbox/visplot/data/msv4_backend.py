@@ -1138,6 +1138,7 @@ class MSv4Backend(XArrayReader):
         height: int = 600,
         probe_grid_max_cells: int = 3072,
         ref_scale: Optional[float] = None,
+        x_runs: Optional[list] = None,
     ) -> ScatterRenderResult:
         """Query, bin, and shade scatter layers; return a bounded render result.
 
@@ -1176,6 +1177,10 @@ class MSv4Backend(XArrayReader):
         # Part 6: frames come from the per-layer cache when this selection
         # was already read (a pan, zoom, recolor or export), else from disk.
         dataframes = self._query_columns_cached(xaxis, all_keys, selection)
+        # Time gaps closed (issue #36): X = Time on the closed axis the
+        # widget made from the selection's runs (reader.axis_runs).
+        if x_runs and xaxis == Axis.TIME:
+            dataframes = _scatter_render.close_x_gaps(dataframes, x_runs)
 
         # Part 6: merge each statistical layer's own (y_axis, pol) frame
         # with its (Z_SCORE, pol) frame on the identity columns every

@@ -3768,6 +3768,7 @@ class XArrayReader(abc.ABC):
         height: int = 600,
         probe_grid_max_cells: int = 3072,
         ref_scale: Optional[float] = None,
+        x_runs: Optional[list] = None,
     ) -> "ScatterRenderResult":
         """Query, bin, and shade scatter layers; return a bounded result.
 
@@ -3807,6 +3808,12 @@ class XArrayReader(abc.ABC):
         site that existed before this feature -- see the scatter
         two-level rendering handoff notes (2026-09) for the full design
         and ``ScatterLayerReference`` for what it holds.
+
+        ``x_runs`` (issue #36): X = Time with its gaps closed -- the
+        selection's runs (``axis_runs``), and every ``x`` is put on the
+        closed axis they make (``_scatter_render.close_x_gaps``);
+        ``x_range`` is then in closed coordinates too.  ``None``: real
+        times, as before.
 
         Implemented identically by both ``MSv2Backend`` and
         ``MSv4Backend`` (2026-09).

@@ -503,6 +503,7 @@ class RemoteReductionContext(ReductionContext):
         height: int = 600,
         probe_grid_max_cells: int = 3072,
         ref_scale: Optional[float] = None,
+        x_runs: Optional[list] = None,
         timeout: Optional[float] = None,
     ):
         # STRAIGHT RELAY -- and correctly so now. MSv2Backend.query_columns
@@ -527,6 +528,9 @@ class RemoteReductionContext(ReductionContext):
         # a plain dataclass, which composes with it via the existing
         # generic dataclass wire support the same way ScatterLayerSpec
         # already does.
+        # x_runs (#36, closed time gaps): sent only when set, so a scatter
+        # with its gaps shown still works against an older worker.
+        extra = {"x_runs": [list(map(float, r)) for r in x_runs]} if x_runs else {}
         return self._call(
             "query_columns",
             xaxis=xaxis, layers=layers, selection=selection,
@@ -534,7 +538,7 @@ class RemoteReductionContext(ReductionContext):
             width=width, height=height,
             probe_grid_max_cells=probe_grid_max_cells,
             ref_scale=ref_scale,
-            timeout=timeout,
+            timeout=timeout, **extra,
         )
 
     def probe_scatter_region(

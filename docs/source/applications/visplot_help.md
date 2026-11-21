@@ -254,8 +254,9 @@ data are drawn side by side either way.
 
 ### Time gaps
 
-How a raster's Time axis treats stretches with no data, such as the time
-spent on other fields between the scans of the one shown.
+How a Time axis treats stretches with no data, such as the time spent on
+other fields between the scans of the one shown: a raster's, or a
+scatter's with X = Time.
 
 * **Shown** (the default): time is drawn to scale. A field observed in
   short scans with long gaps between them shows as thin bands in
@@ -270,12 +271,14 @@ spent on other fields between the scans of the one shown.
   label says "(gaps closed)". The cursor readout and flag boxes work in
   real time: a box drawn across a closed gap covers the scans on both
   sides, and the gap itself, which holds no data of the selection.
-* With the gaps closed the axis does not line up with a scatter of
-  X = Time beside it. The linked cursor still follows: over the raster
-  it marks the same time on the scatter, and over a scatter's time in a
-  closed gap it shows nothing on the raster.
+* A raster and a scatter of X = Time with their gaps closed share one
+  closed axis, so they line up. With the gaps closed on one and shown on
+  the other they do not, but the linked cursor still follows: over one
+  it marks the same time on the other, and over a time in a closed gap
+  it shows nothing.
 * Zooming in reads finer cells, as with the gaps shown.
-* Each panel has its own setting, in its gear tab. Applied by **Plot**.
+* Each panel has its own setting, in its gear tab (for a scatter, shown
+  when X is Time). Applied by **Plot**.
 
 (vp-twin)=
 

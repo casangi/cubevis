@@ -280,6 +280,8 @@ _STATIC_HINTS = {
         "<b>Color scaling</b> \u2014 how values are spread over the colors; changes the picture, never the data  | <b>eq_hist</b>: every color used equally; shows faint structure  | <b>linear</b>: honest about size  | <b>log / sqrt</b>: in between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights above a cutoff", "vp-scaling"),
     "bcombine": (
         "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines (a raster without Baseline on an axis). Averaging applies within each baseline; this is how the baselines are combined  | <b>Mean</b>: the general picture  | <b>Median</b>: what most baselines share  | <b>Maximum</b>: a problem shows even on one baseline  | <b>Vector (coherent)</b>: a complex sum, for a calibrated point source; Vector averaging only", "vp-bcombine"),
+    "s_tgaps": (
+        "<b>Time gaps</b> \u2014 with X = Time, how this scatter treats stretches with no data  | <b>Shown</b>: time to scale  | <b>Closed</b>: each stretch with data to scale, side by side, with a small blank and a faint line where there was a gap, as on a raster; the ticks read the real times  | Applied by Plot", "vp-time-gaps"),
     "tgaps": (
         "<b>Time gaps</b> \u2014 how this raster's Time axis treats stretches with no data  | <b>Shown</b>: time to scale; a field observed in short scans is mostly blank space between thin bands  | <b>Closed</b>: each stretch with data to scale, side by side, with a small blank and a faint line where there was a gap; the ticks read the real times  | Applied by Plot", "vp-time-gaps"),
     "border": (
@@ -6598,6 +6600,12 @@ for (const dt of other.tools) {
                 except ValueError as exc:
                     log.warning("_handle_plot: %s (panel %s)", exc, slot.id)
                     s_at, s_ac, s_am = panel._avg_time, panel._avg_chan, panel._averaging
+                # Time gaps with X = Time (#36).  Absent: keep.
+                try:
+                    s_tg = (normalize_time_gaps(panel_msg["time_gaps"])
+                            if panel_msg.get("time_gaps") else panel.time_gaps)
+                except ValueError:
+                    s_tg = panel.time_gaps
 
                 never_rendered = (not panel._layers or
                                   all(img is None for img in panel._layer_images))
@@ -6619,7 +6627,8 @@ for (const dt of other.tools) {
                     s_cwin != panel._stat_chan_window or
                     s_at != panel._avg_time or
                     s_ac != panel._avg_chan or
-                    s_am != panel._averaging
+                    s_am != panel._averaging or
+                    s_tg != panel.time_gaps
                 )
                 try:
                     if axes_changed:
@@ -6639,7 +6648,7 @@ for (const dt of other.tools) {
                                 panel.update_axes, x_dim=x, layers=layers,
                                 detrend=s_det, stat_time_window=s_twin,
                                 stat_chan_window=s_cwin, avg_time=s_at,
-                                avg_chan=s_ac, averaging=s_am)
+                                avg_chan=s_ac, averaging=s_am, time_gaps=s_tg)
                         # POST-2026-09: _layer_aggs is permanently
                         # [None] * n now (vestigial -- see
                         # ScatterRenderResult's docstring in
@@ -8359,10 +8368,22 @@ for (let i = 0; i < cols.length; i++) {
                                         icon_stylesheets=[dark, self._icon_btn_css])
         cmap_widgets += info_sel.widgets()
 
+        # Time gaps (#36): with X = Time, shown or closed, as on a raster.
+        stg_sel = Select(
+            title="Time gaps", value=getattr(slot.scatter, "time_gaps", "shown"),
+            options=[("shown", "Shown"), ("closed", "Closed")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        stg_box = self._hover(stg_sel, "s_tgaps")
+        stg_box.visible = (sx_sel.value == "TIME")
+        sx_sel.js_on_change("value", CustomJS(
+            args={"box": stg_box},
+            code="box.visible = (cb_obj.value === 'TIME');"))
+
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Scatter ──</span>", width=_SIDEBAR_WIDTH),
-            self._hover(sx_sel, "s_x"), self._hover(sy_sel, "s_y"),
+            self._hover(sx_sel, "s_x"), stg_box, self._hover(sy_sel, "s_y"),
             savg_box,
             sd_box, st_box, sc_box,
             self._hover(column(*extra_children, width=_SIDEBAR_WIDTH),
@@ -8373,6 +8394,7 @@ for (let i = 0; i < cols.length; i++) {
             "x_sel": sx_sel, "y_sel": sy_sel,
             "detrend_sel": sd_sel, "twin_sel": st_sel, "cwin_sel": sc_sel,
             "avg_time_sel": sat_sel, "avg_chan_sel": sac_sel, "avg_mode_sel": sam_sel,
+            "tgaps_sel": stg_sel,
             "info_selectors": info_sel,
             "layer_select": layer_select, "layer_columns": layer_columns,
             "cmap_widgets": cmap_widgets,
@@ -10414,7 +10436,7 @@ function doPlot(reload) {
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
                                 colorize_handles, ra_sel, rd_sel, rt_sel, rc_sel,
                                 rb_sel, rm_sel, sat_sel, sac_sel, sam_sel,
-                                sd_sel, st_sel, sc_sel, rk_sel, tg_sel) {
+                                sd_sel, st_sel, sc_sel, rk_sel, tg_sel, stg_sel) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
                     averaging: ra_sel.value, detrend: rd_sel.value,
@@ -10429,7 +10451,8 @@ function doPlot(reload) {
                      detrend: sd_sel.value, twin: st_sel.value, cwin: sc_sel.value,
                      avg_time: sat_sel ? sat_sel.value : null,
                      avg_chan: sac_sel ? sac_sel.value : null,
-                     averaging: sam_sel ? sam_sel.value : null};
+                     averaging: sam_sel ? sam_sel.value : null,
+                     time_gaps: stg_sel ? stg_sel.value : null};
         }
     }
     """ + _RASTER_AXES_RULE_JS + """
@@ -10491,14 +10514,16 @@ function doPlot(reload) {
         panel0_rd_sel, panel0_rt_sel, panel0_rc_sel, panel0_rb_sel, panel0_rm_sel,
         panel0_sat_sel, panel0_sac_sel, panel0_sam_sel,
         panel0_sd_sel, panel0_st_sel, panel0_sc_sel, panel0_rk_sel,
-        (typeof panel0_tg_sel !== 'undefined') ? panel0_tg_sel : null);
+        (typeof panel0_tg_sel !== 'undefined') ? panel0_tg_sel : null,
+        (typeof panel0_stg_sel !== 'undefined') ? panel0_stg_sel : null);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
         panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel,
         panel1_rd_sel, panel1_rt_sel, panel1_rc_sel, panel1_rb_sel, panel1_rm_sel,
         panel1_sat_sel, panel1_sac_sel, panel1_sam_sel,
         panel1_sd_sel, panel1_st_sel, panel1_sc_sel, panel1_rk_sel,
-        (typeof panel1_tg_sel !== 'undefined') ? panel1_tg_sel : null);
+        (typeof panel1_tg_sel !== 'undefined') ? panel1_tg_sel : null,
+        (typeof panel1_stg_sel !== 'undefined') ? panel1_stg_sel : null);
 
     // Each panel renders at its figure's current size (2026-10-09).
     [[panels[panel0_id], panel0_raster_fig, panel0_scatter_fig],
@@ -11275,6 +11300,7 @@ function doPlot(reload) {
             "panel0_rm_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["bcombine_sel"],
             "panel0_rk_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["corr_sel"],
             "panel0_tg_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["tgaps_sel"],
+            "panel0_stg_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["tgaps_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
             "panel0_sd_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["detrend_sel"],
@@ -11303,6 +11329,7 @@ function doPlot(reload) {
             "panel1_rm_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["bcombine_sel"],
             "panel1_rk_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["corr_sel"],
             "panel1_tg_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["tgaps_sel"],
+            "panel1_stg_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["tgaps_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             "panel1_sd_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["detrend_sel"],

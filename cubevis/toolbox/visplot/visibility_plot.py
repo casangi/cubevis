@@ -372,6 +372,18 @@ def _composite_flag_mask(img32: np.ndarray, mask: np.ndarray, rgba: tuple) -> np
     return img32
 
 
+def _gaps_closed(label: str, closed) -> str:
+    """*label* with "(gaps closed)" after the name and before any unit
+    ("Time (gaps closed) [s]"), when *closed* says the axis has its gaps
+    closed: the axis label keeps the name, drops the unit and adds the
+    date (PanelSpec.axis_label), so the note must sit in the name.
+    (Raster and scatter, #36.)"""
+    if not closed:
+        return label
+    i = label.find(" [")
+    return (label[:i] + " (gaps closed)" + label[i:]) if i >= 0 else label + " (gaps closed)"
+
+
 GAP_SEPARATOR_RGBA = (128, 128, 128, 110)
 """The faint line drawn in each blank of an axis with its gaps closed
 (#36), so a break stays visible when its blank is under a pixel."""

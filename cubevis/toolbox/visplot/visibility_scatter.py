@@ -66,7 +66,8 @@ import xarray as xr
 from bokeh.models import ColumnDataSource
 
 import dataclasses
-from .visibility_plot import _composite_flag_mask
+from .visibility_plot import _composite_flag_mask, _paint_separators, _gaps_closed
+from ..gridplot.raster_grid import GapAxis, normalize_time_gaps
 from .visibility_plot import _CV_SET_BUSY_JS
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
@@ -468,8 +469,14 @@ class VisibilityScatter(VisibilityPlot):
         avg_time=None,
         avg_chan=None,
         averaging=None,
+        time_gaps: str = "shown",
         **kwargs,
     ) -> None:
+        # Time gaps (#36): with X = Time, "closed" lays the selection's
+        # runs side by side (raster_grid.GapAxis, as the raster does);
+        # _time_axis is that axis while it applies, else None.
+        self._time_gaps = normalize_time_gaps(time_gaps)
+        self._time_axis: Optional[GapAxis] = None
         # HRS H2 slice 4 (2026-10): this scatter's own Phase RMS /
         # Coherence settings -- slope removal and the two windows.  None
         # means "whatever the selection carries" (the plotter's
@@ -1481,6 +1488,7 @@ window.__cvSetBusy(false);
         avg_time=None,
         avg_chan=None,
         averaging=None,
+        time_gaps=None,
     ) -> None:
         """Change the x-axis or layer list and re-render.
 
@@ -1555,6 +1563,11 @@ window.__cvSetBusy(false);
             am = normalize_averaging(averaging)
             if am != self._averaging:
                 self._averaging = am;  changed = True
+        # Time gaps (#36): None leaves it as it is.
+        if time_gaps is not None:
+            tg = normalize_time_gaps(time_gaps)
+            if tg != self.time_gaps:
+                self._time_gaps = tg;  changed = True
         # The base class labels the y axis from _y_dim, which was set
         # once, from the first layer, at construction -- so after the Y
         # quantity was changed here the axis went on saying what it said
@@ -1610,6 +1623,60 @@ window.__cvSetBusy(false);
             pass
         # Long default titles go on two lines (see wrap_title).
         return wrap_title(self._titled(title))
+
+    # ------------------------------------------------------------------
+    # Time gaps (#36)
+    # ------------------------------------------------------------------
+
+    @property
+    def time_gaps(self) -> str:
+        """``"shown"`` or ``"closed"`` (applies with X = Time)."""
+        return getattr(self, "_time_gaps", "shown")
+
+    def _make_time_axis(self, selection) -> Optional[GapAxis]:
+        """The closed axis for X = Time with the gaps closed: the
+        selection's runs from the reader (``axis_runs``), as the raster
+        lays them out -- or ``None`` (gaps shown, X not Time, or a
+        reader that cannot say, which then draws real time)."""
+        from .axes import Axis
+        if self.time_gaps != "closed" or self._x_dim != Axis.TIME:
+            return None
+        fn = getattr(self._backend, "axis_runs", None)
+        if fn is None:
+            return None
+        try:
+            runs = fn(selection, "time")
+        except Exception:                                 # noqa: BLE001
+            log.debug("axis_runs failed", exc_info=True)
+            return None
+        return GapAxis.from_runs(runs) if runs else None
+
+    def _x_runs_kw(self) -> dict:
+        """``{"x_runs": ...}`` for ``query_columns`` while the gaps are
+        closed, else ``{}`` (so a shown axis asks an older kernel
+        nothing new)."""
+        ta = getattr(self, "_time_axis", None)
+        if ta is None:
+            return {}
+        return {"x_runs": [[a, b] for a, b in zip(ta.lo, ta.hi)]}
+
+    def _real_x(self, a: float, b: float) -> Optional[tuple]:
+        """A closed X range as real times (``GapAxis.real_span``), or the
+        range itself when the gaps are shown; ``None`` if it is all
+        blank."""
+        ta = getattr(self, "_time_axis", None)
+        if ta is None:
+            return (a, b)
+        return ta.real_span(a, b)
+
+    def _paint_gap_separators(self, img32, x_range):
+        """A faint line in each blank of a closed Time axis, as on the
+        raster (#36)."""
+        ta = getattr(self, "_time_axis", None)
+        if ta is None or img32 is None or getattr(img32, "ndim", 0) != 2 or x_range is None:
+            return img32
+        return _paint_separators(img32, ta.separators(),
+                                 float(x_range[0]), float(x_range[1]), "x")
 
     def _panel_spec(self) -> PanelSpec:
         """Describe this scatter: one color band per ScatterLayer.
@@ -1710,10 +1777,12 @@ window.__cvSetBusy(false);
             ]
             note = "; ".join(reasons) if reasons else "no layers with data"
 
+        ta = getattr(self, "_time_axis", None)
         return PanelSpec(
             kind       = "scatter",
             title      = self._effective_title(),
-            x_label    = self.x_label,
+            x_label    = _gaps_closed(self.x_label, ta is not None),
+            x_runs     = ta.state() if ta is not None else None,
             y_label    = self.y_label,
             x_range    = (float(full_x0), float(full_x1)),
             y_range    = (float(full_y0), float(full_y1)),
@@ -1809,7 +1878,9 @@ window.__cvSetBusy(false);
                 x0, x1, y0, y1 = viewport
                 xr, yr = (x0, x1), (y0, y1)
             self._render_all_layers(self._selection, x_range=xr, y_range=yr)
-            return self._collapse_and_composite()
+            img = self._collapse_and_composite()
+            return self._paint_gap_separators(
+                img, xr if xr is not None else self._x_range)
         finally:
             (self._layer_images, self._layer_n_in_view, self._layer_peak,
              self._layer_hist_counts, self._layer_hist_edges,
@@ -1914,6 +1985,7 @@ window.__cvSetBusy(false);
         self._flag_stale = False
         t0 = time.perf_counter()
         self._current_viewport = None   # reset — new data covers full range
+        self._time_axis = None if defer else self._make_time_axis(selection)
         if defer:
             n = len(self._layers)
             self._layer_images      = [None] * n
@@ -2449,9 +2521,16 @@ window.__cvSetBusy(false);
         x_centre = (cell_x_range[0] + cell_x_range[1]) / 2.0
         y_centre = (cell_y_range[0] + cell_y_range[1]) / 2.0
 
+        # Closed time gaps (#36): the readout names real times.
+        shown_x_range = cell_x_range
+        ta = getattr(self, "_time_axis", None)
+        if ta is not None:
+            rx = ta.real_of(list(cell_x_range))
+            if np.isfinite(rx).all():
+                shown_x_range = (float(rx[0]), float(rx[1]))
         info = {
             "value": raw_value if np.isfinite(raw_value) else None,
-            "x_range": cell_x_range, "y_range": cell_y_range,
+            "x_range": shown_x_range, "y_range": cell_y_range,
             **identity,
         }
 
@@ -2560,6 +2639,20 @@ window.__cvSetBusy(false);
                             "<p>That point is outside the current view.</p>",
                         ),
                     }
+
+            # Closed time gaps (#36): the box as real times, for the
+            # reader and for what the page says.
+            real = self._real_x(*x_range)
+            if real is None:
+                return {
+                    "status": "no_data",
+                    "info_html": self._probe_region_page(
+                        f"No data {self._rect_title(x_range, y_range)}",
+                        "<p>That is a gap between scans, where there is "
+                        "no data.</p>",
+                    ),
+                }
+            x_range = real
 
             visible = [lyr for lyr in self._layers if lyr.alpha > 0.0]
             if not visible:
@@ -2912,6 +3005,7 @@ window.__cvSetBusy(false);
             width=self._width, height=self._height,
             probe_grid_max_cells=self._probe_grid_max_cells,
             ref_scale=None if self._skip_ref_once else self._ref_scale,
+            **self._x_runs_kw(),
         )
         self._skip_ref_once = False
 
@@ -3259,6 +3353,7 @@ window.__cvSetBusy(false);
                 spread_sparse(img32, float(self._width) / img32.shape[1])
         except Exception:                                   # display only
             log.debug("spread_sparse failed", exc_info=True)
+        self._paint_gap_separators(img32, x_range)
         new_data = {
             "image": [img32],
             "x":     [x0],
@@ -3327,7 +3422,8 @@ window.__cvSetBusy(false);
                 res = self._backend.query_columns(
                     self._x_dim, specs, dataclasses.replace(sel, flag_view=view),
                     x_range=tuple(x_range), y_range=tuple(y_range),
-                    color_mode=self._color_mode, width=w, height=h)
+                    color_mode=self._color_mode, width=w, height=h,
+                    **self._x_runs_kw())
                 mask = None
                 for lr in res.layers:
                     im = getattr(lr, "image", None)

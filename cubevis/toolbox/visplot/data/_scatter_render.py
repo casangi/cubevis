@@ -598,6 +598,36 @@ def _id_grid_size(
     return w, h
 
 
+def close_x_gaps(dataframes: dict, x_runs) -> dict:
+    """Each frame's ``x`` (real times) put on an axis with its gaps closed
+    (``raster_grid.GapAxis.from_runs(x_runs)``, issue #36): binning,
+    shading, extents and the two-level reference then all work in closed
+    coordinates, and a viewport re-render is just a closed range.  The
+    identity columns (``time`` among them) stay real, so the hover probe
+    and the flag engine are unaffected.  A sample outside every run (the
+    runs and the data disagree) is dropped.  New frames; the cached ones
+    are left as they are.  *x_runs* empty or ``None``: *dataframes*
+    unchanged."""
+    if not x_runs:
+        return dataframes
+    from ...gridplot.raster_grid import GapAxis
+    axis = GapAxis.from_runs(x_runs)
+    out = {}
+    for key, df in dataframes.items():
+        if df is None or len(df) == 0 or "x" not in df.columns:
+            out[key] = df
+            continue
+        u = axis.positions_of(df["x"].to_numpy(dtype=np.float64))
+        keep = np.isfinite(u)
+        d = df.loc[keep].copy() if not keep.all() else df.copy()
+        d["x"] = u[keep]
+        # The cache memoizes a frame's extent (reader._frame_extent);
+        # the copy carried the real one with it.
+        d.attrs = {k: v for k, v in df.attrs.items() if k != "extent"}
+        out[key] = d
+    return out
+
+
 def nonzero_span(lo, hi):
     """Return ``(lo, hi)`` guaranteed finite and of non-zero width.
 

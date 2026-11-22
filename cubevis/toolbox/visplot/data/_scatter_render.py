@@ -624,11 +624,12 @@ def _id_grid_size(
 
 
 def close_x_gaps(dataframes: dict, x_runs) -> dict:
-    """Each frame's ``x`` (real times) put on an axis with its gaps closed
+    """Each frame's ``x`` (real times, or real frequencies with X =
+    Frequency) put on an axis with its gaps closed
     (``raster_grid.GapAxis.from_runs(x_runs)``, issue #36): binning,
     shading, extents and the two-level reference then all work in closed
     coordinates, and a viewport re-render is just a closed range.  The
-    identity columns (``time`` among them) stay real, so the hover probe
+    identity columns (``time``, ``frequency``) stay real, so the hover probe
     and the flag engine are unaffected.  A sample outside every run (the
     runs and the data disagree) is dropped.  New frames; the cached ones
     are left as they are.  *x_runs* empty or ``None``: *dataframes*

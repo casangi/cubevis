@@ -3071,6 +3071,45 @@ class XArrayReader(abc.ABC):
             return None
         return max(step, at) if isinstance(at, float) else step
 
+    def scatter_freq_step(self, selection=None) -> Optional[float]:
+        """How far apart a scatter's samples are along X = Frequency, for
+        ``_scatter_render.compute_canvas_size`` (``x_step``): the
+        narrowest channel width of the selected partitions, times the
+        number of channels averaged when the scatter averages channels.
+        ``None`` -- the canvas is left alone -- when every channel of a
+        window is averaged into one (no fixed spacing) or no partition
+        says its channel width.  The frequency counterpart of
+        ``scatter_time_step`` (#36: channels just over a pixel apart
+        leave empty columns, drawn as stripes)."""
+        from ._scatter_average import normalize_avg_chan
+        sel = selection if selection is not None else SelectionSpec()
+        try:
+            ac = normalize_avg_chan(getattr(sel, "avg_chan", "off"))
+        except ValueError:
+            ac = "off"
+        if ac == "all":
+            return None
+        key = repr((sel.field_names, sel.spw))
+        cache = self.__dict__.setdefault("_scatter_fstep_cache", {})
+        if key not in cache:
+            widths = [partition_cell_width(ds, "frequency")
+                      for ds in self._iter_visibility_partitions(sel)]
+            widths = [w for w in widths if w]
+            cache[key] = min(widths) if widths else None
+        step = cache[key]
+        if step is None:
+            return None
+        return step * ac if isinstance(ac, int) else step
+
+    def scatter_x_step(self, selection=None, xaxis=None) -> Optional[float]:
+        """``scatter_time_step`` for X = Time, ``scatter_freq_step`` for
+        X = Frequency, else ``None``."""
+        if xaxis == Axis.TIME:
+            return self.scatter_time_step(selection)
+        if xaxis == Axis.FREQUENCY:
+            return self.scatter_freq_step(selection)
+        return None
+
     def axis_runs(self, selection=None, dim: str = "time") -> Optional[list]:
         """``[[lo, hi], ...]``: the stretches of *dim* (``"time"`` or
         ``"frequency"``) with data in what *selection* picks, at full

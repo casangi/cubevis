@@ -296,6 +296,10 @@ class VisibilityRaster(VisibilityPlot):
         # None when the gaps are shown or Time is not an axis).
         self._time_gaps = "shown"
         self._time_axis: Optional[TimeAxis] = None
+        # #36 part 3: the same for a Frequency axis (in Hz, not a channel
+        # index): "closed" puts the spectral windows side by side.
+        self._freq_gaps = "shown"
+        self._freq_axis: Optional[GapAxis] = None
         # Where elapsed-time labels count from: the first cell's centre,
         # which is not the axis range's low end now that the range runs
         # to the cells' edges (None until the first render).
@@ -513,6 +517,7 @@ class VisibilityRaster(VisibilityPlot):
         baseline_order: Optional[str] = None,
         baseline_combine: Optional[str] = None,
         time_gaps: Optional[str] = None,
+        freq_gaps: Optional[str] = None,
     ) -> None:
         """Change axes, quantity, polarization or averaging and re-render
         in place.
@@ -528,6 +533,10 @@ class VisibilityRaster(VisibilityPlot):
             tg = normalize_time_gaps(time_gaps)
             if tg != self._time_gaps:
                 self._time_gaps = tg;  changed = True
+        if freq_gaps is not None:
+            fg = normalize_time_gaps(freq_gaps)
+            if fg != self.freq_gaps:
+                self._freq_gaps = fg;  changed = True
         if baseline_combine is not None:
             bc = normalize_baseline_combine(baseline_combine)
             if bc != self._baseline_combine:
@@ -665,8 +674,16 @@ class VisibilityRaster(VisibilityPlot):
         """``(starts, ends)`` of the runs of an axis with its gaps closed
         (``GapAxis.run_bounds``), for ``raster_grid.cell_edges``: a cell
         stays inside its run.  ``None`` for any other axis."""
-        if dim_name == "time" and getattr(self, "_time_axis", None) is not None:
-            return self._time_axis.run_bounds()
+        axis = self._gap_axis(dim_name)
+        return axis.run_bounds() if axis is not None else None
+
+    def _gap_axis(self, dim_name: str) -> Optional[GapAxis]:
+        """The closed axis (``GapAxis``) of *dim_name* while its gaps are
+        closed -- ``time`` or ``frequency`` -- else ``None``."""
+        if dim_name == "time":
+            return getattr(self, "_time_axis", None)
+        if dim_name == "frequency":
+            return getattr(self, "_freq_axis", None)
         return None
 
     def _axis_width(self, agg, dim_name: str):
@@ -678,8 +695,9 @@ class VisibilityRaster(VisibilityPlot):
             return None
         return _rg.cell_widths(agg, dim_name)
 
-    def _gap_runs(self) -> Optional[list]:
-        """The runs of the panel's selection along Time, from the reader
+    def _gap_runs(self, dim: str = "time") -> Optional[list]:
+        """The runs of the panel's selection along *dim* (``"time"`` or
+        ``"frequency"``), from the reader
         (``axis_runs``: full resolution, so a decimated full view and a
         zoomed detail share one closed axis, #36), or ``None`` if it
         cannot say (a kernel from before #36): the panel's own aggregate
@@ -689,7 +707,7 @@ class VisibilityRaster(VisibilityPlot):
         if sel is None or fn is None:
             return None
         try:
-            return fn(sel, "time")
+            return fn(sel, dim)
         except Exception:                                 # noqa: BLE001
             log.debug("axis_runs failed", exc_info=True)
             return None
@@ -697,6 +715,48 @@ class VisibilityRaster(VisibilityPlot):
     @property
     def time_gaps(self) -> str:
         return self._time_gaps
+
+    @property
+    def freq_gaps(self) -> str:
+        """``"shown"`` or ``"closed"``: a Frequency axis (in Hz) with the
+        gaps between spectral windows closed (#36)."""
+        return getattr(self, "_freq_gaps", "shown")
+
+    def _place_gaps(self, agg, primary: bool = False):
+        """``_place_times`` then ``_place_freqs``: every axis with its
+        gaps closed, on its closed axis."""
+        return self._place_freqs(self._place_times(agg, primary=primary),
+                                 primary=primary)
+
+    def _place_freqs(self, agg, primary: bool = False):
+        """``_place_times`` for a Frequency axis in Hz (#36 part 3): the
+        spectral windows side by side, every gap between them removed.
+        Not for a Channel axis (``CHANNEL_AXIS_ATTR``): a channel index
+        has no gaps."""
+        closed = self.freq_gaps == "closed"
+        attrs = getattr(agg, "attrs", None) or {}
+        if (agg is None or "frequency" not in getattr(agg, "dims", ())
+                or not closed or attrs.get(CHANNEL_AXIS_ATTR) is not None):
+            if primary:
+                self._freq_axis = None
+            return agg
+        f = np.asarray(agg.coords["frequency"].values, dtype=np.float64)
+        if primary:
+            runs = self._gap_runs("frequency")
+            if runs:
+                self._freq_axis = GapAxis.from_runs(runs)
+                if not np.isfinite(self._freq_axis.positions_of(f)).all():
+                    runs = None
+            if not runs:
+                self._freq_axis = GapAxis.build(f, width=_rg.cell_widths(agg, "frequency"))
+        axis = getattr(self, "_freq_axis", None)
+        if axis is None:
+            return agg
+        pos = axis.positions_of(f)
+        keep = np.flatnonzero(np.isfinite(pos))
+        out = agg.isel(frequency=keep)
+        out = out.assign_coords(frequency=pos[keep])
+        return out.sortby("frequency")
 
     def _place_times(self, agg, primary: bool = False):
         """With the gaps closed, put *agg*'s ``time`` dimension on the
@@ -801,7 +861,7 @@ class VisibilityRaster(VisibilityPlot):
             if ext is None or ext[0] == ext[1]:
                 out.append((float(b0), float(b1)))
             elif (dim == "baseline_id" or dim in _ANT_DIMS
-                  or (dim == "time" and getattr(self, "_time_axis", None) is not None)):
+                  or self._gap_axis(dim) is not None):
                 # In positions: the backend's range (real values) does
                 # not apply.
                 out.append(ext)
@@ -1669,12 +1729,10 @@ window.__cvSetBusy(false);
         # labels say), a blank nothing -- the tick formatter converts
         # through the runs (tick_format.GAP_AXIS_JS, #36).
         x_truns = y_truns = None
-        if agg is not None and agg.ndim == 2 and self._time_axis is not None:
-            runs = self._time_axis.state()
-            if agg.dims[1] == "time":
-                x_truns = runs
-            elif agg.dims[0] == "time":
-                y_truns = runs
+        if agg is not None and agg.ndim == 2:
+            xa, ya = self._gap_axis(agg.dims[1]), self._gap_axis(agg.dims[0])
+            x_truns = xa.state() if xa is not None else None
+            y_truns = ya.state() if ya is not None else None
 
         # The antenna matrix (HRS H7): its positions are named by the
         # labels the backend attached.
@@ -1880,7 +1938,7 @@ window.__cvSetBusy(false);
             # Baselines side by side in this panel's order, then ranges
             # that reach the cells' edges (see raster_grid).
             agg = self._place_baselines(agg, primary=True)
-            agg = self._place_times(agg, primary=True)
+            agg = self._place_gaps(agg, primary=True)
             x_range, y_range = self._grid_extent(agg, x_range, y_range)
 
         self._agg          = agg
@@ -2088,9 +2146,10 @@ window.__cvSetBusy(false);
         for which, dim, (lo, hi) in (("x", full.dims[1], x_ext),
                                      ("y", full.dims[0], y_ext)):
             lo, hi = min(lo, hi), max(lo, hi)
-            if dim == "time" and getattr(self, "_time_axis", None) is not None:
+            gap = self._gap_axis(dim)
+            if gap is not None and not (dim == "frequency" and chan_axis == which):
                 # Closed gaps: the viewport is in closed coordinates (#36).
-                span = self._time_axis.real_span(lo, hi)
+                span = gap.real_span(lo, hi)
                 if span is None:
                     return None           # outside the data: nothing finer
                 lo, hi = span
@@ -2171,7 +2230,7 @@ window.__cvSetBusy(false);
         elif hasattr(agg, "attrs") and agg.attrs.get(CHANNEL_AXIS_ATTR) is not None:
             return None
         # And a Time axis with its gaps closed, on the panel's closed axis.
-        return self._place_times(self._place_baselines(agg))
+        return self._place_gaps(self._place_baselines(agg))
 
     def _query_detail(self, x0, x1, y0, y1) -> Optional[_Detail]:
         """Query the viewport (plus an overscan margin) at higher
@@ -2327,15 +2386,18 @@ window.__cvSetBusy(false);
                                             x_range, y_range)
         # A Time axis with its gaps closed is in positions: the readout
         # and the identity lookup need the real time (debug-0003).
-        ta = getattr(self, "_time_axis", None)
-        if ta is not None and "time" in (x_dim_name, y_dim_name):
-            pos = x_centre if x_dim_name == "time" else y_centre
-            rng = x_range if x_dim_name == "time" else y_range
+        # (And a Frequency axis with its gaps closed, #36 part 3.)
+        for gdim in ("time", "frequency"):
+            ta = self._gap_axis(gdim)
+            if ta is None or gdim not in (x_dim_name, y_dim_name):
+                continue
+            pos = x_centre if x_dim_name == gdim else y_centre
+            rng = x_range if x_dim_name == gdim else y_range
             real_c = ta.time_at(pos)
             r = ta.real_of([rng[0], rng[1]])
             real_r = (float(r[0]), float(r[1])) if np.isfinite(r).all() else None
             if real_c is not None and real_r is not None:
-                if x_dim_name == "time":
+                if x_dim_name == gdim:
                     x_centre, x_range = real_c, real_r
                 else:
                     y_centre, y_range = real_c, real_r
@@ -2681,7 +2743,7 @@ window.__cvSetBusy(false);
                 # (a detail query does its own placing, with the
                 # channel renumbering: place=False).
                 if place:
-                    oagg = self._place_times(self._place_baselines(oagg))
+                    oagg = self._place_gaps(self._place_baselines(oagg))
                 out.append((rgba, oagg))
             except Exception:
                 log.debug("flag overlay query failed", exc_info=True)

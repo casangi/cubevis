@@ -407,6 +407,12 @@ class PanelSpec:
         if is_time:
             return 1.0, unit
         lo, hi = self.x_range if axis == "x" else self.y_range
+        runs = self.axis_runs(axis)
+        if runs and runs[1]:
+            # Gaps closed (#36): the range is in closed coordinates, which
+            # start at 0; the ticks read real values, so the prefix is
+            # chosen from those (a Frequency axis: GHz, not MHz).
+            lo, hi = float(runs[1][0]), float(runs[2][-1])
         return si_prefix(lo, hi, unit)
 
     def axis_label(self, axis: str = "x") -> str:

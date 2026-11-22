@@ -1177,9 +1177,9 @@ class MSv4Backend(XArrayReader):
         # Part 6: frames come from the per-layer cache when this selection
         # was already read (a pan, zoom, recolor or export), else from disk.
         dataframes = self._query_columns_cached(xaxis, all_keys, selection)
-        # Time gaps closed (issue #36): X = Time on the closed axis the
-        # widget made from the selection's runs (reader.axis_runs).
-        if x_runs and xaxis == Axis.TIME:
+        # Gaps closed (issue #36): X = Time or Frequency on the closed
+        # axis the widget made from the selection's runs (reader.axis_runs).
+        if x_runs and xaxis in (Axis.TIME, Axis.FREQUENCY):
             dataframes = _scatter_render.close_x_gaps(dataframes, x_runs)
 
         # Part 6: merge each statistical layer's own (y_axis, pol) frame
@@ -1234,7 +1234,7 @@ class MSv4Backend(XArrayReader):
 
         # X = Time: no more columns than samples in view (#36): see
         # compute_canvas_size's x_step.
-        x_step = self.scatter_time_step(selection) if xaxis == Axis.TIME else None
+        x_step = self.scatter_x_step(selection, xaxis)
         canvas_w, canvas_h = _scatter_render.compute_canvas_size(
             dataframes, layers, x0, x1, y0, y1, width, height, x_step=x_step,
         )

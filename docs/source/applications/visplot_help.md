@@ -278,6 +278,27 @@ scatter's with X = Time.
 * Each panel has its own setting, in its gear tab (for a scatter, shown
   when X is Time). Applied by **Plot**.
 
+(vp-freq-gaps)=
+
+### Frequency gaps
+
+How a frequency axis treats the gaps between spectral windows: a
+raster's Channel axis when the selected windows differ (it is then drawn
+in frequency), or a scatter's with X = Frequency.
+
+* **Shown** (the default): frequency is drawn to scale. Windows far
+  apart are thin bands with blank space between them.
+* **Closed**: each window (or windows that touch or overlap) is kept to
+  scale and the windows sit side by side, every gap removed, as for
+  [time gaps](vp-time-gaps). The ticks read the real frequencies, the
+  axis label says "(gaps closed)", and the cursor readout, flag boxes
+  and zooming work in real frequency.
+* A Channel axis drawn as a channel index (one window, or windows that
+  share their channels) has no gaps, and the setting does nothing there.
+* Each panel has its own setting, in its gear tab (for a raster, shown
+  when an axis is Channel; for a scatter, when X is Frequency). Applied
+  by **Plot**.
+
 (vp-twin)=
 
 ### Time window

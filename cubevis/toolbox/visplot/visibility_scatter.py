@@ -470,13 +470,17 @@ class VisibilityScatter(VisibilityPlot):
         avg_chan=None,
         averaging=None,
         time_gaps: str = "shown",
+        freq_gaps: str = "shown",
         **kwargs,
     ) -> None:
         # Time gaps (#36): with X = Time, "closed" lays the selection's
         # runs side by side (raster_grid.GapAxis, as the raster does);
-        # _time_axis is that axis while it applies, else None.
+        # frequency gaps the same with X = Frequency (the spectral
+        # windows side by side).  _x_gap_axis is that axis while one
+        # applies, else None.
         self._time_gaps = normalize_time_gaps(time_gaps)
-        self._time_axis: Optional[GapAxis] = None
+        self._freq_gaps = normalize_time_gaps(freq_gaps)
+        self._x_gap_axis: Optional[GapAxis] = None
         # HRS H2 slice 4 (2026-10): this scatter's own Phase RMS /
         # Coherence settings -- slope removal and the two windows.  None
         # means "whatever the selection carries" (the plotter's
@@ -1489,6 +1493,7 @@ window.__cvSetBusy(false);
         avg_chan=None,
         averaging=None,
         time_gaps=None,
+        freq_gaps=None,
     ) -> None:
         """Change the x-axis or layer list and re-render.
 
@@ -1568,6 +1573,10 @@ window.__cvSetBusy(false);
             tg = normalize_time_gaps(time_gaps)
             if tg != self.time_gaps:
                 self._time_gaps = tg;  changed = True
+        if freq_gaps is not None:
+            fg = normalize_time_gaps(freq_gaps)
+            if fg != self.freq_gaps:
+                self._freq_gaps = fg;  changed = True
         # The base class labels the y axis from _y_dim, which was set
         # once, from the first layer, at construction -- so after the Y
         # quantity was changed here the axis went on saying what it said
@@ -1633,19 +1642,43 @@ window.__cvSetBusy(false);
         """``"shown"`` or ``"closed"`` (applies with X = Time)."""
         return getattr(self, "_time_gaps", "shown")
 
-    def _make_time_axis(self, selection) -> Optional[GapAxis]:
-        """The closed axis for X = Time with the gaps closed: the
-        selection's runs from the reader (``axis_runs``), as the raster
-        lays them out -- or ``None`` (gaps shown, X not Time, or a
-        reader that cannot say, which then draws real time)."""
+    @property
+    def freq_gaps(self) -> str:
+        """``"shown"`` or ``"closed"`` (applies with X = Frequency)."""
+        return getattr(self, "_freq_gaps", "shown")
+
+    @property
+    def _time_axis(self) -> Optional[GapAxis]:
+        """The closed X axis while X = Time (``_x_gap_axis``), else
+        ``None``."""
         from .axes import Axis
-        if self.time_gaps != "closed" or self._x_dim != Axis.TIME:
+        ax = getattr(self, "_x_gap_axis", None)
+        return ax if ax is not None and self._x_dim == Axis.TIME else None
+
+    def _gap_axis_name(self) -> str:
+        """``"time"`` or ``"frequency"``: what the closed X axis is, for
+        messages."""
+        from .axes import Axis
+        return "frequency" if self._x_dim == Axis.FREQUENCY else "time"
+
+    def _make_time_axis(self, selection) -> Optional[GapAxis]:
+        """The closed axis for X = Time or X = Frequency with that axis's
+        gaps closed: the selection's runs from the reader
+        (``axis_runs``), as the raster lays them out -- or ``None`` (gaps
+        shown, X neither, or a reader that cannot say, which then draws
+        real values)."""
+        from .axes import Axis
+        if self._x_dim == Axis.TIME and self.time_gaps == "closed":
+            dim = "time"
+        elif self._x_dim == Axis.FREQUENCY and self.freq_gaps == "closed":
+            dim = "frequency"
+        else:
             return None
         fn = getattr(self._backend, "axis_runs", None)
         if fn is None:
             return None
         try:
-            runs = fn(selection, "time")
+            runs = fn(selection, dim)
         except Exception:                                 # noqa: BLE001
             log.debug("axis_runs failed", exc_info=True)
             return None
@@ -1655,7 +1688,7 @@ window.__cvSetBusy(false);
         """``{"x_runs": ...}`` for ``query_columns`` while the gaps are
         closed, else ``{}`` (so a shown axis asks an older kernel
         nothing new)."""
-        ta = getattr(self, "_time_axis", None)
+        ta = getattr(self, "_x_gap_axis", None)
         if ta is None:
             return {}
         return {"x_runs": [[a, b] for a, b in zip(ta.lo, ta.hi)]}
@@ -1664,7 +1697,7 @@ window.__cvSetBusy(false);
         """A closed X range as real times (``GapAxis.real_span``), or the
         range itself when the gaps are shown; ``None`` if it is all
         blank."""
-        ta = getattr(self, "_time_axis", None)
+        ta = getattr(self, "_x_gap_axis", None)
         if ta is None:
             return (a, b)
         return ta.real_span(a, b)
@@ -1768,7 +1801,7 @@ window.__cvSetBusy(false);
             ]
             note = "; ".join(reasons) if reasons else "no layers with data"
 
-        ta = getattr(self, "_time_axis", None)
+        ta = getattr(self, "_x_gap_axis", None)
         return PanelSpec(
             kind       = "scatter",
             title      = self._effective_title(),
@@ -1974,7 +2007,7 @@ window.__cvSetBusy(false);
         self._flag_stale = False
         t0 = time.perf_counter()
         self._current_viewport = None   # reset — new data covers full range
-        self._time_axis = None if defer else self._make_time_axis(selection)
+        self._x_gap_axis = None if defer else self._make_time_axis(selection)
         if defer:
             n = len(self._layers)
             self._layer_images      = [None] * n
@@ -2512,7 +2545,7 @@ window.__cvSetBusy(false);
 
         # Closed time gaps (#36): the readout names real times.
         shown_x_range = cell_x_range
-        ta = getattr(self, "_time_axis", None)
+        ta = getattr(self, "_x_gap_axis", None)
         if ta is not None:
             rx = ta.real_of(list(cell_x_range))
             if np.isfinite(rx).all():
@@ -2637,8 +2670,8 @@ window.__cvSetBusy(false);
                     "status": "no_data",
                     "info_html": self._probe_region_page(
                         f"No data {self._rect_title(x_range, y_range)}",
-                        "<p>That is outside the data on the time "
-                        "axis.</p>",
+                        "<p>That is outside the data on the "
+                        f"{self._gap_axis_name()} axis.</p>",
                     ),
                 }
             x_range = real

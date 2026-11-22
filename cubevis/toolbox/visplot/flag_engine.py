@@ -323,21 +323,6 @@ def _raster_axis_values(axis: Axis, bc: BlockCoords, ds, backend,
     _bad_axis(axis)
 
 
-def _raster_axis_mask(axis: Axis, bc: BlockCoords, ds, backend, lo, hi,
-                      baseline_order=None):
-    """(canonical axis index, mask) for one raster axis."""
-    if axis == Axis.TIME:
-        return 0, _overlap(bc.times, lo, hi)
-    if axis == Axis.BASELINE:
-        pos = _baseline_positions(ds.coords[_bdim(backend)].values, baseline_order)
-        return 1, _overlap(pos, lo, hi, half=0.5) & np.isfinite(pos)
-    if axis == Axis.FREQUENCY:
-        return 2, _overlap(bc.freqs, lo, hi)
-    if axis == Axis.CHANNEL:
-        return 2, _overlap(bc.chans.astype(np.float64), lo, hi, half=0.5) & (bc.chans >= 0)
-    raise ValueError(f"raster flagging on axis {axis.name} is not supported")
-
-
 def _filter_dataset(backend, ds, bc: BlockCoords, data_column: str) -> xr.Dataset:
     """The filter-contract Dataset for (a subset of) one partition."""
     canon = _canon(backend)

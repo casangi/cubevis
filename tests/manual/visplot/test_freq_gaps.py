@@ -114,6 +114,11 @@ class TestReader:
         assert backend.scatter_x_step(ALL, Axis.TIME) == backend.scatter_time_step(ALL)
         assert backend.scatter_x_step(ALL, Axis.UVDIST) is None
 
+    def test_scatter_chan_step(self, backend):
+        assert backend.scatter_x_step(ALL, Axis.CHANNEL) == 1.0
+        assert backend.scatter_chan_step(SelectionSpec(avg_chan=4)) == 4.0
+        assert backend.scatter_chan_step(SelectionSpec(avg_chan="all")) is None
+
 
 # ---------------------------------------------------------------------------
 # Raster

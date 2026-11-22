@@ -3103,12 +3103,32 @@ class XArrayReader(abc.ABC):
 
     def scatter_x_step(self, selection=None, xaxis=None) -> Optional[float]:
         """``scatter_time_step`` for X = Time, ``scatter_freq_step`` for
-        X = Frequency, else ``None``."""
+        X = Frequency, ``scatter_chan_step`` for X = Channel, else
+        ``None``."""
         if xaxis == Axis.TIME:
             return self.scatter_time_step(selection)
         if xaxis == Axis.FREQUENCY:
             return self.scatter_freq_step(selection)
+        if xaxis == Axis.CHANNEL:
+            return self.scatter_chan_step(selection)
         return None
+
+    def scatter_chan_step(self, selection=None) -> Optional[float]:
+        """How far apart a scatter's samples are along X = Channel: one
+        (a channel index, ``_compute_axis_values``), times the number of
+        channels averaged; ``None`` when every channel of a window is
+        averaged into one.  A few hundred channels across a wider panel
+        otherwise leave every other column empty: thin background lines
+        between the channels (2026-11-22, seen stepping baselines)."""
+        from ._scatter_average import normalize_avg_chan
+        sel = selection if selection is not None else SelectionSpec()
+        try:
+            ac = normalize_avg_chan(getattr(sel, "avg_chan", "off"))
+        except ValueError:
+            ac = "off"
+        if ac == "all":
+            return None
+        return float(ac) if isinstance(ac, int) else 1.0
 
     def axis_runs(self, selection=None, dim: str = "time") -> Optional[list]:
         """``[[lo, hi], ...]``: the stretches of *dim* (``"time"`` or

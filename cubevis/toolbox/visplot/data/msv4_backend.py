@@ -1250,8 +1250,8 @@ class MSv4Backend(XArrayReader):
 
         ref_canvas_width = ref_canvas_height = None
         if ref_scale is not None:
-            ref_canvas_width  = max(1, int(round(canvas_w * ref_scale)))
-            ref_canvas_height = max(1, int(round(canvas_h * ref_scale)))
+            ref_canvas_width, ref_canvas_height = _scatter_render.reference_size(
+                canvas_w, canvas_h, ref_scale, x0, x1, x_step)
             # Part 6: two-level rendering's Level-1 fast path is not yet
             # taught about "statistical" coloring -- see
             # MSv2Backend.query_columns' own identical comment for the
@@ -1266,6 +1266,7 @@ class MSv4Backend(XArrayReader):
                         x0, x1, y0, y1,
                         ref_canvas_width, ref_canvas_height, canvas_w, canvas_h,
                         color_mode, probe_grid_max_cells=probe_grid_max_cells,
+                        x_step=x_step,
                     ),
                 )
                 for lyr, render, render_df in zip(layers, rendered, render_dataframes)

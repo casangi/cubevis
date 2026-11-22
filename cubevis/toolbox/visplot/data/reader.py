@@ -695,6 +695,13 @@ class ScatterLayerReference:
     ref_id_freq_lo: Optional[xr.DataArray] = None
     ref_id_freq_hi: Optional[xr.DataArray] = None
     ref_id_value:   Optional[xr.DataArray] = None
+    # How far apart the samples are along X when the reference was held
+    # to one column per sample (``_scatter_render.reference_size``'s
+    # x_step: X = Time, Frequency or Channel), else None.  A reference
+    # with a column per sample has all the detail there is along X, so a
+    # zoom in X needs no Level-2 query (``needs_level2_requery``; #36,
+    # 2026-11-22).
+    ref_x_step:     Optional[float] = None
 
 
 @dataclass(frozen=True)

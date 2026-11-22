@@ -347,3 +347,84 @@ class TestPlotter:
         tips = next(v for k, v in vars(vpm).items()
                     if isinstance(v, dict) and "tgaps" in v and "s_tgaps" in v)
         assert "fgaps" in tips and "s_fgaps" in tips
+
+
+# ---------------------------------------------------------------------------
+# The Level-1 reference keeps to the same columns (2026-11-22)
+# ---------------------------------------------------------------------------
+
+class TestReferenceStep:
+    """X = Channel, 384 channels: a reference at twice the capped canvas
+    had an empty column between channels, and a Level-1 redraw at a
+    slightly different viewport (the range settling after a step) came
+    out denser in one half than the other, with a seam between."""
+
+    def _halves(self, x_step):
+        import pandas as pd
+        from cubevis.toolbox.visplot.data import _scatter_render as sr
+        from cubevis.toolbox.visplot.data.reader import ScatterLayerSpec
+        rng = np.random.default_rng(0)
+        n, per = 384, 300
+        df = pd.DataFrame({"x": np.repeat(np.arange(n, dtype=float), per),
+                           "y": rng.gamma(3.0, 3.0, n * per)})
+        lyr = ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization="XX",
+                               cmap=("#000000", "#ffffff"))
+        x0, x1, y0, y1 = -0.5, 383.5, 0.0, 45.0
+        cw, ch = sr.compute_canvas_size({(Axis.AMPLITUDE, "XX"): df}, [lyr],
+                                        x0, x1, y0, y1, 900, 400, x_step=1.0)
+        rw, rh = sr.reference_size(cw, ch, 2.0, x0, x1, x_step)
+        ref = sr.build_layer_reference(df, lyr, x0, x1, y0, y1, rw, rh, cw, ch, "global")
+        img, _ = sr.resample_layer_reference(ref, lyr, None, 0.0, 383.0, y0, y1, cw, ch)
+        occ = (np.asarray(img) != 0).sum(axis=0)
+        return rw, occ[: cw // 2].mean(), occ[cw // 2:].mean()
+
+    def test_reference_capped(self):
+        from cubevis.toolbox.visplot.data import _scatter_render as sr
+        assert sr.reference_size(384, 400, 2.0, -0.5, 383.5, 1.0) == (384, 800)
+        assert sr.reference_size(384, 400, 2.0, -0.5, 383.5, None) == (768, 800)
+        assert sr.reference_size(100, 400, 2.0, 0.0, 1000.0, 1.0) == (200, 800)
+
+    def test_no_seam(self):
+        rw, left, right = self._halves(1.0)
+        assert rw == 384
+        assert abs(left - right) < 0.05 * left
+
+    def test_the_seam_without_the_cap(self):
+        _rw, left, right = self._halves(None)
+        assert abs(left - right) > 0.1 * left
+
+    def _ref(self, x_step):
+        import pandas as pd
+        from cubevis.toolbox.visplot.data import _scatter_render as sr
+        from cubevis.toolbox.visplot.data.reader import ScatterLayerSpec
+        rng = np.random.default_rng(1)
+        df = pd.DataFrame({"x": np.repeat(np.arange(384, dtype=float), 50),
+                           "y": rng.gamma(3.0, 3.0, 384 * 50)})
+        lyr = ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization="XX",
+                               cmap=("#000000", "#ffffff"))
+        x0, x1, y0, y1 = -0.5, 383.5, 0.0, 45.0
+        rw, rh = sr.reference_size(384, 400, 2.0, x0, x1, x_step)
+        return sr.build_layer_reference(df, lyr, x0, x1, y0, y1, rw, rh, 384, 400,
+                                        "global", x_step=x_step)
+
+    def test_reference_knows_its_step(self):
+        assert self._ref(1.0).ref_x_step == 1.0
+        assert self._ref(None).ref_x_step is None
+
+    def test_x_zoom_stays_local(self):
+        from cubevis.toolbox.visplot.data import _scatter_render as sr
+        ref = self._ref(1.0)
+        # a 4x zoom in X: nothing finer to fetch
+        assert not sr.needs_level2_requery(ref, 100.0, 196.0, 0.0, 45.0, 384, 400)
+        # a 2x zoom in Y is within the reference's 2x; 4x needs Level-2
+        assert not sr.needs_level2_requery(ref, 100.0, 196.0, 0.0, 22.5, 384, 400)
+        assert sr.needs_level2_requery(ref, 100.0, 196.0, 0.0, 11.0, 384, 400)
+        # outside the reference: Level-2 as before
+        assert sr.needs_level2_requery(ref, 300.0, 500.0, 0.0, 45.0, 384, 400)
+
+    def test_without_a_step_x_zoom_still_requeries(self):
+        from cubevis.toolbox.visplot.data import _scatter_render as sr
+        ref = self._ref(None)            # 768 columns, 2x
+        assert not sr.needs_level2_requery(ref, 100.0, 292.0, 0.0, 45.0, 384, 400)
+        assert sr.needs_level2_requery(ref, 100.0, 196.0, 0.0, 45.0, 384, 400)
+

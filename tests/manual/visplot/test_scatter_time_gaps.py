@@ -256,3 +256,60 @@ class TestWidget:
         w = plotter._panel_axis_widgets
         sid = next(sl.id for sl in plotter._slots if sl.kind == "scatter")
         assert w[sid]["scatter"]["tgaps_sel"].value == "shown"
+
+
+# ---------------------------------------------------------------------------
+# No more canvas columns than integrations (2026-11-21)
+# ---------------------------------------------------------------------------
+
+class TestCanvasStep:
+    """X = Time: the canvas has no more columns than samples in view, so
+    none is left empty between two integrations (stripes on a closed
+    axis of 6.048 s integrations about 2.2 px apart, TW Hya)."""
+
+    def _frames(self, n=1000, per=100):
+        # dense enough that the sparse-data shrink stays out of it
+        x = np.repeat(np.arange(n) * 6.048, per)
+        df = pd.DataFrame({"x": x, "y": np.tile(np.linspace(0.0, 2.0, per), n)})
+        return {(Axis.AMPLITUDE, "XX"): df}
+
+    def _layers(self):
+        from cubevis.toolbox.visplot.data.reader import ScatterLayerSpec
+        return [ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization="XX",
+                                 cmap=("#000", "#fff"))]
+
+    def test_capped_by_the_step(self):
+        w, h = sr.compute_canvas_size(self._frames(), self._layers(),
+                                      0.0, 2480.0, 0.0, 2.0, 900, 550, x_step=6.048)
+        assert w == int(2480.0 / 6.048) and h == 550
+
+    def test_no_step_no_cap(self):
+        assert sr.compute_canvas_size(self._frames(), self._layers(),
+                                      0.0, 2480.0, 0.0, 2.0, 900, 550) == (900, 550)
+
+    def test_zoomed_into_a_few_integrations(self):
+        w, _ = sr.compute_canvas_size(self._frames(), self._layers(),
+                                      0.0, 20.0, 0.0, 2.0, 900, 550, x_step=6.048)
+        assert w == 3
+
+    def test_the_step_from_the_reader(self, scans_ms):
+        from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
+        from cubevis.toolbox.visplot.selection import SelectionSpec
+        b = MSv2Backend(scans_ms)
+        b.open()
+        try:
+            step = b.scatter_time_step(SelectionSpec())
+            assert step == pytest.approx(8.0)            # the simulator's dump rate
+            assert b.scatter_time_step(SelectionSpec(avg_time=30.0)) == pytest.approx(30.0)
+            assert b.scatter_time_step(SelectionSpec(avg_time=2.0)) == pytest.approx(8.0)
+            assert b.scatter_time_step(SelectionSpec(avg_time="scan")) is None
+        finally:
+            b.close()
+
+    def test_closed_scatter_has_no_empty_columns(self, plotter):
+        s = _scatter(plotter)
+        img = s._collapse_and_composite()
+        a = img.view(np.uint8).reshape(img.shape + (4,))[..., 3]
+        assert (a > 0).any(axis=0).all()
+        span = s._x_range[1] - s._x_range[0]
+        assert s._canvas_width <= int(span / 8.0)

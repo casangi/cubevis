@@ -3043,6 +3043,34 @@ class XArrayReader(abc.ABC):
         cache[key] = out
         return out
 
+    def scatter_time_step(self, selection=None) -> Optional[float]:
+        """How far apart a scatter's samples are along X = Time, for
+        ``_scatter_render.compute_canvas_size`` (``x_step``): the
+        shortest integration time of the selected partitions, or the
+        averaging length when the scatter averages over time and that is
+        longer.  ``None`` -- the canvas is left alone -- when averaging
+        is per scan (no fixed spacing) or no partition says its
+        integration time.  Cached per partition choice (attrs only)."""
+        from ._scatter_average import normalize_avg_time
+        sel = selection if selection is not None else SelectionSpec()
+        try:
+            at = normalize_avg_time(getattr(sel, "avg_time", "off"))
+        except ValueError:
+            at = "off"
+        if at == "scan":
+            return None
+        key = repr((sel.field_names, sel.spw))
+        cache = self.__dict__.setdefault("_scatter_step_cache", {})
+        if key not in cache:
+            widths = [partition_cell_width(ds, "time")
+                      for ds in self._iter_visibility_partitions(sel)]
+            widths = [w for w in widths if w]
+            cache[key] = min(widths) if widths else None
+        step = cache[key]
+        if step is None:
+            return None
+        return max(step, at) if isinstance(at, float) else step
+
     def axis_runs(self, selection=None, dim: str = "time") -> Optional[list]:
         """``[[lo, hi], ...]``: the stretches of *dim* (``"time"`` or
         ``"frequency"``) with data in what *selection* picks, at full

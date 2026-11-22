@@ -1155,8 +1155,11 @@ class MSv2Backend(XArrayReader):
         x0, x1 = _scatter_render.nonzero_span(min(xr_), max(xr_))
         y0, y1 = _scatter_render.nonzero_span(min(yr_), max(yr_))
 
+        # X = Time: no more columns than samples in view (#36): see
+        # compute_canvas_size's x_step.
+        x_step = self.scatter_time_step(selection) if xaxis == Axis.TIME else None
         canvas_w, canvas_h = _scatter_render.compute_canvas_size(
-            dataframes, layers, x0, x1, y0, y1, width, height,
+            dataframes, layers, x0, x1, y0, y1, width, height, x_step=x_step,
         )
 
         rendered = tuple(

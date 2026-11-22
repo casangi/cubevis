@@ -537,6 +537,7 @@ def compute_canvas_size(
     dataframes: dict, layers: list[ScatterLayerSpec],
     x0: float, x1: float, y0: float, y1: float,
     width: int, height: int,
+    x_step: Optional[float] = None,
 ) -> tuple[int, int]:
     """Adaptive canvas size for sparse data.
 
@@ -544,7 +545,31 @@ def compute_canvas_size(
     see that method's (pre-redesign) docstring for the ``pts_per_px``
     rationale. Excludes hidden (``alpha <= 0``) layers from the count,
     matching the original exactly.
+
+    *x_step* (issue #36, 2026-11-21): X is Time and samples are this far
+    apart (the integration time, or the averaging length).  The canvas
+    then has no more columns than there are samples in view --
+    ``(x1 - x0) / x_step`` -- so each column holds an integration and
+    none is left empty between two.  Finer columns are no real
+    resolution: on an axis where integrations land just over a pixel
+    apart (a closed Time axis, or a zoom), about half the columns caught
+    no sample and the plot showed stripes of background, worst where the
+    rounding came round every few integrations.  The image is stretched
+    to the panel as with the sparse-data shrink; zoomed in far enough,
+    an integration is a block, as a raster cell is.
     """
+    w, h = _adaptive_canvas_size(dataframes, layers, x0, x1, y0, y1, width, height)
+    if x_step is not None and x_step > 0 and x1 > x0:
+        w = min(w, max(1, int((x1 - x0) / x_step)))
+    return w, h
+
+
+def _adaptive_canvas_size(
+    dataframes: dict, layers: list[ScatterLayerSpec],
+    x0: float, x1: float, y0: float, y1: float,
+    width: int, height: int,
+) -> tuple[int, int]:
+    """The sparse-data shrink of ``compute_canvas_size``."""
     total_in_view = 0
     for lyr in layers:
         if lyr.alpha <= 0.0:

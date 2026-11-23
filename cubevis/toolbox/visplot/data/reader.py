@@ -721,6 +721,12 @@ class ScatterRenderResult:
     # ``VisibilityScatter._can_resample_locally``.
     ref_canvas_width:  Optional[int] = None
     ref_canvas_height: Optional[int] = None
+    # How far apart the samples are along X (``scatter_x_step``: X = Time,
+    # Frequency or Channel), else None: the canvas has no more columns than
+    # samples in view (``compute_canvas_size``, #36).  The scatter keeps it
+    # so a resize, which scales the canvas, holds to the same cap
+    # (``VisibilityScatter._pixel_size_changed``, 2026-11-23).
+    x_step:            Optional[float] = None
 
 
 @dataclass(frozen=True)

@@ -555,6 +555,9 @@ class VisibilityScatter(VisibilityPlot):
         self._layer_continuous_cmap_backup: dict[int, tuple] = {}
         self._canvas_width, self._canvas_height           = width, height
         self._full_canvas_width, self._full_canvas_height = width, height
+        # Sample spacing along X of the last render (ScatterRenderResult.
+        # x_step), or None: caps the canvas at a column per sample.
+        self._x_step: Optional[float] = None
 
         # Hover-probe redesign piece 2 (2026-09): coarse per-bin
         # native-coordinate-range + value grid, one entry per layer,
@@ -2119,6 +2122,19 @@ window.__cvSetBusy(false);
             v = getattr(self, a, None)
             if isinstance(v, (int, float)) and v > 0:
                 setattr(self, a, max(10, int(round(v * f))))
+        # The scaled width keeps #36's cap (2026-11-23): on X = Time,
+        # Frequency or Channel no more columns than samples in view.
+        # Scaling alone undid it -- a wider figure (a preset's layout, the
+        # sidebar, the window) gave two columns per channel, and the
+        # stripes of empty columns #36 removed came back.
+        step = getattr(self, "_x_step", None)
+        if step:
+            view = getattr(self, "_current_viewport", None)
+            vx = (view[0], view[1]) if view else self._x_range
+            for a, (x0, x1) in (("_canvas_width", vx), ("_full_canvas_width", self._x_range)):
+                v = getattr(self, a, None)
+                if isinstance(v, (int, float)) and v > 0 and x1 > x0:
+                    setattr(self, a, min(v, max(1, int((x1 - x0) / step))))
 
     def _can_resample_locally(
         self, x0: float, x1: float, y0: float, y1: float,
@@ -3047,6 +3063,7 @@ window.__cvSetBusy(false);
         self._y_range = result.y_range
         self._canvas_width  = result.canvas_width
         self._canvas_height = result.canvas_height
+        self._x_step = getattr(result, "x_step", None)
         if x_range is None and y_range is None:
             # Only a full-extent call updates the reference size
             # _panel_spec's agg_n_x/agg_n_y reports -- see that

@@ -1254,6 +1254,7 @@ class MSv2Backend(XArrayReader):
             canvas_width=canvas_w, canvas_height=canvas_h,
             layers=rendered,
             ref_canvas_width=ref_canvas_width, ref_canvas_height=ref_canvas_height,
+            x_step=x_step,
         )
 
     def _query_columns_raw(

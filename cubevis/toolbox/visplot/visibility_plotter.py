@@ -7030,7 +7030,11 @@ window.__cvPlotPending(true);
         sel.js_on_change("value", js)
         inp.js_on_change("value", js)
         inp.js_on_event(ValueSubmit, js)
-        return column(self._hover(sel, name), inp, sizing_mode="fixed", width=sel.width)
+        # No sizing_mode="fixed": that needs a height as well (Bokeh W-1005,
+        # FIXED_SIZING_MODE, test_info_block_integration), and this column's
+        # height changes as the box shows and hides.  width= alone keeps the
+        # width fixed (width_policy "auto" with a width).  2026-11-23.
+        return column(self._hover(sel, name), inp, width=sel.width)
 
     def _hover(self, widget, name: str):
         """Wrap *widget* so the status-area help ``self._hint_<name>``

@@ -77,6 +77,8 @@ def _visplot_t(
         stat_chan_window = 'off',
         scatter_avg_time = 'off',
         scatter_avg_chan = 'off',
+        time_gaps: str = 'shown',
+        freq_gaps: str = 'shown',
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
@@ -139,6 +141,8 @@ def _visplot_t(
         stat_chan_window = stat_chan_window,
         scatter_avg_time = scatter_avg_time,
         scatter_avg_chan = scatter_avg_chan,
+        time_gaps = time_gaps,
+        freq_gaps = freq_gaps,
         layout = layout,
         kind = kind,
         preset = preset,
@@ -323,6 +327,20 @@ class _visplot:
         number of channels, or ``"all"`` (one point per spectral window).
         For a time series (with X Time).  Same rules as
         ``scatter_avg_time``.
+    time_gaps : str
+        How a Time axis treats the gaps between scans and other breaks in
+        the data: ``"shown"`` (default; time to scale) or ``"closed"``
+        (the stretches of data side by side, every gap removed; the
+        ticks still read the real times).  A raster's Time axis, or a
+        scatter's with X Time.  Initial value for every panel; each
+        panel's "Time gaps" control changes it afterwards.
+    freq_gaps : str
+        The same for a frequency axis and the gaps between spectral
+        windows: ``"shown"`` (default) or ``"closed"``.  A raster's
+        Channel axis when the selected windows differ (it is then drawn
+        in frequency), or a scatter's with X Frequency.  Initial value
+        for every panel; each panel's "Frequency gaps" control changes
+        it afterwards.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), ``"over"`` (both panels, one above
@@ -404,7 +422,8 @@ class _visplot:
         ``raster_qty``, ``averaging``, ``raster_corr``, ``baseline_order``,
         ``baseline_combine``, ``detrend``, ``stat_time_window``,
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
-        ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
+        ``scatter_avg_time``, ``scatter_avg_chan``, ``time_gaps``,
+        ``freq_gaps`` -- plus, for a raster,
         ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
         and ``vmax`` (its color scale).  A key left out takes the value
         the flat argument (or ``preset``) gives that panel, so the flat
@@ -588,6 +607,8 @@ class _visplot:
         'stat_chan_window': 'Channel window for the same statistic: ``"off"`` (default) or a number of channels.',
         'scatter_avg_time': 'Scatter points averaged over time, per baseline and correlation: ``"off"`` (default, every sample a point), ``"scan"``, or a number of seconds (windows from the start of each scan, never across a scan boundary).',
         'scatter_avg_chan': 'Scatter points averaged over channels: ``"off"`` (default), a number of channels, or ``"all"`` (one point per spectral window).',
+        'time_gaps': 'Gaps on a Time axis (between scans): shown, or closed (removed).',
+        'freq_gaps': 'Gaps on a frequency axis (between spectral windows): shown, or closed (removed).',
         'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), ``"over"`` (both panels, one above the other), or ``"grid"`` (the first panel repeated once per baseline, antenna, SPW, field, scan or correlation -- see ``iterate_by``; a raster or a scatter).',
         'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
@@ -651,6 +672,8 @@ class _visplot:
         'stat_chan_window': 'off',
         'scatter_avg_time': 'off',
         'scatter_avg_chan': 'off',
+        'time_gaps': 'shown',
+        'freq_gaps': 'shown',
         'layout': 'side',
         'kind': None,
         'preset': None,
@@ -749,6 +772,8 @@ class _visplot:
             'stat_chan_window': '',
             'scatter_avg_time': '',
             'scatter_avg_chan': '',
+            'time_gaps': 'str',
+            'freq_gaps': 'str',
             'layout': 'str',
             'kind': 'Optional[str]',
             'preset': 'Optional[str]',
@@ -1204,6 +1229,36 @@ class _visplot:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
             '%-23.23s = %s%-23s%s' % ('scatter_avg_chan', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __time_gaps_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('time_gaps', self._arg_default['time_gaps'])
+        default = self._arg_default['time_gaps']
+        desc    = self._arg_description.get('time_gaps', '')
+        if self.__validate_('time_gaps', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('time_gaps', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __freq_gaps_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('freq_gaps', self._arg_default['freq_gaps'])
+        default = self._arg_default['freq_gaps']
+        desc    = self._arg_description.get('freq_gaps', '')
+        if self.__validate_('freq_gaps', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('freq_gaps', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
@@ -1789,6 +1844,8 @@ class _visplot:
         if 'stat_chan_window' in glb: del glb['stat_chan_window']
         if 'scatter_avg_time' in glb: del glb['scatter_avg_time']
         if 'scatter_avg_chan' in glb: del glb['scatter_avg_chan']
+        if 'time_gaps' in glb: del glb['time_gaps']
+        if 'freq_gaps' in glb: del glb['freq_gaps']
         if 'layout' in glb: del glb['layout']
         if 'kind' in glb: del glb['kind']
         if 'preset' in glb: del glb['preset']
@@ -1852,6 +1909,8 @@ class _visplot:
         self.__stat_chan_window_inp()
         self.__scatter_avg_time_inp()
         self.__scatter_avg_chan_inp()
+        self.__time_gaps_inp()
+        self.__freq_gaps_inp()
         self.__layout_inp()
         self.__kind_inp()
         self.__preset_inp()
@@ -1939,6 +1998,8 @@ class _visplot:
         _invocation_parameters['stat_chan_window'] = glb.get('stat_chan_window', self._arg_default['stat_chan_window'])
         _invocation_parameters['scatter_avg_time'] = glb.get('scatter_avg_time', self._arg_default['scatter_avg_time'])
         _invocation_parameters['scatter_avg_chan'] = glb.get('scatter_avg_chan', self._arg_default['scatter_avg_chan'])
+        _invocation_parameters['time_gaps'] = glb.get('time_gaps', self._arg_default['time_gaps'])
+        _invocation_parameters['freq_gaps'] = glb.get('freq_gaps', self._arg_default['freq_gaps'])
         _invocation_parameters['layout'] = glb.get('layout', self._arg_default['layout'])
         _invocation_parameters['kind'] = glb.get('kind', self._arg_default['kind'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
@@ -2018,6 +2079,8 @@ class _visplot:
             stat_chan_window = _UNSET,
             scatter_avg_time = _UNSET,
             scatter_avg_chan = _UNSET,
+            time_gaps = _UNSET,
+            freq_gaps = _UNSET,
             layout = _UNSET,
             kind = _UNSET,
             preset = _UNSET,
@@ -2090,6 +2153,8 @@ class _visplot:
             stat_chan_window,
             scatter_avg_time,
             scatter_avg_chan,
+            time_gaps,
+            freq_gaps,
             layout,
             kind,
             preset,
@@ -2199,6 +2264,12 @@ class _visplot:
             _invocation_parameters['scatter_avg_chan'] = \
                 scatter_avg_chan if scatter_avg_chan is not _UNSET \
                 else glb.get('scatter_avg_chan', self._arg_default['scatter_avg_chan'])
+            _invocation_parameters['time_gaps'] = \
+                time_gaps if time_gaps is not _UNSET \
+                else glb.get('time_gaps', self._arg_default['time_gaps'])
+            _invocation_parameters['freq_gaps'] = \
+                freq_gaps if freq_gaps is not _UNSET \
+                else glb.get('freq_gaps', self._arg_default['freq_gaps'])
             _invocation_parameters['layout'] = \
                 layout if layout is not _UNSET \
                 else glb.get('layout', self._arg_default['layout'])
@@ -2356,6 +2427,10 @@ class _visplot:
                 glb.get('scatter_avg_time', self._arg_default['scatter_avg_time'])
             _invocation_parameters['scatter_avg_chan'] = \
                 glb.get('scatter_avg_chan', self._arg_default['scatter_avg_chan'])
+            _invocation_parameters['time_gaps'] = \
+                glb.get('time_gaps', self._arg_default['time_gaps'])
+            _invocation_parameters['freq_gaps'] = \
+                glb.get('freq_gaps', self._arg_default['freq_gaps'])
             _invocation_parameters['layout'] = \
                 glb.get('layout', self._arg_default['layout'])
             _invocation_parameters['kind'] = \
@@ -2472,6 +2547,8 @@ class _visplot:
                     'stat_chan_window=' + repr(_invocation_parameters['stat_chan_window']),
                     'scatter_avg_time=' + repr(_invocation_parameters['scatter_avg_time']),
                     'scatter_avg_chan=' + repr(_invocation_parameters['scatter_avg_chan']),
+                    'time_gaps=' + repr(_invocation_parameters['time_gaps']),
+                    'freq_gaps=' + repr(_invocation_parameters['freq_gaps']),
                     'layout=' + repr(_invocation_parameters['layout']),
                     'kind=' + repr(_invocation_parameters['kind']),
                     'preset=' + repr(_invocation_parameters['preset']),
@@ -2534,6 +2611,8 @@ class _visplot:
                 stat_chan_window = _invocation_parameters['stat_chan_window'],
                 scatter_avg_time = _invocation_parameters['scatter_avg_time'],
                 scatter_avg_chan = _invocation_parameters['scatter_avg_chan'],
+                time_gaps = _invocation_parameters['time_gaps'],
+                freq_gaps = _invocation_parameters['freq_gaps'],
                 layout = _invocation_parameters['layout'],
                 kind = _invocation_parameters['kind'],
                 preset = _invocation_parameters['preset'],

@@ -479,7 +479,7 @@ class VisibilityScatter(VisibilityPlot):
         # windows side by side).  _x_gap_axis is that axis while one
         # applies, else None.
         self._time_gaps = normalize_time_gaps(time_gaps)
-        self._freq_gaps = normalize_time_gaps(freq_gaps)
+        self._freq_gaps = normalize_time_gaps(freq_gaps, "freq_gaps")
         self._x_gap_axis: Optional[GapAxis] = None
         # HRS H2 slice 4 (2026-10): this scatter's own Phase RMS /
         # Coherence settings -- slope removal and the two windows.  None
@@ -1574,7 +1574,7 @@ window.__cvSetBusy(false);
             if tg != self.time_gaps:
                 self._time_gaps = tg;  changed = True
         if freq_gaps is not None:
-            fg = normalize_time_gaps(freq_gaps)
+            fg = normalize_time_gaps(freq_gaps, "freq_gaps")
             if fg != self.freq_gaps:
                 self._freq_gaps = fg;  changed = True
         # The base class labels the y axis from _y_dim, which was set

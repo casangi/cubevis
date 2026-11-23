@@ -188,6 +188,7 @@ def _slot_settings(plotter, slot) -> dict:
         rk = getattr(r, "_corr_choice", "auto") or "auto"
         if rk != "auto":
             d["raster_corr"] = rk
+        _gap_settings(d, r)
         sc = getattr(r, "_scaling", None)
         if sc:
             d["scaling"] = sc
@@ -203,6 +204,7 @@ def _slot_settings(plotter, slot) -> dict:
                  scatter_avg_time=s._avg_time or "off",
                  scatter_avg_chan=s._avg_chan or "off",
                  averaging=s._averaging or plotter._averaging)
+        _gap_settings(d, s)
         if s._detrend is not None or s._stat_time_window is not None:
             d.update(detrend=bool(plotter._detrend if s._detrend is None else s._detrend),
                      stat_time_window=(plotter._stat_time_window
@@ -212,6 +214,14 @@ def _slot_settings(plotter, slot) -> dict:
                                        if s._stat_chan_window is None
                                        else s._stat_chan_window))
     return d
+
+
+def _gap_settings(d: dict, panel) -> None:
+    """``time_gaps`` / ``freq_gaps`` in *d* when *panel* has them closed
+    (#36; "shown", the default, is left out)."""
+    for key in ("time_gaps", "freq_gaps"):
+        if getattr(panel, key, "shown") == "closed":
+            d[key] = "closed"
 
 
 def _correlation_shown(plotter, r) -> str:
@@ -456,6 +466,8 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
             ("Phase slope removed", "yes" if r.detrend else "no"),
             ("Statistic time window", str(r.stat_time_window)),
             ("Statistic channel window", str(r.stat_chan_window)),
+            ("Time gaps", getattr(r, "time_gaps", "shown")),
+            ("Frequency gaps", getattr(r, "freq_gaps", "shown")),
             ("Color map", getattr(plotter, "_raster_cmap_name", "—")),
             ("Color scaling", str(getattr(r, "_scaling", "—"))),
             ("Color range", "automatic" if (r._scaling_vmin is None and r._scaling_vmax is None)
@@ -477,6 +489,8 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
             ("Average over time", s._avg_time or "off"),
             ("Average over channels", s._avg_chan or "off"),
             ("Averaging (vector / scalar)", s._averaging or plotter._averaging),
+            ("Time gaps", getattr(s, "time_gaps", "shown")),
+            ("Frequency gaps", getattr(s, "freq_gaps", "shown")),
             ("Phase slope removed", "as the plotter" if s._detrend is None
              else ("yes" if s._detrend else "no")),
             ("Color map", getattr(plotter, "_scatter_cmap_name", "—")),

@@ -275,6 +275,8 @@ class VisibilityRaster(VisibilityPlot):
         stat_chan_window="off",
         baseline_order: Optional[str] = None,
         baseline_combine: Optional[str] = None,
+        time_gaps: str = "shown",
+        freq_gaps: str = "shown",
         **kwargs,
     ) -> None:
         self._quantity     = quantity
@@ -294,11 +296,11 @@ class VisibilityRaster(VisibilityPlot):
         # the Time axis laid out in positions, one per time cell, a blank
         # one at each break (raster_grid.TimeAxis, built by each render;
         # None when the gaps are shown or Time is not an axis).
-        self._time_gaps = "shown"
+        self._time_gaps = normalize_time_gaps(time_gaps)
         self._time_axis: Optional[TimeAxis] = None
         # #36 part 3: the same for a Frequency axis (in Hz, not a channel
         # index): "closed" puts the spectral windows side by side.
-        self._freq_gaps = "shown"
+        self._freq_gaps = normalize_time_gaps(freq_gaps, "freq_gaps")
         self._freq_axis: Optional[GapAxis] = None
         # Where elapsed-time labels count from: the first cell's centre,
         # which is not the axis range's low end now that the range runs
@@ -534,7 +536,7 @@ class VisibilityRaster(VisibilityPlot):
             if tg != self._time_gaps:
                 self._time_gaps = tg;  changed = True
         if freq_gaps is not None:
-            fg = normalize_time_gaps(freq_gaps)
+            fg = normalize_time_gaps(freq_gaps, "freq_gaps")
             if fg != self.freq_gaps:
                 self._freq_gaps = fg;  changed = True
         if baseline_combine is not None:

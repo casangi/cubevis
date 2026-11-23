@@ -3160,6 +3160,20 @@ class VisibilityPlotter:
         number of channels, or ``"all"`` (one point per spectral window).
         For a time series (with X Time).  Same rules as
         ``scatter_avg_time``.
+    time_gaps : str
+        How a Time axis treats the gaps between scans and other breaks in
+        the data: ``"shown"`` (default; time to scale) or ``"closed"``
+        (the stretches of data side by side, every gap removed; the
+        ticks still read the real times).  A raster's Time axis, or a
+        scatter's with X Time.  Initial value for every panel; each
+        panel's "Time gaps" control changes it afterwards.
+    freq_gaps : str
+        The same for a frequency axis and the gaps between spectral
+        windows: ``"shown"`` (default) or ``"closed"``.  A raster's
+        Channel axis when the selected windows differ (it is then drawn
+        in frequency), or a scatter's with X Frequency.  Initial value
+        for every panel; each panel's "Frequency gaps" control changes
+        it afterwards.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), ``"over"`` (both panels, one above
@@ -3241,7 +3255,8 @@ class VisibilityPlotter:
         ``raster_qty``, ``averaging``, ``raster_corr``, ``baseline_order``,
         ``baseline_combine``, ``detrend``, ``stat_time_window``,
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
-        ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
+        ``scatter_avg_time``, ``scatter_avg_chan``, ``time_gaps``,
+        ``freq_gaps`` -- plus, for a raster,
         ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
         and ``vmax`` (its color scale).  A key left out takes the value
         the flat argument (or ``preset``) gives that panel, so the flat
@@ -3429,6 +3444,8 @@ class VisibilityPlotter:
         stat_chan_window                = "off",
         scatter_avg_time                = "off",
         scatter_avg_chan                = "off",
+        time_gaps:        str           = "shown",
+        freq_gaps:        str           = "shown",
         layout:           str           = "side",
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
@@ -3538,6 +3555,7 @@ class VisibilityPlotter:
                 stat_chan_window=stat_chan_window,
                 scatter_avg_time=scatter_avg_time,
                 scatter_avg_chan=scatter_avg_chan,
+                time_gaps=time_gaps, freq_gaps=freq_gaps,
                 layout=layout, kind=kind, preset=preset,
                 raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
                 scatter_x=scatter_x, scatter_y=scatter_y,
@@ -3752,6 +3770,7 @@ class VisibilityPlotter:
         stat_time_window, stat_chan_window,
         scatter_avg_time, scatter_avg_chan,
         layout, kind, preset,
+        time_gaps="shown", freq_gaps="shown",
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
         time_range, freq_range, uvdist_range, enable_flagging,
         compact_toolbar, theme, raster_cmap, scatter_cmap,
@@ -3833,6 +3852,10 @@ class VisibilityPlotter:
         # HRS H6: scatter averaging; initial value here, per panel after.
         self._scatter_avg_time = normalize_avg_time(scatter_avg_time)
         self._scatter_avg_chan = normalize_avg_chan(scatter_avg_chan)
+        # #36: gaps closed on a Time / frequency axis; initial value here,
+        # per panel afterwards.  Validated now so a typo fails here.
+        self._time_gaps = normalize_time_gaps(time_gaps)
+        self._freq_gaps = normalize_time_gaps(freq_gaps, "freq_gaps")
         # layout="raster"/"scatter" is sugar for layout="one", kind=X --
         # resolved once here, before either attribute is set, so nothing
         # downstream (the layout radio, layout_js, export/preset JS,
@@ -4107,6 +4130,7 @@ class VisibilityPlotter:
                    "baseline_order", "baseline_combine", "detrend",
                    "stat_time_window", "stat_chan_window", "scatter_x",
                    "scatter_y", "scatter_avg_time", "scatter_avg_chan",
+                   "time_gaps", "freq_gaps",
                    "scaling", "vmin", "vmax")
     MAX_PANELS = 2
 
@@ -4134,6 +4158,8 @@ class VisibilityPlotter:
             scatter_x=self._scatter_x, scatter_y=self._scatter_y,
             scatter_avg_time=self._scatter_avg_time,
             scatter_avg_chan=self._scatter_avg_chan,
+            time_gaps=getattr(self, "_time_gaps", "shown"),
+            freq_gaps=getattr(self, "_freq_gaps", "shown"),
             scaling=None, vmin=None, vmax=None,
             # Whether the scatter was given its own Phase RMS settings
             # (else it follows the plotter's, as before A2).
@@ -4207,7 +4233,9 @@ class VisibilityPlotter:
                 "stat_time_window": normalize_time_window,
                 "stat_chan_window": normalize_chan_window,
                 "scatter_avg_time": normalize_avg_time,
-                "scatter_avg_chan": normalize_avg_chan}
+                "scatter_avg_chan": normalize_avg_chan,
+                "time_gaps": normalize_time_gaps,
+                "freq_gaps": lambda v: normalize_time_gaps(v, "freq_gaps")}
         for k, f in norm.items():
             if k in d:
                 try:
@@ -4482,6 +4510,8 @@ class VisibilityPlotter:
                 averaging     = c["averaging"],
                 baseline_order = c["baseline_order"],
                 baseline_combine = c["baseline_combine"],
+                time_gaps     = c.get("time_gaps", "shown"),
+                freq_gaps     = c.get("freq_gaps", "shown"),
                 detrend       = c["detrend"],
                 stat_time_window = c["stat_time_window"],
                 stat_chan_window = c["stat_chan_window"],
@@ -4527,6 +4557,8 @@ class VisibilityPlotter:
                 layer_cmaps          = scatter_ramps,
                 avg_time             = c["scatter_avg_time"],
                 avg_chan             = c["scatter_avg_chan"],
+                time_gaps            = c.get("time_gaps", "shown"),
+                freq_gaps            = c.get("freq_gaps", "shown"),
                 averaging            = c["averaging"],
                 # Its own Phase RMS / Coherence settings when panels=[...]
                 # gave them; else None, following the plotter's.

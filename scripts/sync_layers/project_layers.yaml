@@ -20,6 +20,8 @@ sources:
       mode:        'Display mode: both, raster, or scatter.'
       preset:      'Named startup preset (vplot, radplot, waterfall).'
       kernel_name: 'Remote kernel to run data access/rendering on (cubevis.remote).'
+      time_gaps:   'Gaps on a Time axis (between scans): shown, or closed (removed).'
+      freq_gaps:   'Gaps on a frequency axis (between spectral windows): shown, or closed (removed).'
     methods:
       - __init__
       - __call__

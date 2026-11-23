@@ -67,6 +67,8 @@ def _validate_params(
         stat_chan_window,
         scatter_avg_time,
         scatter_avg_chan,
+        time_gaps,
+        freq_gaps,
         layout,
         kind,
         preset,
@@ -130,6 +132,8 @@ def _validate_params(
         'stat_chan_window': '',
         'scatter_avg_time': '',
         'scatter_avg_chan': '',
+        'time_gaps': 'str',
+        'freq_gaps': 'str',
         'layout': 'str',
         'kind': 'Optional[str]',
         'preset': 'Optional[str]',
@@ -251,6 +255,8 @@ def _validate_params(
     _check('stat_chan_window', stat_chan_window, _type_map['stat_chan_window'])
     _check('scatter_avg_time', scatter_avg_time, _type_map['scatter_avg_time'])
     _check('scatter_avg_chan', scatter_avg_chan, _type_map['scatter_avg_chan'])
+    _check('time_gaps', time_gaps, _type_map['time_gaps'])
+    _check('freq_gaps', freq_gaps, _type_map['freq_gaps'])
     _check('layout', layout, _type_map['layout'])
     _check('kind', kind, _type_map['kind'])
     _check('preset', preset, _type_map['preset'])
@@ -314,6 +320,8 @@ def _visplot_t(
         stat_chan_window = 'off',
         scatter_avg_time = 'off',
         scatter_avg_chan = 'off',
+        time_gaps: str = 'shown',
+        freq_gaps: str = 'shown',
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
@@ -376,6 +384,8 @@ def _visplot_t(
         stat_chan_window = stat_chan_window,
         scatter_avg_time = scatter_avg_time,
         scatter_avg_chan = scatter_avg_chan,
+        time_gaps = time_gaps,
+        freq_gaps = freq_gaps,
         layout = layout,
         kind = kind,
         preset = preset,
@@ -569,6 +579,20 @@ class _visplot:
         number of channels, or ``"all"`` (one point per spectral window).
         For a time series (with X Time).  Same rules as
         ``scatter_avg_time``.
+    time_gaps : str
+        How a Time axis treats the gaps between scans and other breaks in
+        the data: ``"shown"`` (default; time to scale) or ``"closed"``
+        (the stretches of data side by side, every gap removed; the
+        ticks still read the real times).  A raster's Time axis, or a
+        scatter's with X Time.  Initial value for every panel; each
+        panel's "Time gaps" control changes it afterwards.
+    freq_gaps : str
+        The same for a frequency axis and the gaps between spectral
+        windows: ``"shown"`` (default) or ``"closed"``.  A raster's
+        Channel axis when the selected windows differ (it is then drawn
+        in frequency), or a scatter's with X Frequency.  Initial value
+        for every panel; each panel's "Frequency gaps" control changes
+        it afterwards.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), ``"over"`` (both panels, one above
@@ -650,7 +674,8 @@ class _visplot:
         ``raster_qty``, ``averaging``, ``raster_corr``, ``baseline_order``,
         ``baseline_combine``, ``detrend``, ``stat_time_window``,
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
-        ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
+        ``scatter_avg_time``, ``scatter_avg_chan``, ``time_gaps``,
+        ``freq_gaps`` -- plus, for a raster,
         ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
         and ``vmax`` (its color scale).  A key left out takes the value
         the flat argument (or ``preset``) gives that panel, so the flat
@@ -834,6 +859,8 @@ class _visplot:
             stat_chan_window = 'off',
             scatter_avg_time = 'off',
             scatter_avg_chan = 'off',
+            time_gaps: str = 'shown',
+            freq_gaps: str = 'shown',
             layout: str = 'side',
             kind: Optional[str] = None,
             preset: Optional[str] = None,
@@ -910,6 +937,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             stat_chan_window = stat_chan_window,
             scatter_avg_time = scatter_avg_time,
             scatter_avg_chan = scatter_avg_chan,
+            time_gaps = time_gaps,
+            freq_gaps = freq_gaps,
             layout = layout,
             kind = kind,
             preset = preset,
@@ -973,6 +1002,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'stat_chan_window=' + repr(stat_chan_window),
                 'scatter_avg_time=' + repr(scatter_avg_time),
                 'scatter_avg_chan=' + repr(scatter_avg_chan),
+                'time_gaps=' + repr(time_gaps),
+                'freq_gaps=' + repr(freq_gaps),
                 'layout=' + repr(layout),
                 'kind=' + repr(kind),
                 'preset=' + repr(preset),
@@ -1037,6 +1068,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 stat_chan_window = stat_chan_window,
                 scatter_avg_time = scatter_avg_time,
                 scatter_avg_chan = scatter_avg_chan,
+                time_gaps = time_gaps,
+                freq_gaps = freq_gaps,
                 layout = layout,
                 kind = kind,
                 preset = preset,

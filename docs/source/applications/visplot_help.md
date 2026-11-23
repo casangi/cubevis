@@ -277,6 +277,8 @@ scatter's with X = Time.
 * Zooming in reads finer cells, as with the gaps shown.
 * Each panel has its own setting, in its gear tab (for a scatter, shown
   when X is Time). Applied by **Plot**.
+* From Python or the `visplot` task: `time_gaps="closed"` sets every
+  panel, `panels=[dict(time_gaps="closed"), None]` one panel.
 
 (vp-freq-gaps)=
 
@@ -298,6 +300,8 @@ in frequency), or a scatter's with X = Frequency.
 * Each panel has its own setting, in its gear tab (for a raster, shown
   when an axis is Channel; for a scatter, when X is Frequency). Applied
   by **Plot**.
+* From Python or the `visplot` task: `freq_gaps="closed"` sets every
+  panel, `panels=[...]` one panel, as for time gaps.
 
 (vp-twin)=
 

@@ -543,15 +543,16 @@ TIME_GAP_MODES = ("shown", "closed")
 """How a raster's Time axis treats stretches with no data (debug-0003)."""
 
 
-def normalize_time_gaps(value) -> str:
+def normalize_time_gaps(value, name: str = "time_gaps") -> str:
     """``"shown"`` (the default: time is drawn to scale, a gap between
-    scans is blank) or ``"closed"`` (:class:`GapAxis`)."""
+    scans is blank) or ``"closed"`` (:class:`GapAxis`).  Also for
+    ``freq_gaps`` (*name*: what an error calls the value)."""
     v = str(value or "shown").strip().lower()
     if v in ("shown", "show", "linear", "false", "off", "no"):
         return "shown"
     if v in ("closed", "close", "true", "on", "yes"):
         return "closed"
-    raise ValueError(f"time gaps must be 'shown' or 'closed'; got {value!r}")
+    raise ValueError(f"{name} must be 'shown' or 'closed'; got {value!r}")
 
 
 @dataclass(frozen=True)

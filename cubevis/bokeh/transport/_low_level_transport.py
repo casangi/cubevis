@@ -97,6 +97,20 @@ class TransportNotConnectedError(RuntimeError):
     pass
 
 
+# WebSocket close code for a page that belongs to a different session (its
+# comm_mgr_id or backend_id is not this one's): REFUSED_CLOSE_CODE in
+# cubevisjs/src/bokeh/transport/low_level_transport.ts.  Such a page stops
+# reconnecting.  4001 is SUPERSEDED_CLOSE_CODE (_comm_mgr.py).
+REFUSED_CLOSE_CODE = 4002
+
+
+class HandshakeRefused(Exception):
+    """A page's ``initialize`` names a different session (comm_mgr_id or
+    backend_id).  Raised by WebSocketTransport.connect() after it has told
+    the page and closed with REFUSED_CLOSE_CODE (transport review WS-2)."""
+    pass
+
+
 class TransportBase(ABC):
     """Abstract base class for communication transports."""
 
@@ -187,9 +201,15 @@ class WebSocketTransport(TransportBase):
         self._close_was_clean: Optional[bool] = None
         self._close_code: Optional[int] = None
 
-        ### Set when the frontend sends '__goodbye__' from its pagehide /
-        ### beforeunload handler. This is a deliberate-departure signal that
-        ### does not depend on the close frame arriving intact.
+        ### Set when the frontend sends '__goodbye__' from its pagehide
+        ### handler. This is a deliberate-departure signal that does not
+        ### depend on the close frame arriving intact.  Cleared again by any
+        ### later frame from the page (transport review WS-4): a page that
+        ### is still talking did not leave.  Bundles before 2026-11-23 also
+        ### send it from beforeunload, which another handler can cancel
+        ### ("Leave site?" -> Stay); without the clearing, a later abrupt
+        ### drop (sleep, network) was taken as a deliberate close and the
+        ### session ended after the 3 s grace instead of waiting.
         self._goodbye_received = False
 
         ### The page on the other end, from its `initialize` message: a
@@ -278,16 +298,28 @@ class WebSocketTransport(TransportBase):
 
                 warnings = []
 
-                if app:
-                    # Check backend_id
-                    if backend_id and backend_id != app.backend_id:
-                        warning = (
-                            f"Frontend connecting to wrong backend! "
-                            f"Expected: {app.backend_id}, Got: {backend_id}"
-                        )
-                        logger.warning(warning)
-                        warnings.append(warning)
+                ### A page for another session is refused, not warned about
+                ### (transport review WS-2, the part debug-0003 left).  The
+                ### realistic case: a tab left open from an earlier run wakes
+                ### and reconnects to a port a newer process has since been
+                ### given.  Accepted, it would take this session from its own
+                ### page (the newest page wins) and replay its requests here.
+                ### Each server serves one CommMgr, so the page's
+                ### comm_mgr_id must be ours.  backend_id is only checked
+                ### when the page sends one; pages send null today, since
+                ### find.context() does not reach the app context from the
+                ### CommMgr (see cm.ts pageId).  A missing value is accepted:
+                ### older pages, and a check that cannot be made.
+                mismatch = None
+                if received_comm_mgr_id and received_comm_mgr_id != self._comm_mgr_id:
+                    mismatch = (f"comm_mgr_id {received_comm_mgr_id} "
+                                f"(this session: {self._comm_mgr_id})")
+                elif app and backend_id and backend_id != app.backend_id:
+                    mismatch = f"backend_id {backend_id} (this session: {app.backend_id})"
+                if mismatch is not None:
+                    await self._refuse(f"page belongs to another session: {mismatch}")
 
+                if app:
                     # The newest page takes the session (transport review
                     # WS-2): CommMgr tells the earlier one it was superseded
                     # once this handshake succeeds, so a second tab is not a
@@ -327,6 +359,26 @@ class WebSocketTransport(TransportBase):
             logger.debug(f"WebSocket initialization failed: {type(e).__name__}: {e}")
             raise
 
+    async def _refuse(self, reason: str) -> None:
+        """Tell the page it belongs to another session, close with
+        REFUSED_CLOSE_CODE and raise HandshakeRefused.  The notice goes
+        first, as a message, for the same reason as supersede(): either one
+        is enough for the page to stop reconnecting, and a close code alone
+        can be lost.  Pages before 2026-11-23 ignore both and retry with
+        their usual backoff."""
+        from ...utils import serialize
+        logger.info(f"WebSocket handshake refused: {reason}")
+        try:
+            await self.websocket.send(serialize({'type': '__refused__', 'reason': reason}))
+        except Exception as e:                           # noqa: BLE001
+            logger.debug(f"Could not send __refused__: {e}")
+        try:
+            await self.websocket.close(code=REFUSED_CLOSE_CODE, reason="page belongs to another session")
+        except Exception as e:                           # noqa: BLE001
+            logger.debug(f"Error closing refused WebSocket: {e}")
+        self._closed = True
+        raise HandshakeRefused(reason)
+
     async def send_message(self, message: Dict[str, Any]) -> None:
         """Send a message through the WebSocket."""
         if not self._connected:
@@ -360,14 +412,6 @@ class WebSocketTransport(TransportBase):
                 try:
                     msg = deserialize(message)
 
-                    ### Transport-level keepalive.
-                    ###
-                    ### Browsers cannot send WebSocket control frames from
-                    ### JavaScript, so the frontend cannot use protocol-level
-                    ### ping/pong to notice that a socket went half-open while
-                    ### the laptop was asleep. It sends an application-level
-                    ### '__ping__' instead. Answer it here and never surface it
-                    ### to the application callback.
                     ### The frontend is being torn down (tab closed, reloaded,
                     ### or navigated away). Record it and keep going -- the
                     ### close frame follows immediately after.
@@ -378,6 +422,25 @@ class WebSocketTransport(TransportBase):
                         self._goodbye_received = True
                         continue
 
+                    ### Anything after a goodbye means the page stayed (its
+                    ### beforeunload was cancelled); the goodbye no longer
+                    ### holds (WS-4).  Nothing follows a real departure's
+                    ### goodbye: the page sends it last, synchronously.
+                    if self._goodbye_received:
+                        logger.debug(
+                            f"Frontend still active after goodbye for "
+                            f"{self._comm_mgr_id}; departure cancelled"
+                        )
+                        self._goodbye_received = False
+
+                    ### Transport-level keepalive.
+                    ###
+                    ### Browsers cannot send WebSocket control frames from
+                    ### JavaScript, so the frontend cannot use protocol-level
+                    ### ping/pong to notice that a socket went half-open while
+                    ### the laptop was asleep. It sends an application-level
+                    ### '__ping__' instead. Answer it here and never surface it
+                    ### to the application callback.
                     if isinstance(msg, dict) and msg.get('type') == '__ping__':
                         await self.websocket.send(serialize({
                             'type': '__pong__',
@@ -431,13 +494,21 @@ class WebSocketTransport(TransportBase):
                     task = asyncio.create_task(self._message_callback(msg))
                     self._pending_message_tasks.add(task)
 
-                    def _on_message_task_done(t, _msg=msg):
+                    ### Only the routing fields: the message itself can be
+                    ### megabytes (an image reply), WS-5.
+                    _what = (
+                        f"{msg.get('comm_id')}.{msg.get('message_id')} "
+                        f"(request_id={msg.get('request_id')})"
+                        if isinstance(msg, dict) else type(msg).__name__
+                    )
+
+                    def _on_message_task_done(t, _what=_what):
                         self._pending_message_tasks.discard(t)
                         if t.cancelled():
                             return
                         exc = t.exception()
                         if exc is not None:
-                            logger.error(f"Error processing message {_msg}: {exc}")
+                            logger.error(f"Error processing message {_what}: {exc}")
 
                     task.add_done_callback(_on_message_task_done)
                 except (ConnectionClosedError, ConnectionClosedOK):
@@ -1410,30 +1481,17 @@ class CommsTransport(TransportBase):
             # the same iframe where CommsTransport registered window["cubevis_rx_cb_..."].
             # The window callback delivers directly to colabComm.onMsg → handleJupyterMessage.
             # BroadcastChannel is also posted for any cross-iframe listeners.
-            import json as _json
             # eval_js only works when called from the main IPython kernel thread.
             # When send_message is called from a Tornado IOLoop callback (as in the
             # full app), eval_js with ignore_result=True silently does nothing.
             # Fix: schedule the eval_js call on the kernel's main asyncio loop using
             # IPython's kernel.io_loop, which runs on the main thread where eval_js works.
+            #
+            # (Until 2026-11-23 an eval_js script was also built here, with a full
+            # json.dumps of the envelope, and never used -- delivery happens in
+            # _deliver_in_thread.  Transport review CO-3.)
             try:
-                from google.colab import output as _colab_output
-                cb_name = f"cubevis_rx_cb_{self._comm_mgr_id}"
-                bc_name = f"cubevis_rx_{self._comm_mgr_id}"
-                env_json = _json.dumps(envelope)
-                js_code = (
-                    f"(()=>{{"
-                    f"const msg={env_json};"
-                    f"const cb=window[{_json.dumps(cb_name)}];"
-                    f"if(typeof cb==='function'){{"
-                    f"  cb(msg);"
-                    f"}} else {{"
-                    f"}}"
-                    f"try{{const bc=new BroadcastChannel({_json.dumps(bc_name)});bc.postMessage(msg);bc.close();}}catch(e){{}}"
-                    f"}})();"
-                )
-
-                _parent_header = getattr(self, '_last_parent_header', {})
+                from google.colab import output as _colab_output  # noqa: F401 -- Colab guard
 
                 # Try Bokeh document approach: update a Bokeh model property.
                 # The Bokeh session has its own always-active WebSocket to the browser.

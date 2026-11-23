@@ -6,9 +6,21 @@ kernel -- but record the page URL instead of opening a browser.
 Values "True"/"False" become booleans; everything else is passed as a
 string, as the task's string arguments are.  `live.sh` runs this with
 BROWSER pointing at `record_url.sh`, which writes the URL to url.txt.
+
+CVDEBUG=<logger>[,<logger>...] sets those loggers to DEBUG, e.g.
+CVDEBUG=cubevis.bokeh.transport._comm_mgr,cubevis.bokeh.transport._low_level_transport
+shows each handshake in serve.log.
 """
-import os, sys, warnings
+import os, sys, warnings, logging
 warnings.filterwarnings("ignore")
+for _name in filter(None, os.environ.get("CVDEBUG", "").split(",")):
+    _log = logging.getLogger(_name.strip())
+    _log.setLevel(logging.DEBUG)
+    if not _log.handlers:
+        _h = logging.StreamHandler()
+        _h.setFormatter(logging.Formatter("[%(name)s] %(levelname)s: %(message)s"))
+        _log.addHandler(_h)
+        _log.propagate = False
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.environ.get("CUBEVIS_ROOT", os.path.abspath(os.path.join(HERE, "..", "..", ".."))))
 from uuid import uuid4

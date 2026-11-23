@@ -97,6 +97,10 @@ export interface TransportBase {
 // WebSocket close code Python uses for a page another page has taken the
 // session from: SUPERSEDED_CLOSE_CODE in cubevis/bokeh/transport/_comm_mgr.py.
 export const SUPERSEDED_CLOSE_CODE = 4001
+// WebSocket close code for a page that belongs to a different session:
+// REFUSED_CLOSE_CODE in cubevis/bokeh/transport/_low_level_transport.py.
+// Python sends `__refused__` first; either one stops this page reconnecting.
+export const REFUSED_CLOSE_CODE = 4002
 
 export class WebSocketTransport implements TransportBase {
     private websocket?: WebSocket
@@ -333,20 +337,22 @@ export class WebSocketTransport implements TransportBase {
         // can land as 1006 and be misread as a suspend, which means waiting
         // indefinitely instead of shutting down. An explicit goodbye sent
         // ahead of the close frame removes that failure mode.
+        //
+        // pagehide only (transport review WS-4).  Until 2026-11-23 it was
+        // also sent from beforeunload, which can be cancelled ("Leave
+        // site?" -> Stay, or a link that turns out to be a download): Python
+        // then took a later abrupt drop (sleep, network) for a deliberate
+        // close and ended the session after its 3 s grace.  pagehide is not
+        // cancellable, and comes after beforeunload, so the goodbye is the
+        // last thing a departing page sends.  Python also forgets a goodbye
+        // when anything follows it, which covers older pages.
         window.addEventListener("pagehide", this.sendGoodbye)
-        window.addEventListener("beforeunload", this.sendGoodbye)
     }
 
-    private goodbyeSent: boolean = false
-
     private sendGoodbye = (): void => {
-        if (this.goodbyeSent) {
-            return   // pagehide and beforeunload both fire; only send once
-        }
         if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
             return
         }
-        this.goodbyeSent = true
         try {
             // Must be synchronous -- the page is being torn down and there is
             // no opportunity to await anything.
@@ -366,7 +372,6 @@ export class WebSocketTransport implements TransportBase {
         window.removeEventListener("pageshow", this.probeConnection)
         document.removeEventListener("visibilitychange", this.onVisibilityChange)
         window.removeEventListener("pagehide", this.sendGoodbye)
-        window.removeEventListener("beforeunload", this.sendGoodbye)
     }
     
     /**
@@ -404,6 +409,15 @@ export class WebSocketTransport implements TransportBase {
                             
                             settled = true
                             resolve()
+                        } else if (data.type === '__refused__') {
+                            // This page belongs to another session (WS-2):
+                            // a newer process has this port.  Stop for good.
+                            if (this.websocket) {
+                                this.websocket.removeEventListener('message', initHandler)
+                            }
+                            settled = true
+                            this.comm_mgr.onRefused(String(data.reason ?? ''))
+                            reject(new Error('WebSocket handshake refused: ' + (data.reason ?? '')))
                         } else if (data.type === 'warning') {
                             console.warn('Backend warning:', data.message)
                             // Don't resolve yet — wait for 'initialized'
@@ -513,6 +527,8 @@ export class WebSocketTransport implements TransportBase {
                 this.initialized = false
                 if (event.code === SUPERSEDED_CLOSE_CODE) {
                     this.comm_mgr.onSuperseded()
+                } else if (event.code === REFUSED_CLOSE_CODE) {
+                    this.comm_mgr.onRefused(event.reason)
                 }
                 this.finishRun()
             }

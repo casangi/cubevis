@@ -135,7 +135,8 @@ export class CommMgr extends Model {
     // this page gave.  Python replays a request that was in flight when a
     // connection ended with its first request_id; the reply is sent again
     // rather than the handler run twice (transport review RP-1).
-    private lastRequest: Map<string, {requestId: string, reply: any}> = new Map()
+    // `reply` is undefined while an async handler is still running.
+    private lastRequest: Map<string, {requestId: string, reply?: any}> = new Map()
 
     private comms: Map<string, Comm> = new Map()
     private handlers: Map<string, Map<string, (msg: any, ctx: HandlerContext) => any>> = new Map()
@@ -628,6 +629,31 @@ export class CommMgr extends Model {
         this.startAttempt(true)
     }
 
+    /**
+     * Called by the transport when Python refuses this page: it belongs to a
+     * different session (transport review WS-2).  The session this page was
+     * made for has ended and a newer one has its port, so there is nothing to
+     * reconnect to: stop for good and say so.  The plots stay visible.
+     */
+    onRefused(reason: string): void {
+        if (this.state === AppState.STOPPED) {
+            return
+        }
+        console.log(`CommMgr: the session this page belongs to has ended (${reason})`)
+        this.shouldReconnect = false
+        if (this.reconnectTimer !== undefined) {
+            clearTimeout(this.reconnectTimer)
+            this.reconnectTimer = undefined
+        }
+        this.state = AppState.STOPPED
+        this.hideSupersededNotice()
+        this.showNotice(
+            "Session ended",
+            "The session this page belongs to is no longer running. What it " +
+            "shows stays as it was; run the task again for a new session."
+        )
+    }
+
     private supersededNoticeId(): string {
         return `cv-superseded-${this.comm_mgr_id}`
     }
@@ -639,6 +665,27 @@ export class CommMgr extends Model {
      * covers the whole page whatever the Bokeh layout is.
      */
     private showSupersededNotice(): void {
+        this.showNotice(
+            "Open in another tab",
+            "This session is now open in another browser tab. This tab no " +
+            "longer updates; what it shows stays as it was.",
+            {
+                label: "Use this tab",
+                title: "Take the session back; the other tab stops updating",
+                onClick: () => this.reclaim(),
+            }
+        )
+    }
+
+    /**
+     * The full-window notice itself: a title, a line of text and an optional
+     * button (none when there is nothing the user can do from this page).
+     */
+    private showNotice(
+        titleText: string,
+        bodyText: string,
+        action?: {label: string, title: string, onClick: () => void}
+    ): void {
         if (typeof document === "undefined" || document.getElementById(this.supersededNoticeId())) {
             return
         }
@@ -666,25 +713,26 @@ export class CommMgr extends Model {
 
         const title = document.createElement("div")
         title.id = veil.id + "-title"
-        title.textContent = "Open in another tab"
+        title.textContent = titleText
         title.style.cssText = "font-size:16px;font-weight:600;margin-bottom:0.5rem"
 
         const body = document.createElement("div")
-        body.textContent =
-            "This session is now open in another browser tab. This tab no " +
-            "longer updates; what it shows stays as it was."
-        body.style.cssText = "margin-bottom:1rem;color:#bac2de"
+        body.textContent = bodyText
+        body.style.cssText = action ? "margin-bottom:1rem;color:#bac2de" : "color:#bac2de"
 
-        const button = document.createElement("button")
-        button.type = "button"
-        button.textContent = "Use this tab"
-        button.title = "Take the session back; the other tab stops updating"
-        button.style.cssText = [
-            "padding:0.45rem 1rem", "font:inherit", "font-weight:600",
-            "color:#11111b", "background:#89b4fa", "border:0",
-            "border-radius:6px", "cursor:pointer",
-        ].join(";")
-        button.addEventListener("click", () => this.reclaim())
+        let button: HTMLButtonElement | undefined
+        if (action) {
+            button = document.createElement("button")
+            button.type = "button"
+            button.textContent = action.label
+            button.title = action.title
+            button.style.cssText = [
+                "padding:0.45rem 1rem", "font:inherit", "font-weight:600",
+                "color:#11111b", "background:#89b4fa", "border:0",
+                "border-radius:6px", "cursor:pointer",
+            ].join(";")
+            button.addEventListener("click", action.onClick)
+        }
 
         // Keys pressed while the notice is up go nowhere else: this tab's
         // shortcuts would only produce requests that cannot be answered.
@@ -692,10 +740,13 @@ export class CommMgr extends Model {
             if (ev.key !== "Tab" && ev.key !== "Enter" && ev.key !== " ") ev.stopPropagation()
         })
 
-        card.append(title, body, button)
+        card.append(title, body)
+        if (button) card.append(button)
         veil.append(card)
         document.body.append(veil)
-        try { button.focus() } catch (_e) { /* not focusable yet */ }
+        if (button) {
+            try { button.focus() } catch (_e) { /* not focusable yet */ }
+        }
     }
 
     private hideSupersededNotice(): void {
@@ -875,6 +926,22 @@ private sendImmediate(
         callback?: (response: any) => void
     ): void {
 
+        // Nothing to send on: put the message back at the head of its
+        // comm's queue, unsent and not pending, for flushAllQueues() after
+        // the reconnect (transport review JS-2).  Until 2026-11-23 the comm
+        // was marked pending first and the message then dropped, so the comm
+        // waited for a reply to a request Python never saw.
+        if (!this.transport || !this.transport.isConnected()) {
+            console.debug(`Transport not ready; ${commId}.${messageId} waits for the reconnect`)
+            const queue = this.sendQueue.get(commId) ?? []
+            queue.unshift({messageId, message, requestId, callback})
+            this.sendQueue.set(commId, queue)
+            if (this.shouldReconnect && !this.superseded && !this.reconnectTimer && !this.connecting) {
+                this.scheduleReconnect()
+            }
+            return
+        }
+
         const msg = {
             comm_id: commId,
             message_id: messageId,
@@ -892,13 +959,8 @@ private sendImmediate(
             callback
         })
         
-        // Send through transport
-        if (this.transport && this.transport.isConnected()) {
-            this.transport.send(msg)
-            console.debug(`Sent message: ${commId}.${messageId} (request_id=${requestId})`)
-        } else {
-            console.warn(`Transport not ready, cannot send ${commId}.${messageId}`)
-        }
+        this.transport.send(msg)
+        console.debug(`Sent message: ${commId}.${messageId} (request_id=${requestId})`)
     }
     
     /**
@@ -1014,41 +1076,54 @@ private sendImmediate(
         // already run here; send the reply again.
         const last = requestId ? this.lastRequest.get(commId) : undefined
         if (last && last.requestId === requestId) {
-            console.debug(`Replayed ${commId}.${messageId} (${requestId}); sending the reply again`)
-            if (this.transport) this.transport.send(last.reply)
+            if (last.reply === undefined) {
+                // Still running (an async handler): its reply goes out on
+                // the current transport when it finishes.
+                console.debug(`Replayed ${commId}.${messageId} (${requestId}) is still running; dropped`)
+            } else {
+                console.debug(`Replayed ${commId}.${messageId} (${requestId}); sending the reply again`)
+                if (this.transport) this.transport.send(last.reply)
+            }
             return
+        }
+
+        const replyWith = (message: any): void => {
+            if (!requestId) return
+            const reply = {
+                comm_id: commId,
+                message_id: messageId,
+                request_id: requestId,
+                message,
+                direction: 'p2j'
+            }
+            this.lastRequest.set(commId, {requestId, reply})
+            // this.transport at reply time: the current connection.
+            if (this.transport) this.transport.send(reply)
+        }
+        const failWith = (e: any): void => {
+            console.error(`Error in handler ${commId}.${messageId}:`, e)
+            this.reportError(e as Error, false)
+            replyWith({error: (e as Error)?.message ?? String(e)})
         }
 
         // Call handler
         const handler = this.handlers.get(commId)!.get(messageId)!
-        let reply: any
-        
+        let result: any
         try {
-            const result = handler(msg.message, this.context)
-            reply = {
-                comm_id: commId,
-                message_id: messageId,
-                request_id: requestId,
-                message: result,
-                direction: 'p2j'
-            }
+            result = handler(msg.message, this.context)
         } catch (e) {
-            console.error(`Error in handler ${commId}.${messageId}:`, e)
-            this.reportError(e as Error, false)
-            reply = {
-                comm_id: commId,
-                message_id: messageId,
-                request_id: requestId,
-                message: {error: (e as Error).message},
-                direction: 'p2j'
-            }
+            failWith(e)
+            return
         }
 
-        // Send response if there's a request_id
-        if (requestId) {
-            this.lastRequest.set(commId, {requestId, reply})
-            if (this.transport) this.transport.send(reply)
+        // A handler may return a Promise (transport review JS-3); until
+        // 2026-11-23 the Promise itself was sent as the reply ({}).
+        if (result !== null && typeof result === 'object' && typeof result.then === 'function') {
+            if (requestId) this.lastRequest.set(commId, {requestId})
+            Promise.resolve(result).then(replyWith, failWith)
+            return
         }
+        replyWith(result)
     }
     
     requestShutdown(reason: string = "Shutdown requested"): void {

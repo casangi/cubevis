@@ -5,7 +5,8 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import TYPE_CHECKING
-from typing import Optional, Callable, Dict, Any, List, Tuple
+from typing import Optional, Callable, Dict, Any, List, Tuple, Deque
+from collections import deque
 import asyncio
 import inspect
 import traceback
@@ -16,8 +17,10 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from bokeh.model import Model
 from bokeh.models import CustomJS
-from bokeh.core.properties import List
-from bokeh.core.properties import String, Bool, Tuple, Int, Nullable, Instance
+### Bokeh's property types under their own names: imported as List / Tuple they
+### replaced typing's, which the annotations below mean (review PY-2).
+from bokeh.core.properties import List as PList, Tuple as PTuple
+from bokeh.core.properties import String, Bool, Int, Nullable, Instance
 from ...utils import find_ws_address
 from .. import BokehInit
 if TYPE_CHECKING:
@@ -45,6 +48,9 @@ class AppState(Enum):
 # (4000-4999 are for applications).  The browser stops reconnecting on it;
 # the same value is in cubevisjs low_level_transport.ts.
 SUPERSEDED_CLOSE_CODE = 4001
+
+# How many reported errors CommMgr keeps (_errors).
+_MAX_ERRORS_KEPT = 100
 
 
 def _other_page(old, new) -> bool:
@@ -134,9 +140,10 @@ class Comm( Model ):
     def __init__( self, *args, comm_mgr: Optional[CommMgr] = None, **kwargs ):
         if 'comm_id' not in kwargs:
             kwargs['comm_id'] = str(uuid4( ))
-        if 'description' not in kwargs:
-            kwargs['description']
-        if 'comm_mgr' and 'comm_mgr_id' not in kwargs:
+        ### (Until 2026-11-23 a bare `kwargs['description']` here raised KeyError
+        ### when no description was given -- the property has a default -- and
+        ### `if 'comm_mgr' and ...` tested a constant string; review PY-2.)
+        if 'comm_mgr_id' not in kwargs and comm_mgr is not None:
             kwargs['comm_mgr_id'] = comm_mgr.comm_mgr_id
         super( ).__init__(*args, **kwargs)
 
@@ -224,11 +231,11 @@ class CommMgr( Model, BokehInit ):
 
     transport_type = String( default='auto',
                              help="which type of low level transport to use" )
-    address = Nullable( Tuple(String, Int), default=None,
+    address = Nullable( PTuple(String, Int), default=None,
                         help="the address (IP,port) when websockets low level transport is used" )
     comm_mgr_id = String( help="unique identifier for this communications manager" )
-    init_scripts = List(
-        Tuple(Instance(CustomJS), String, String),
+    init_scripts = PList(
+        PTuple(Instance(CustomJS), String, String),
         default=[],
         help="initialization scripts with associated metadata set from Comm object"
     )
@@ -262,6 +269,9 @@ class CommMgr( Model, BokehInit ):
         self._transport: Optional['TransportBase'] = None
         self._comms: Dict[str, Comm] = {}                                                       # comm_id => Comm
         self._handlers: Dict[str, Dict[str, Callable]] = {}                                     # comm_id => {message_id => handler}
+        # handler => whether it takes (message, context); worked out once per
+        # handler rather than by inspect.signature on every request (PY-2).
+        self._takes_context: Dict[Callable, bool] = {}
         self._pending: Dict[str, str] = {}                                                      # comm_id => request_id (currently pending)
         self._pending_tasks: Dict[str, asyncio.Task] = {}                                       # comm_id => Task (for cancellation)
         # request_id => (comm_id, message_id, message, callback)
@@ -309,19 +319,21 @@ class CommMgr( Model, BokehInit ):
 
         # State management
         self._state = AppState.CONSTRUCTED
-        self._state_lock = asyncio.Lock()                 # REMOVED
+        self._state_lock = asyncio.Lock()
         self._shutdown_requested = False
         self._pending_user_shutdown_reason = ''
         self._pending_user_shutdown = False               # Mark that shutdown is underway
                                                           # but not yet complete.
-        self._shutdown_reason: Optional[str] = None       # REMOVED
+        self._shutdown_reason: Optional[str] = None
         self._shutdown_callback_called = False            # Track if callback was called
-        self._errors: List[Exception] = []                # REMOVED
+        # The most recent errors reported (report_error); bounded, as a
+        # long session's non-fatal errors would otherwise pile up (PY-2).
+        self._errors: Deque[Exception] = deque(maxlen=_MAX_ERRORS_KEPT)
         self._shared_state: Dict[str, Any] = {}
 
         # Lifecycle callbacks
-        self._on_shutdown = on_shutdown                   # REMOVED
-        self._on_error = on_error                         # REMOVED
+        self._on_shutdown = on_shutdown
+        self._on_error = on_error
         self._shutdown_event = asyncio.Event()
         self._on_connection_closed = None
         self._on_reconnect = None
@@ -679,7 +691,7 @@ class CommMgr( Model, BokehInit ):
         comm_id = comm.comm_id
 
         if comm_id in self._handlers and message_id in self._handlers[comm_id]:
-            del self._handlers[comm_id][message_id]
+            self._takes_context.pop(self._handlers[comm_id].pop(message_id), None)
             logger.debug(f"Unregistered handler: {comm_id}.{message_id}")
 
     async def send(self, comm: Comm, message_id: str, message: Dict[str, Any],
@@ -949,8 +961,9 @@ class CommMgr( Model, BokehInit ):
                     await asyncio.wait_for(candidate.connect(), timeout=self._handshake_timeout)
                 except Exception as e:                       # noqa: BLE001
                     handshake_failed = True
+                    from ._low_level_transport import HandshakeRefused
                     quiet = isinstance(e, (ConnectionClosedError, ConnectionClosedOK,
-                                           asyncio.TimeoutError))
+                                           asyncio.TimeoutError, HandshakeRefused))
                     (logger.info if quiet else logger.warning)(
                         f"A WebSocket connection attempt failed during the handshake "
                         f"({type(e).__name__}: {e}); the session continues"
@@ -1481,7 +1494,11 @@ class CommMgr( Model, BokehInit ):
         request_id = msg.get('request_id')
 
         if not request_id or request_id not in self._pending_requests:
-            logger.warning(f"Received response for unknown request: {request_id}")
+            ### After a reconnect or abandon_inflight() a late reply for a
+            ### request this side has forgotten is expected (review PY-1).
+            (logger.debug if self._connection_generation > 0 else logger.warning)(
+                f"Received response for unknown request: {request_id}"
+            )
             return
 
         # Get request info. The message body is retained only so the request can
@@ -1495,10 +1512,12 @@ class CommMgr( Model, BokehInit ):
         # Call the callback
         try:
             if callback:
-                if inspect.iscoroutinefunction(callback):
-                    await callback(msg['message'])
-                else:
-                    callback(msg['message'])
+                ### isawaitable on the result, not iscoroutinefunction on the
+                ### callback: partials and callable objects returning
+                ### awaitables count too (review PY-2).
+                result = callback(msg['message'])
+                if inspect.isawaitable(result):
+                    await result
         except Exception as e:
             logger.error(f"Error in response callback for {comm_id}.{message_id}: {e}")
             self.report_error(e, fatal=False)
@@ -1576,15 +1595,21 @@ class CommMgr( Model, BokehInit ):
             async with lock:
                 try:
                     # Check if handler expects context parameter
-                    sig = inspect.signature(handler)
-                    if len(sig.parameters) >= 2:
+                    takes_context = self._takes_context.get(handler)
+                    if takes_context is None:
+                        takes_context = len(inspect.signature(handler).parameters) >= 2
+                        self._takes_context[handler] = takes_context
+                    if takes_context:
                         try:
                             # Handler accepts (message, context)
                             result = handler(msg['message'], context=self._context)
                         except Exception as e:
+                            ### `from e`, not `from None`: the handler's own
+                            ### traceback is the useful part (review PY-2).
                             raise RuntimeError(
-                                f"Handler {handler.__name__!r} failed with {type(e).__name__}: {e}"
-                            ) from None
+                                f"Handler {getattr(handler, '__name__', handler)!r} failed with "
+                                f"{type(e).__name__}: {e}"
+                            ) from e
                     else:
                         # Handler only accepts message
                         result = handler(msg['message'])
@@ -1686,15 +1711,11 @@ class CommMgr( Model, BokehInit ):
 
             self._pending_user_shutdown = False
 
-            # Signal the shutdown event
-            try:
-                loop = asyncio.get_running_loop()
-                logger.debug(f"CommMgr._handle_request effectuate shutdown")
-                loop.call_soon_threadsafe(self._shutdown_event.set)
-            except RuntimeError:
-                # No event loop running
-                logger.debug(f"CommMgr._handle_request effectuate shutdown without loop")
-                self._shutdown_event.set
+            # Signal the shutdown event.  (A branch for "no running loop" was
+            # removed 2026-11-23: this is a coroutine, so there always is one;
+            # the branch also lacked the call parentheses.  Review PY-2.)
+            logger.debug(f"CommMgr._handle_request effectuate shutdown")
+            asyncio.get_running_loop().call_soon_threadsafe(self._shutdown_event.set)
 
     def _remember_reply(self, comm_id: str, request_id: str, reply: Dict[str, Any]) -> None:
         """Record the reply to the comm's last request (see _last_request),

@@ -49,7 +49,7 @@ File shorthand:
 | ID | Sev | One line |
 |---|---|---|
 | WS-1 ✅ | S1 | Any failure during the handshake of *any* incoming WebSocket connection shuts the whole application down |
-| WS-2 (part) | S1 | A new connection retires the live transport *before* the newcomer has proved itself (handshake) — a stray or second-tab connection kills the working one |
+| WS-2 ✅ | S1 | A new connection retires the live transport *before* the newcomer has proved itself (handshake) — a stray or second-tab connection kills the working one |
 | WS-3 ✅ | S1 | Retiring a half-open socket can take `close_timeout` (10 s default) while the JS handshake deadline is 5 s → guaranteed first-attempt failure, which then hits WS-1 |
 | RP-1 | S1 | In-flight requests are replayed after reconnect with no de-duplication; a handler can run twice (JS reuses the request id, so a Python-side fix is cheap) |
 | HB-1 | S1/S2 | A synchronous handler longer than 10 s makes the browser declare a healthy socket dead → reconnect + replay (RP-1) → the long handler runs a second time |
@@ -70,6 +70,16 @@ inside a cell); RK-9 `[?]` (blocking `conn.call` on a loop thread). The common r
 "pending forever" cases: **no per-request timeout exists in either `CommMgr`**, so any lost message is
 permanent. A default per-request deadline that clears `pending` and calls the callback with an error
 would turn each of these from a hang into a visible failure.
+
+> **Design decided 2026-11-23 (issue #35): no wall-clock deadline.** A Plot, a flag commit or an
+> iclean "finish" can legitimately run for minutes or hours, and a planned use is starting iclean on
+> site, unplugging the laptop, going home and resuming -- a request must never fail because no
+> browser is connected. Instead: (1) one primitive in both `CommMgr`s, `forget(request_id)` (clear
+> pending, move the comm's queue on, call the callback with an error); (2) a *re-ask*: a request that
+> has gone quiet *while a transport is connected* is sent again with the same `request_id`, and RP-1's
+> per-comm record on the other side drops the copy (still running) or resends the stored reply; only
+> an unanswered re-ask is forgotten. Re-asking happens only on a live transport, so a disconnect of
+> any length just waits. JC-1's reopen hook and RK-1 use the same primitive.
 
 ---
 
@@ -100,6 +110,18 @@ connection, return. Only escalate to fatal for errors that are about the applica
 Remove the `abort` call from `connect()` (or make `transport_abort` non-fatal for connect-phase errors).
 
 ### WS-2 [C] S1 — the old transport is retired before the new one is validated
+
+> **Remainder fixed on `35-transport-bugs` (2026-11-23):** a page for another session is refused, not
+> warned about. `connect()` compares the page's `comm_mgr_id` with its own (each server serves one
+> CommMgr; the id is a uuid per CommMgr), and its `backend_id` with the app context's when the page
+> sends one -- pages send `null` today, as `find.context()` does not reach the context from the CommMgr.
+> A missing value is accepted (older pages). The refused page gets `__refused__` and close code
+> `REFUSED_CLOSE_CODE` (4002); `cm.ts` `onRefused` stops reconnecting for good and shows a "Session
+> ended" notice (the superseded notice, generalised: `showNotice`, no button). The case it covers: a
+> tab left from an earlier run wakes and reconnects to a port a newer process was given; accepted,
+> it took the session from the live page (newest page wins) and replayed its requests there.
+> Tests: `test_page_for_another_session_is_refused[comm_mgr_id|backend_id]`,
+> `test_page_without_ids_is_still_accepted`.
 
 > **Fixed in `debug-0003` (2026-11-20), except the `backend_id` mismatch, which still only warns.**
 > The handshake runs first, on the attempt's own transport, with a 10 s timeout
@@ -150,6 +172,18 @@ trigger is the event loop being busy (HB-1) while the close handshake is pending
 abrupt), and fix WS-1. Consider passing an explicit small `close_timeout` to `websockets.serve`.
 
 ### WS-4 [C] S2 — `__goodbye__` latches for the life of the transport
+
+> **Fixed on `35-transport-bugs` (2026-11-23).** `llt.ts` sends goodbye from `pagehide` only (not
+> cancellable, and after `beforeunload`, so it is the last frame a departing page sends); the
+> `goodbyeSent` latch is gone. `llt.py` forgets a goodbye when any later frame arrives (a ping
+> within 15 s at most), which also covers bundles that still send it from `beforeunload`. Besides
+> "Leave site?" -> Stay, a `beforeunload` that does not end the page includes a click on a link that
+> turns out to be a download. Tests: `test_goodbye_followed_by_traffic_is_forgotten`,
+> `test_goodbye_then_silence_still_ends_the_session`.
+> **Same pattern outside the transport, not changed:** iclean (`iclean/_ui.py`, the `initialize`
+> script) sends `stop` from `beforeunload`, and `_createmask.py` / `_createregion.py` call
+> `cube_done` there; a cancelled unload ends those sessions outright. Moving them to `pagehide` is
+> a separate, app-level change.
 `llt.py:370-375` sets `_goodbye_received = True` and it is never cleared. `llt.ts:328-329` sends it on
 `pagehide` **and** `beforeunload`. `beforeunload` can be cancelled (another handler prompts "Leave site?"
 and the user stays). After that, a later *abrupt* drop (sleep/network) is classified clean
@@ -158,6 +192,10 @@ JS `goodbyeSent` is also never reset.
 **Fix:** send goodbye on `pagehide` only, and/or clear `_goodbye_received` on any subsequent inbound frame.
 
 ### WS-5 [C] S3 — per-message details in `run()`
+
+> **First two bullets fixed on `35-transport-bugs` (2026-11-23):** the failure log names
+> `comm_id.message_id (request_id)` only; the goodbye and ping comments are each above their own
+> branch. The last two bullets are notes, not changes.
 - `llt.py:436`: the failure log interpolates the whole message (`{_msg}`), which can be megabytes. Log
   `comm_id`/`message_id`/`request_id` only.
 - `llt.py:359-382`: the keepalive and goodbye comment blocks are interleaved (the ping comment sits above
@@ -219,6 +257,11 @@ already-received pong and the *server* closes the connection (1011). Same cure: 
 `_cube.py`, so those handlers are synchronous on the loop [C by grep; individual handler durations not
 assessed].
 
+> **Correction (2026-11-23):** iclean's expensive handler, `clean_handler`, awaits
+> `session.arun_cycle()`, which runs the imager in a thread (`gclean.__anext__`); the grep missed it.
+> What remains to audit is the smaller handlers in `_cube.py` (mask edits, statistics, spectrum,
+> palette, colormap) and the synchronous `session.update()` / `log()` around the cycle.
+
 **Fix directions:** (a) RP-1 de-dup removes the double execution; (b) move remaining long handlers to
 threads; (c) make the deadline tolerant: in `llt.ts` do not `declareDead` on a missed pong while the
 socket's `bufferedAmount` is 0 and a request is in flight *unless* a second consecutive ping is also
@@ -250,21 +293,37 @@ hold the transport in a local variable through `setupTransport` and bail out if 
 after each await — the same pattern as `cm.py:841-863`.
 
 ### JS-2 [C] S2 — `sendImmediate` marks a comm pending even when nothing was sent
+
+> **Fixed on `35-transport-bugs` (2026-11-23):** with no connected transport, `sendImmediate` puts the
+> message back at the head of its comm's queue, unsent and not pending, and schedules a reconnect;
+> `flushAllQueues` sends it after the handshake.
 `cm.ts:676-691` (pending set, then "Transport not ready, cannot send" and return) and
 `llt.ts:515-521` (`WebSocketTransport.send` drops with a warning if not OPEN). Recovery depends on a later
 `resetConnectionState()`. Prefer: do not mark pending unless the write happened; queue instead (as
 `cm.py:696-706` does).
 
 ### JS-3 [C] S3 — JS handlers cannot be async
+
+> **Fixed on `35-transport-bugs` (2026-11-23):** a thenable result is awaited and its value (or error)
+> sent; meanwhile the comm's RP-1 record says "running", so a replay of it is dropped, as in Python.
 `cm.ts:805-817` sends the handler's return value as the reply immediately; a handler returning a Promise
 would send `{}`. Fine today if all JS handlers are synchronous; worth a guard (`await` if thenable).
 
 ### PY-1 [C] S2 — `abandon_inflight` / `_reset_for_reconnect` and late replies
+
+> **Fixed on `35-transport-bugs` (2026-11-23):** DEBUG once `connection_generation > 0`, WARNING before
+> (`tests/manual/remote/test_bug_reproduction.py` relies on the warning at generation 0).
 After either, a late reply for a forgotten request logs `Received response for unknown request` at WARNING
 (`cm.py:1356-1358`) — expected and harmless, but noisy; downgrade to DEBUG when
 `_connection_generation > 0`.
 
 ### PY-2 [C] S3 — leftovers in `CommMgr`
+
+> **Fixed on `35-transport-bugs` (2026-11-23), all bullets:** no-loop branch removed; `Comm.__init__`
+> no longer touches `kwargs['description']` and tests `comm_mgr is not None`; Bokeh's `List` / `Tuple`
+> imported as `PList` / `PTuple`; `# REMOVED` comments dropped and `_errors` is a `deque(maxlen=100)`;
+> the 2-parameter handler wrapper chains `from e`; handler arity cached per handler
+> (`_takes_context`); response callbacks go by `inspect.isawaitable(result)`.
 - `cm.py:1531`: `self._shutdown_event.set` is missing `()` (the no-running-loop branch; unreachable from a
   coroutine, so harmless — delete the branch).
 - `cm.py:123`: `kwargs['description']` is a bare expression → `KeyError` if `Comm(...)` is constructed
@@ -377,6 +436,9 @@ timeout exists on either side). Partial buffers are also never expired.
 buffers after a timeout and log.
 
 ### CO-3 [C] S3 (cheap win) — dead `js_code` build in `send_message`
+
+> **Fixed on `35-transport-bugs` (2026-11-23):** `env_json`, `js_code`, `cb_name`, `bc_name` and
+> `_parent_header` removed. Not run in Colab: the code removed was never read.
 `llt.py:1396-1407` builds `env_json = json.dumps(envelope)` and a `js_code` string that is never used
 (delivery happens later in `_deliver_in_thread`). For an image-sized reply this is a full extra
 serialisation plus a string copy per message. Delete it, with `_parent_header` (`llt.py:1409`).

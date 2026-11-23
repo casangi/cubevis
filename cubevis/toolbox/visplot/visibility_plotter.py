@@ -112,6 +112,7 @@ from .selection import (
     SelectionSpec, normalize_averaging, normalize_baseline_combine,
 )
 from ..gridplot.raster_grid import normalize_baseline_order, normalize_time_gaps
+from ..gridplot.tick_format import GAP_AXIS_JS
 from .data._raster_stats import normalize_chan_window, normalize_time_window
 from .data._scatter_average import normalize_avg_chan, normalize_avg_time
 from . import antenna_baseline_select as _abs
@@ -279,8 +280,14 @@ _STATIC_HINTS = {
         "<b>Color scaling</b> \u2014 how values are spread over the colors; changes the picture, never the data  | <b>eq_hist</b>: every color used equally; shows faint structure  | <b>linear</b>: honest about size  | <b>log / sqrt</b>: in between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights above a cutoff", "vp-scaling"),
     "bcombine": (
         "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines (a raster without Baseline on an axis). Averaging applies within each baseline; this is how the baselines are combined  | <b>Mean</b>: the general picture  | <b>Median</b>: what most baselines share  | <b>Maximum</b>: a problem shows even on one baseline  | <b>Vector (coherent)</b>: a complex sum, for a calibrated point source; Vector averaging only", "vp-bcombine"),
+    "s_tgaps": (
+        "<b>Time gaps</b> \u2014 with X = Time, how this scatter treats stretches with no data  | <b>Shown</b>: time to scale  | <b>Closed</b>: each stretch with data to scale, side by side, every gap removed, as on a raster; the ticks read the real times  | Applied by Plot", "vp-time-gaps"),
     "tgaps": (
-        "<b>Time gaps</b> \u2014 how this raster's Time axis treats stretches with no data  | <b>Shown</b>: time to scale; a field observed in short scans is mostly blank space between thin bands  | <b>Closed</b>: one row per time with data, a thin blank row where there was a gap; the ticks read the times  | Applied by Plot", "vp-time-gaps"),
+        "<b>Time gaps</b> \u2014 how this raster's Time axis treats stretches with no data  | <b>Shown</b>: time to scale; a field observed in short scans is mostly blank space between thin bands  | <b>Closed</b>: each stretch with data to scale, side by side, every gap removed; the ticks read the real times  | Applied by Plot", "vp-time-gaps"),
+    "s_fgaps": (
+        "<b>Frequency gaps</b> \u2014 with X = Frequency, how this scatter treats the gaps between spectral windows  | <b>Shown</b>: frequency to scale  | <b>Closed</b>: the windows side by side, every gap removed, as on a raster; the ticks read the real frequencies  | Applied by Plot", "vp-freq-gaps"),
+    "fgaps": (
+        "<b>Frequency gaps</b> \u2014 with Channel on an axis, how this raster treats the gaps between spectral windows. Windows that differ are drawn in frequency (Hz); one window, or windows that share their channels, are drawn as a channel index, which has no gaps  | <b>Shown</b>: frequency to scale; windows far apart are thin bands with blank space between  | <b>Closed</b>: the windows side by side, every gap removed; the ticks read the real frequencies  | Applied by Plot", "vp-freq-gaps"),
     "border": (
         "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out  | <b>By number</b>: the Baseline table\u2019s order; baselines to one antenna sit together  | <b>By length</b>: shortest first. Trouble that grows along the axis is about distance; trouble in scattered columns is about particular antennas", "vp-border"),
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
@@ -647,6 +654,8 @@ ctrl.send(ids['rows'], {
     if (resp.ant_has_data && ant_src && ant_src.data['has_data']) {
         ant_src.data['has_data'] = resp.ant_has_data; ant_src.change.emit();
     }
+    // The scans with data, for Scan Prev / Next (scan_iteration.py, #37).
+    if ('scan_has_data' in resp) window.__cvScanHas = {names: resp.scan_has_data};
 });
 """
 
@@ -2582,6 +2591,15 @@ _step('info divs', () => {
     }
     recolor_div(status_div, page_bg, status_c);
     recolor_div(notify_div, page_bg, light ? '#b02a37' : '#f38ba8');
+    // The status area's container (debug-0004): it showed dark below the
+    // status line in light mode.
+    if (typeof status_col !== 'undefined' && status_col) {
+        try {
+            const s = Object.assign({}, status_col.styles);
+            s['background'] = page_bg;
+            status_col.styles = s;
+        } catch(e) { console.error('[visplot theme] status area failed:', e); }
+    }
 
     // Config-field hint divs (added 2026-08-03, fixing a reported gap) —
     // same page_bg as status_div, distinct text color from status_c to
@@ -3142,6 +3160,20 @@ class VisibilityPlotter:
         number of channels, or ``"all"`` (one point per spectral window).
         For a time series (with X Time).  Same rules as
         ``scatter_avg_time``.
+    time_gaps : str
+        How a Time axis treats the gaps between scans and other breaks in
+        the data: ``"shown"`` (default; time to scale) or ``"closed"``
+        (the stretches of data side by side, every gap removed; the
+        ticks still read the real times).  A raster's Time axis, or a
+        scatter's with X Time.  Initial value for every panel; each
+        panel's "Time gaps" control changes it afterwards.
+    freq_gaps : str
+        The same for a frequency axis and the gaps between spectral
+        windows: ``"shown"`` (default) or ``"closed"``.  A raster's
+        Channel axis when the selected windows differ (it is then drawn
+        in frequency), or a scatter's with X Frequency.  Initial value
+        for every panel; each panel's "Frequency gaps" control changes
+        it afterwards.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), ``"over"`` (both panels, one above
@@ -3223,7 +3255,8 @@ class VisibilityPlotter:
         ``raster_qty``, ``averaging``, ``raster_corr``, ``baseline_order``,
         ``baseline_combine``, ``detrend``, ``stat_time_window``,
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
-        ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
+        ``scatter_avg_time``, ``scatter_avg_chan``, ``time_gaps``,
+        ``freq_gaps`` -- plus, for a raster,
         ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
         and ``vmax`` (its color scale).  A key left out takes the value
         the flat argument (or ``preset``) gives that panel, so the flat
@@ -3411,6 +3444,8 @@ class VisibilityPlotter:
         stat_chan_window                = "off",
         scatter_avg_time                = "off",
         scatter_avg_chan                = "off",
+        time_gaps:        str           = "shown",
+        freq_gaps:        str           = "shown",
         layout:           str           = "side",
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
@@ -3520,6 +3555,7 @@ class VisibilityPlotter:
                 stat_chan_window=stat_chan_window,
                 scatter_avg_time=scatter_avg_time,
                 scatter_avg_chan=scatter_avg_chan,
+                time_gaps=time_gaps, freq_gaps=freq_gaps,
                 layout=layout, kind=kind, preset=preset,
                 raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
                 scatter_x=scatter_x, scatter_y=scatter_y,
@@ -3734,6 +3770,7 @@ class VisibilityPlotter:
         stat_time_window, stat_chan_window,
         scatter_avg_time, scatter_avg_chan,
         layout, kind, preset,
+        time_gaps="shown", freq_gaps="shown",
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
         time_range, freq_range, uvdist_range, enable_flagging,
         compact_toolbar, theme, raster_cmap, scatter_cmap,
@@ -3815,6 +3852,10 @@ class VisibilityPlotter:
         # HRS H6: scatter averaging; initial value here, per panel after.
         self._scatter_avg_time = normalize_avg_time(scatter_avg_time)
         self._scatter_avg_chan = normalize_avg_chan(scatter_avg_chan)
+        # #36: gaps closed on a Time / frequency axis; initial value here,
+        # per panel afterwards.  Validated now so a typo fails here.
+        self._time_gaps = normalize_time_gaps(time_gaps)
+        self._freq_gaps = normalize_time_gaps(freq_gaps, "freq_gaps")
         # layout="raster"/"scatter" is sugar for layout="one", kind=X --
         # resolved once here, before either attribute is set, so nothing
         # downstream (the layout radio, layout_js, export/preset JS,
@@ -4089,6 +4130,7 @@ class VisibilityPlotter:
                    "baseline_order", "baseline_combine", "detrend",
                    "stat_time_window", "stat_chan_window", "scatter_x",
                    "scatter_y", "scatter_avg_time", "scatter_avg_chan",
+                   "time_gaps", "freq_gaps",
                    "scaling", "vmin", "vmax")
     MAX_PANELS = 2
 
@@ -4116,6 +4158,8 @@ class VisibilityPlotter:
             scatter_x=self._scatter_x, scatter_y=self._scatter_y,
             scatter_avg_time=self._scatter_avg_time,
             scatter_avg_chan=self._scatter_avg_chan,
+            time_gaps=getattr(self, "_time_gaps", "shown"),
+            freq_gaps=getattr(self, "_freq_gaps", "shown"),
             scaling=None, vmin=None, vmax=None,
             # Whether the scatter was given its own Phase RMS settings
             # (else it follows the plotter's, as before A2).
@@ -4189,7 +4233,9 @@ class VisibilityPlotter:
                 "stat_time_window": normalize_time_window,
                 "stat_chan_window": normalize_chan_window,
                 "scatter_avg_time": normalize_avg_time,
-                "scatter_avg_chan": normalize_avg_chan}
+                "scatter_avg_chan": normalize_avg_chan,
+                "time_gaps": normalize_time_gaps,
+                "freq_gaps": lambda v: normalize_time_gaps(v, "freq_gaps")}
         for k, f in norm.items():
             if k in d:
                 try:
@@ -4464,6 +4510,8 @@ class VisibilityPlotter:
                 averaging     = c["averaging"],
                 baseline_order = c["baseline_order"],
                 baseline_combine = c["baseline_combine"],
+                time_gaps     = c.get("time_gaps", "shown"),
+                freq_gaps     = c.get("freq_gaps", "shown"),
                 detrend       = c["detrend"],
                 stat_time_window = c["stat_time_window"],
                 stat_chan_window = c["stat_chan_window"],
@@ -4509,6 +4557,8 @@ class VisibilityPlotter:
                 layer_cmaps          = scatter_ramps,
                 avg_time             = c["scatter_avg_time"],
                 avg_chan             = c["scatter_avg_chan"],
+                time_gaps            = c.get("time_gaps", "shown"),
+                freq_gaps            = c.get("freq_gaps", "shown"),
                 averaging            = c["averaging"],
                 # Its own Phase RMS / Coherence settings when panels=[...]
                 # gave them; else None, following the plotter's.
@@ -5859,7 +5909,9 @@ for (const dt of other.tools) {
             scan=scan_sel, time_range=tr, uv_range=uv,
             autocorr=ac if ac in ("exclude", "include", "only") else self._selection.autocorr)
         bl_has, ant_has = await asyncio.to_thread(self._rows_with_data, sel)
-        return {"status": "ok", "bl_has_data": bl_has, "ant_has_data": ant_has}
+        scan_has = await asyncio.to_thread(self._scans_with_data, sel)
+        return {"status": "ok", "bl_has_data": bl_has, "ant_has_data": ant_has,
+                "scan_has_data": scan_has}
 
     async def _handle_summary(self, msg, context=None):
         """The "Describe this plot" toolbar button: the page for one panel,
@@ -6324,6 +6376,12 @@ for (const dt of other.tools) {
                              if panel_msg.get("time_gaps") else panel.time_gaps)
                 except ValueError:
                     tgaps = panel.time_gaps
+                # Frequency gaps the same (#36 part 3).
+                try:
+                    fgaps = (normalize_time_gaps(panel_msg["freq_gaps"])
+                             if panel_msg.get("freq_gaps") else panel.freq_gaps)
+                except ValueError:
+                    fgaps = panel.freq_gaps
                 # Slope removal for this slot's Phase RMS / Coherence
                 # (HRS H2).  Sent as "remove" | "keep"; absent = unchanged.
                 det = panel_msg.get("detrend")
@@ -6389,6 +6447,7 @@ for (const dt of other.tools) {
                     avg != panel.averaging or
                     border != panel.baseline_order or
                     tgaps != panel.time_gaps or
+                    fgaps != panel.freq_gaps or
                     bcomb != panel.baseline_combine or
                     det != panel.detrend or
                     twin != panel.stat_time_window or
@@ -6427,6 +6486,7 @@ for (const dt of other.tools) {
                                 stat_time_window = twin,
                                 stat_chan_window = cwin,
                                 time_gaps    = tgaps,
+                                freq_gaps    = fgaps,
                             )
                         self._last_raster_selection_by_slot[slot.id] = self._selection
                     panel._corr_choice = rk
@@ -6593,6 +6653,18 @@ for (const dt of other.tools) {
                 except ValueError as exc:
                     log.warning("_handle_plot: %s (panel %s)", exc, slot.id)
                     s_at, s_ac, s_am = panel._avg_time, panel._avg_chan, panel._averaging
+                # Time gaps with X = Time (#36).  Absent: keep.
+                try:
+                    s_tg = (normalize_time_gaps(panel_msg["time_gaps"])
+                            if panel_msg.get("time_gaps") else panel.time_gaps)
+                except ValueError:
+                    s_tg = panel.time_gaps
+                # And with X = Frequency (#36 part 3).
+                try:
+                    s_fg = (normalize_time_gaps(panel_msg["freq_gaps"])
+                            if panel_msg.get("freq_gaps") else panel.freq_gaps)
+                except ValueError:
+                    s_fg = panel.freq_gaps
 
                 never_rendered = (not panel._layers or
                                   all(img is None for img in panel._layer_images))
@@ -6614,7 +6686,9 @@ for (const dt of other.tools) {
                     s_cwin != panel._stat_chan_window or
                     s_at != panel._avg_time or
                     s_ac != panel._avg_chan or
-                    s_am != panel._averaging
+                    s_am != panel._averaging or
+                    s_tg != panel.time_gaps or
+                    s_fg != panel.freq_gaps
                 )
                 try:
                     if axes_changed:
@@ -6634,7 +6708,8 @@ for (const dt of other.tools) {
                                 panel.update_axes, x_dim=x, layers=layers,
                                 detrend=s_det, stat_time_window=s_twin,
                                 stat_chan_window=s_cwin, avg_time=s_at,
-                                avg_chan=s_ac, averaging=s_am)
+                                avg_chan=s_ac, averaging=s_am, time_gaps=s_tg,
+                                freq_gaps=s_fg)
                         # POST-2026-09: _layer_aggs is permanently
                         # [None] * n now (vestigial -- see
                         # ScatterRenderResult's docstring in
@@ -6718,6 +6793,7 @@ for (const dt of other.tools) {
                 "panels":       panels_response,
                 "bl_has_data":  bl_has,
                 "ant_has_data": ant_has,
+                "scan_has_data": self._scans_with_data(),
             }
         self._notify("")   # clear any previous warning
         bl_has, ant_has = self._rows_with_data()
@@ -6728,6 +6804,7 @@ for (const dt of other.tools) {
             "panels":      panels_response,
             "bl_has_data":  bl_has,
             "ant_has_data": ant_has,
+            "scan_has_data": self._scans_with_data(),
         }
 
     async def _handle_done(self, msg, context=None):
@@ -7087,6 +7164,20 @@ cvApplySelectionText(
         ants = {a for p in have for a in p}
         return ([1 if b.pair in have else 0 for b in bls],
                 [1 if a.name in ants else 0 for a in self._meta.antennas])
+
+    def _scans_with_data(self, selection=None) -> Optional[list]:
+        """The names of the scans with rows in the current field / SPW /
+        time range / UV range / autocorrelation choice
+        (``reader.scans_with_rows``): Scan Prev / Next step over these only
+        (issue #37).  ``None`` when the reader cannot tell; nothing is
+        then narrowed."""
+        try:
+            out = self._reader.scans_with_rows(
+                selection if selection is not None else self._selection)
+        except Exception:
+            log.debug("scans_with_rows failed", exc_info=True)
+            return None
+        return None if out is None else [str(n) for n in out]
 
     def _antenna_baseline_selection(self) -> tuple:
         """``(antenna_names, baselines)`` for the current selection.
@@ -8121,6 +8212,23 @@ conflict_div.text = m ? '⚠ ' + m : '';
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
         tg_box = self._hover(tg_sel, "tgaps")
+        # Frequency gaps (#36 part 3): the gaps between spectral windows
+        # on a Frequency axis; shown while X or Y is Channel (drawn in Hz
+        # when the windows differ, data.reader.to_channel_index).
+        fg_sel = Select(
+            title="Frequency gaps", value=getattr(slot.raster, "freq_gaps", "shown"),
+            options=[("shown", "Shown (frequency to scale)"), ("closed", "Closed")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        fg_box = self._hover(fg_sel, "fgaps")
+        _fq = ("FREQUENCY", "CHANNEL")
+        fg_box.visible = (rx_sel.value in _fq or ry_sel.value in _fq)
+        _fg_js = CustomJS(
+            args={"box": fg_box, "rx": rx_sel, "ry": ry_sel},
+            code="const f = ['FREQUENCY', 'CHANNEL'];"
+                 "box.visible = f.includes(rx.value) || f.includes(ry.value);")
+        rx_sel.js_on_change("value", _fg_js)
+        ry_sel.js_on_change("value", _fg_js)
 
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
@@ -8128,7 +8236,7 @@ conflict_div.text = m ? '⚠ ' + m : '';
             self._hover(column(ry_sel, rx_sel, width=_SIDEBAR_WIDTH),
                         "r_axes"),
             self._hover(rq_sel, "r_qty"),
-            rk_box, ra_box, rm_box, rb_box, tg_box, rd_box, rt_box, rc_box,
+            rk_box, ra_box, rm_box, rb_box, tg_box, fg_box, rd_box, rt_box, rc_box,
             conflict_div,
             self._hover(raster_cmap, "scaling"),
             self._hover(info_sel.column, "info"),
@@ -8138,6 +8246,7 @@ conflict_div.text = m ? '⚠ ' + m : '';
             "avg_sel": ra_sel, "detrend_sel": rd_sel,
             "twin_sel": rt_sel, "cwin_sel": rc_sel,
             "border_sel": rb_sel, "bcombine_sel": rm_sel, "tgaps_sel": tg_sel,
+            "fgaps_sel": fg_sel,
             "corr_sel": rk_sel,
             "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
@@ -8338,10 +8447,33 @@ for (let i = 0; i < cols.length; i++) {
                                         icon_stylesheets=[dark, self._icon_btn_css])
         cmap_widgets += info_sel.widgets()
 
+        # Time gaps (#36): with X = Time, shown or closed, as on a raster.
+        stg_sel = Select(
+            title="Time gaps", value=getattr(slot.scatter, "time_gaps", "shown"),
+            options=[("shown", "Shown"), ("closed", "Closed")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        stg_box = self._hover(stg_sel, "s_tgaps")
+        stg_box.visible = (sx_sel.value == "TIME")
+        sx_sel.js_on_change("value", CustomJS(
+            args={"box": stg_box},
+            code="box.visible = (cb_obj.value === 'TIME');"))
+        # Frequency gaps (#36 part 3): with X = Frequency.
+        sfg_sel = Select(
+            title="Frequency gaps", value=getattr(slot.scatter, "freq_gaps", "shown"),
+            options=[("shown", "Shown"), ("closed", "Closed")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        sfg_box = self._hover(sfg_sel, "s_fgaps")
+        sfg_box.visible = (sx_sel.value == "FREQUENCY")
+        sx_sel.js_on_change("value", CustomJS(
+            args={"box": sfg_box},
+            code="box.visible = (cb_obj.value === 'FREQUENCY');"))
+
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Scatter ──</span>", width=_SIDEBAR_WIDTH),
-            self._hover(sx_sel, "s_x"), self._hover(sy_sel, "s_y"),
+            self._hover(sx_sel, "s_x"), stg_box, sfg_box, self._hover(sy_sel, "s_y"),
             savg_box,
             sd_box, st_box, sc_box,
             self._hover(column(*extra_children, width=_SIDEBAR_WIDTH),
@@ -8352,6 +8484,7 @@ for (let i = 0; i < cols.length; i++) {
             "x_sel": sx_sel, "y_sel": sy_sel,
             "detrend_sel": sd_sel, "twin_sel": st_sel, "cwin_sel": sc_sel,
             "avg_time_sel": sat_sel, "avg_chan_sel": sac_sel, "avg_mode_sel": sam_sel,
+            "tgaps_sel": stg_sel, "fgaps_sel": sfg_sel,
             "info_selectors": info_sel,
             "layer_select": layer_select, "layer_columns": layer_columns,
             "cmap_widgets": cmap_widgets,
@@ -8810,6 +8943,9 @@ for (let i = 0; i < cols.length; i++) {
             log.debug("scan fields unavailable", exc_info=True)
             _scans = meta.scans
         self._scan_tab = _scanit.scan_table(_scans)
+        # The scans with data, for stepping (issue #37); refreshed with
+        # the Antenna / Baseline tables' flags (_ROWS_REFRESH_JS, Plot).
+        self._scan_tab["has"] = self._scans_with_data()
         scan_heading = _section("Scan", width=_IterButtons.LABEL_WIDTH, margin=(0, 0, 0, 0))
         self._scan_iter = _IterButtons(
             axis_label="scan", control=scan_heading,
@@ -10390,7 +10526,8 @@ function doPlot(reload) {
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
                                 colorize_handles, ra_sel, rd_sel, rt_sel, rc_sel,
                                 rb_sel, rm_sel, sat_sel, sac_sel, sam_sel,
-                                sd_sel, st_sel, sc_sel, rk_sel, tg_sel) {
+                                sd_sel, st_sel, sc_sel, rk_sel, tg_sel, stg_sel,
+                                fg_sel, sfg_sel) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
                     averaging: ra_sel.value, detrend: rd_sel.value,
@@ -10398,14 +10535,17 @@ function doPlot(reload) {
                     baseline_order: rb_sel ? rb_sel.value : null,
                     baseline_combine: rm_sel ? rm_sel.value : null,
                     raster_corr: rk_sel ? rk_sel.value : null,
-                    time_gaps: tg_sel ? tg_sel.value : null};
+                    time_gaps: tg_sel ? tg_sel.value : null,
+                    freq_gaps: fg_sel ? fg_sel.value : null};
         } else {
             return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
                      colorize: buildColorizeArray(colorize_handles),
                      detrend: sd_sel.value, twin: st_sel.value, cwin: sc_sel.value,
                      avg_time: sat_sel ? sat_sel.value : null,
                      avg_chan: sac_sel ? sac_sel.value : null,
-                     averaging: sam_sel ? sam_sel.value : null};
+                     averaging: sam_sel ? sam_sel.value : null,
+                     time_gaps: stg_sel ? stg_sel.value : null,
+                     freq_gaps: sfg_sel ? sfg_sel.value : null};
         }
     }
     """ + _RASTER_AXES_RULE_JS + """
@@ -10467,14 +10607,20 @@ function doPlot(reload) {
         panel0_rd_sel, panel0_rt_sel, panel0_rc_sel, panel0_rb_sel, panel0_rm_sel,
         panel0_sat_sel, panel0_sac_sel, panel0_sam_sel,
         panel0_sd_sel, panel0_st_sel, panel0_sc_sel, panel0_rk_sel,
-        (typeof panel0_tg_sel !== 'undefined') ? panel0_tg_sel : null);
+        (typeof panel0_tg_sel !== 'undefined') ? panel0_tg_sel : null,
+        (typeof panel0_stg_sel !== 'undefined') ? panel0_stg_sel : null,
+        (typeof panel0_fg_sel !== 'undefined') ? panel0_fg_sel : null,
+        (typeof panel0_sfg_sel !== 'undefined') ? panel0_sfg_sel : null);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
         panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel,
         panel1_rd_sel, panel1_rt_sel, panel1_rc_sel, panel1_rb_sel, panel1_rm_sel,
         panel1_sat_sel, panel1_sac_sel, panel1_sam_sel,
         panel1_sd_sel, panel1_st_sel, panel1_sc_sel, panel1_rk_sel,
-        (typeof panel1_tg_sel !== 'undefined') ? panel1_tg_sel : null);
+        (typeof panel1_tg_sel !== 'undefined') ? panel1_tg_sel : null,
+        (typeof panel1_stg_sel !== 'undefined') ? panel1_stg_sel : null,
+        (typeof panel1_fg_sel !== 'undefined') ? panel1_fg_sel : null,
+        (typeof panel1_sfg_sel !== 'undefined') ? panel1_sfg_sel : null);
 
     // Each panel renders at its figure's current size (2026-10-09).
     [[panels[panel0_id], panel0_raster_fig, panel0_scatter_fig],
@@ -10628,6 +10774,11 @@ function doPlot(reload) {
             }
             if (resp.ant_has_data && ant_src && ant_src.data['has_data']) {
                 ant_src.data['has_data'] = resp.ant_has_data; ant_src.change.emit();
+            }
+            // The scans with data, for Scan Prev / Next (#37).
+            if ('scan_has_data' in resp) {
+                window.__cvScanHas = {names: resp.scan_has_data};
+                if (typeof cvScanShow === 'function') cvScanShow();
             }
         } catch (e) { console.warn('has_data update failed:', e); }
         console.log('[visplot doPlot] received status:', resp.status,
@@ -11246,6 +11397,9 @@ function doPlot(reload) {
             "panel0_rm_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["bcombine_sel"],
             "panel0_rk_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["corr_sel"],
             "panel0_tg_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["tgaps_sel"],
+            "panel0_stg_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["tgaps_sel"],
+            "panel0_fg_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["fgaps_sel"],
+            "panel0_sfg_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["fgaps_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
             "panel0_sd_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["detrend_sel"],
@@ -11274,6 +11428,9 @@ function doPlot(reload) {
             "panel1_rm_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["bcombine_sel"],
             "panel1_rk_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["corr_sel"],
             "panel1_tg_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["tgaps_sel"],
+            "panel1_stg_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["tgaps_sel"],
+            "panel1_fg_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["fgaps_sel"],
+            "panel1_sfg_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["fgaps_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             "panel1_sd_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["detrend_sel"],
@@ -12115,6 +12272,10 @@ doPlot();
                 "sidebar":      self._sidebar_col,
                 "status_div":   self._status_div,
                 "notify_div":   self._notify_div,
+                # The status area's own container: its fixed dark
+                # background showed below the status line in light
+                # mode (debug-0004).
+                "status_col":   self._status_col,
                 # Two light-mode gaps fixed 2026-08-03, found during
                 # testing — neither was ever covered by any part of the
                 # existing dark/light mechanism (the config-field hint
@@ -12429,8 +12590,8 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             _cursor_panels.append({
                 "id": panel.vr_id, "fig": panel.figure,
                 "vspan": vspan, "hspan": hspan,
-                # x_tcells / y_tcells: a raster Time axis with its gaps
-                # closed (VisibilityRaster._state_data).
+                # x_runs / y_runs: an axis with its gaps closed
+                # (PanelSpec, raster_grid.GapAxis.state(), #36).
                 "state": panel._state_source,
             })
 
@@ -12441,7 +12602,7 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
                 "cursor_src": cursor_src,
                 "panels":     _cursor_panels,
             },
-            code="""
+            code=GAP_AXIS_JS + """
 const x      = cursor_src.data['x'][0];
 const y      = cursor_src.data['y'][0];
 const fig_id = cursor_src.data['fig'] ? cursor_src.data['fig'][0] : '';
@@ -12453,32 +12614,26 @@ for (const p of panels) {
     p.hspan.location = NaN;
 }
 
-// A raster Time axis with its gaps closed (debug-0003) is in positions,
-// one per time cell, with "(gaps closed)" in its label: a cursor there is
-// converted to the real time for the other panels, and a real time to
-// the position on a closed axis.  [positions, lo, hi] per axis, or null.
+// An axis with its gaps closed (debug-0003; runs-based since #36) is in
+// closed coordinates, with "(gaps closed)" in its label: a cursor there
+// is converted to the real value for the other panels, and a real value
+// to the closed coordinate on a closed axis.  GapAxis.state() --
+// [starts, lo, hi] -- per axis, or null; cvGapReal / cvGapPos are
+// tick_format.GAP_AXIS_JS, which the tick labels use too.
 const cells = (p, ax) => {
     const d = p.state && p.state.data;
-    const c = d && d[ax + '_tcells'];
+    const c = d && d[ax + '_runs'];
     return (c && c[0]) || null;
 };
 const toReal = (c, v) => {
     if (!c) return v;
-    const [pos, lo, hi] = c;
-    for (let i = 0; i < pos.length; i++)
-        if (Math.abs(pos[i] - v) <= 0.5) return lo[i] + (v - (pos[i] - 0.5)) * (hi[i] - lo[i]);
-    return NaN;                       // a blank row: no time
+    const r = cvGapReal(c, v);
+    return r === null ? NaN : r;      // a blank: no time
 };
 const toPos = (c, t) => {
     if (!c) return t;
-    const [pos, lo, hi] = c;
-    let a = 0, b = pos.length - 1;
-    while (a <= b) {
-        const m = (a + b) >> 1;
-        if (t < lo[m]) b = m - 1; else if (t > hi[m]) a = m + 1;
-        else return pos[m] - 0.5 + (hi[m] > lo[m] ? (t - lo[m]) / (hi[m] - lo[m]) : 0.5);
-    }
-    return NaN;                       // in a closed gap: not shown
+    const u = cvGapPos(c, t);
+    return u === null ? NaN : u;      // in a closed gap: not shown
 };
 const norm = (l) => (l || '').replace(' (gaps closed)', '');
 

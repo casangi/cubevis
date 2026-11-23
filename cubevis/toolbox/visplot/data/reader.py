@@ -695,6 +695,13 @@ class ScatterLayerReference:
     ref_id_freq_lo: Optional[xr.DataArray] = None
     ref_id_freq_hi: Optional[xr.DataArray] = None
     ref_id_value:   Optional[xr.DataArray] = None
+    # How far apart the samples are along X when the reference was held
+    # to one column per sample (``_scatter_render.reference_size``'s
+    # x_step: X = Time, Frequency or Channel), else None.  A reference
+    # with a column per sample has all the detail there is along X, so a
+    # zoom in X needs no Level-2 query (``needs_level2_requery``; #36,
+    # 2026-11-22).
+    ref_x_step:     Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -873,8 +880,76 @@ class _PartitionScanLookup:
 # geometry with the same defects; see the 2026-08 probe-miss notes in
 # VisibilityScatter._handle_probe.
 
+def partition_cell_width(ds, dim: str) -> Optional[float]:
+    """The true width of one cell of partition *ds* along *dim*, or ``None``.
+
+    ``time``: the integration time; ``frequency``: the channel width --
+    both as xarray-ms and xradio store them in the coordinate's attrs,
+    a number or ``{"attrs": {...}, "data": value}``.  The same attrs the
+    backends already read for the Time range box and the channel axis.
+    It is a raster cell's own width (``raster_grid.cell_edges``, issue
+    #38), so a lone integration or channel is drawn as wide as it is,
+    not as wide as the gap beside it.  The width is a magnitude:
+    a lower-sideband window's negative channel width counts as positive.
+    """
+    key = {"time": "integration_time", "frequency": "channel_width"}.get(dim)
+    coords = getattr(ds, "coords", None)
+    if key is None or coords is None or dim not in coords:
+        return None
+    v = getattr(coords[dim], "attrs", {}).get(key)
+    if isinstance(v, dict):
+        v = v.get("data")
+    try:
+        v = abs(float(np.asarray(v, dtype=np.float64).ravel()[0]))
+    except (TypeError, ValueError, IndexError):
+        return None
+    return v if np.isfinite(v) and v > 0 else None
+
+
+def with_cell_widths(arr, ds):
+    """*arr* (a partition's 2-D raster) with the true cell widths of *ds*
+    as coordinates on its ``time`` / ``frequency`` dimensions
+    (``raster_grid.cell_width_name``), where *ds* says what they are.
+    Carried through decimation (``isel``), the partition merge and the
+    remote wire format, for ``raster_grid.cell_edges`` (issue #38)."""
+    from ...gridplot.raster_grid import cell_width_name
+    if arr is None:
+        return arr
+    add = {}
+    for dim in ("time", "frequency"):
+        if dim in arr.dims:
+            w = partition_cell_width(ds, dim)
+            if w is not None:
+                add[cell_width_name(dim)] = (dim, np.full(arr.sizes[dim], w))
+    return arr.assign_coords(add) if add else arr
+
+
+def scale_cell_widths(agg, strides: dict):
+    """*agg* after striding (``_decimate_agg``): each cell now stands for
+    *stride* cells along its dimension, so its width is that many times
+    wider.  Without this a decimated run would be drawn as separate
+    narrow cells with gaps between (``raster_grid.cell_edges``, #38)."""
+    from ...gridplot.raster_grid import cell_width_name
+    add = {}
+    for dim, k in strides.items():
+        name = cell_width_name(dim)
+        if k and k > 1 and name in agg.coords:
+            add[name] = (dim, np.asarray(agg.coords[name].values, dtype=np.float64) * k)
+    return agg.assign_coords(add) if add else agg
+
+
+def _scan_sort_key(name: str):
+    """Scan names in scan order: numbers numerically, then the rest."""
+    s = str(name).strip()
+    try:
+        return (0, int(s), s)
+    except ValueError:
+        return (1, 0, s)
+
+
 def _cell_bounds(coords: np.ndarray, idx: int,
-                 half: Optional[float] = None) -> tuple[float, float]:
+                 half: Optional[float] = None,
+                 width=None, runs=None) -> tuple[float, float]:
     """Data-space ``(lo, hi)`` bounds of cell *idx* in *coords*.
 
     The rule is ``raster_grid.cell_edges`` -- the same one the image is
@@ -889,8 +964,9 @@ def _cell_bounds(coords: np.ndarray, idx: int,
     (wrong across gaps), then half the distance to each neighbour
     (2026-08; right inside a run, but the cell beside a gap reached
     halfway across it).  *half* gives an index axis (Baseline position)
-    its fixed half-width.  Handles the single-element case (zero width
-    unless *half* is given).
+    its fixed half-width; *width* the cells' true widths (what the
+    aggregate carries, issue #38).  Handles the single-element case
+    (zero width unless *half* or *width* is given).
     """
     from ...gridplot.raster_grid import cell_edges
     n = len(coords)
@@ -898,7 +974,7 @@ def _cell_bounds(coords: np.ndarray, idx: int,
         raise IndexError("empty coordinate array")
     if not (0 <= idx < n):
         raise IndexError(f"index {idx} out of range for {n} coordinates")
-    lo, hi = cell_edges(coords, half)
+    lo, hi = cell_edges(coords, half, width, runs)
     return float(lo[idx]), float(hi[idx])
 
 
@@ -1354,6 +1430,19 @@ def to_channel_index(agg, axis: str, ref_freq: "np.ndarray"):
     idx = np.where(take_left, left, pos).astype(np.int64)
 
     out = agg.assign_coords({dim: idx})
+    from ...gridplot.raster_grid import cell_width_name
+    if cell_width_name(dim) in out.coords:
+        # The widths were in Hz.  On a channel index a channel is 1 wide,
+        # and a cell of a decimated axis as many channels as it stands
+        # for (its Hz width already carries the stride).
+        whz = np.asarray(out.coords[cell_width_name(dim)].values, dtype=np.float64)
+        step = float(np.median(np.abs(np.diff(ref)))) if ref.size > 1 else 0.0
+        if step > 0:
+            with np.errstate(invalid="ignore"):
+                wi = np.where(np.isfinite(whz), np.maximum(1.0, np.rint(whz / step)), 1.0)
+        else:
+            wi = np.ones(idx.size)
+        out = out.assign_coords({cell_width_name(dim): (dim, wi)})
     out.attrs = dict(agg.attrs)
     out.attrs[CHANNEL_AXIS_ATTR] = axis
     out.attrs[CHANNEL_REF_ATTR] = ref
@@ -2909,6 +2998,184 @@ class XArrayReader(abc.ABC):
         cache[key] = out
         return out
 
+    def scans_with_rows(self, selection=None) -> Optional[list]:
+        """``["7", "9", ...]``: the names of the scans with at least one
+        row in what *selection* picks by field, spectral window, time
+        range, UV range and autocorrelations.  Its scan choice is ignored
+        -- this answers "which scans are there to step through", for Scan
+        Prev / Next (issue #37) -- and so is its antenna / baseline
+        choice, as in ``baselines_with_rows``: a tick change does not ask
+        the reader again (stage, then plot), so the answer cannot go stale
+        between Plots, and it never hides a scan that has data.
+
+        A row is as in ``baselines_with_rows`` (finite UVW; flags do not
+        matter, so a fully flagged scan counts).  Cached per field / SPW /
+        time range / UV range / autocorrelations, so stepping through the
+        scans asks nothing new.  Names in scan order (numerically where
+        they are numbers).  ``[]`` when no partition matches the selection
+        (nothing has data); ``None`` when it cannot be told (no UVW or no
+        ``scan_name``), meaning "do not narrow".
+        """
+        import dataclasses
+        sel = selection if selection is not None else SelectionSpec()
+        key = repr((sel.field_names, sel.spw, sel.time_range,
+                    getattr(sel, "uv_range", None), getattr(sel, "autocorr", None)))
+        cache = self.__dict__.setdefault("_scan_rows_cache", {})
+        if key in cache:
+            return cache[key]
+        sel = dataclasses.replace(sel, scan=None, antenna_names=None, baselines=None)
+        found: set = set()
+        seen = False
+        n_parts = 0
+        for ds in self._iter_visibility_partitions(sel):
+            n_parts += 1
+            if "UVW" not in ds.data_vars or "scan_name" not in ds.coords:
+                continue
+            sub = self._apply_selection(ds, sel)
+            seen = True
+            if sub.sizes.get("time", 0) == 0:
+                continue
+            uvw = sub["UVW"]
+            first = uvw.isel(uvw_label=0) if "uvw_label" in uvw.dims else uvw
+            other = [d for d in first.dims if d != "time"]
+            ok = np.isfinite(first)
+            present = np.asarray((ok.any(other) if other else ok).values, bool)
+            names = np.asarray(sub.coords["scan_name"].values).astype(str)
+            if names.shape != present.shape:        # scan_name not on time alone
+                seen = False
+                break
+            found.update(np.unique(names[present]).tolist())
+        out = (sorted(found, key=_scan_sort_key) if seen
+               else [] if n_parts == 0 else None)
+        cache[key] = out
+        return out
+
+    def scatter_time_step(self, selection=None) -> Optional[float]:
+        """How far apart a scatter's samples are along X = Time, for
+        ``_scatter_render.compute_canvas_size`` (``x_step``): the
+        shortest integration time of the selected partitions, or the
+        averaging length when the scatter averages over time and that is
+        longer.  ``None`` -- the canvas is left alone -- when averaging
+        is per scan (no fixed spacing) or no partition says its
+        integration time.  Cached per partition choice (attrs only)."""
+        from ._scatter_average import normalize_avg_time
+        sel = selection if selection is not None else SelectionSpec()
+        try:
+            at = normalize_avg_time(getattr(sel, "avg_time", "off"))
+        except ValueError:
+            at = "off"
+        if at == "scan":
+            return None
+        key = repr((sel.field_names, sel.spw))
+        cache = self.__dict__.setdefault("_scatter_step_cache", {})
+        if key not in cache:
+            widths = [partition_cell_width(ds, "time")
+                      for ds in self._iter_visibility_partitions(sel)]
+            widths = [w for w in widths if w]
+            cache[key] = min(widths) if widths else None
+        step = cache[key]
+        if step is None:
+            return None
+        return max(step, at) if isinstance(at, float) else step
+
+    def scatter_freq_step(self, selection=None) -> Optional[float]:
+        """How far apart a scatter's samples are along X = Frequency, for
+        ``_scatter_render.compute_canvas_size`` (``x_step``): the
+        narrowest channel width of the selected partitions, times the
+        number of channels averaged when the scatter averages channels.
+        ``None`` -- the canvas is left alone -- when every channel of a
+        window is averaged into one (no fixed spacing) or no partition
+        says its channel width.  The frequency counterpart of
+        ``scatter_time_step`` (#36: channels just over a pixel apart
+        leave empty columns, drawn as stripes)."""
+        from ._scatter_average import normalize_avg_chan
+        sel = selection if selection is not None else SelectionSpec()
+        try:
+            ac = normalize_avg_chan(getattr(sel, "avg_chan", "off"))
+        except ValueError:
+            ac = "off"
+        if ac == "all":
+            return None
+        key = repr((sel.field_names, sel.spw))
+        cache = self.__dict__.setdefault("_scatter_fstep_cache", {})
+        if key not in cache:
+            widths = [partition_cell_width(ds, "frequency")
+                      for ds in self._iter_visibility_partitions(sel)]
+            widths = [w for w in widths if w]
+            cache[key] = min(widths) if widths else None
+        step = cache[key]
+        if step is None:
+            return None
+        return step * ac if isinstance(ac, int) else step
+
+    def scatter_x_step(self, selection=None, xaxis=None) -> Optional[float]:
+        """``scatter_time_step`` for X = Time, ``scatter_freq_step`` for
+        X = Frequency, ``scatter_chan_step`` for X = Channel, else
+        ``None``."""
+        if xaxis == Axis.TIME:
+            return self.scatter_time_step(selection)
+        if xaxis == Axis.FREQUENCY:
+            return self.scatter_freq_step(selection)
+        if xaxis == Axis.CHANNEL:
+            return self.scatter_chan_step(selection)
+        return None
+
+    def scatter_chan_step(self, selection=None) -> Optional[float]:
+        """How far apart a scatter's samples are along X = Channel: one
+        (a channel index, ``_compute_axis_values``), times the number of
+        channels averaged; ``None`` when every channel of a window is
+        averaged into one.  A few hundred channels across a wider panel
+        otherwise leave every other column empty: thin background lines
+        between the channels (2026-11-22, seen stepping baselines)."""
+        from ._scatter_average import normalize_avg_chan
+        sel = selection if selection is not None else SelectionSpec()
+        try:
+            ac = normalize_avg_chan(getattr(sel, "avg_chan", "off"))
+        except ValueError:
+            ac = "off"
+        if ac == "all":
+            return None
+        return float(ac) if isinstance(ac, int) else 1.0
+
+    def axis_runs(self, selection=None, dim: str = "time") -> Optional[list]:
+        """``[[lo, hi], ...]``: the stretches of *dim* (``"time"`` or
+        ``"frequency"``) with data in what *selection* picks, at full
+        resolution -- what an axis with its gaps closed lays out
+        (``raster_grid.GapAxis``, issue #36).
+
+        Each partition's cells (its coordinate, with their true widths:
+        ``partition_cell_width``) make runs where their edges meet
+        (``GapAxis.runs_of``); runs of all partitions that touch or
+        overlap are merged.  From coordinates only, so cheap, and cached
+        per selection.  The antenna / baseline choice is ignored (times
+        and frequencies are shared by every baseline of a partition), and
+        so are flags.  ``[]`` when nothing is selected; ``None`` when
+        *dim* is not one of the two.
+        """
+        import dataclasses
+        from ...gridplot.raster_grid import GapAxis
+        if dim not in ("time", "frequency"):
+            return None
+        sel = selection if selection is not None else SelectionSpec()
+        key = repr((dim, sel.field_names, sel.spw, sel.scan, sel.time_range,
+                    getattr(sel, "uv_range", None), getattr(sel, "autocorr", None),
+                    getattr(sel, "freq_range", None), getattr(sel, "channel_range", None)))
+        cache = self.__dict__.setdefault("_axis_runs_cache", {})
+        if key in cache:
+            return cache[key]
+        sel = dataclasses.replace(sel, antenna_names=None, baselines=None)
+        runs: list = []
+        for ds in self._iter_visibility_partitions(sel):
+            sub = self._apply_selection(ds, sel)
+            if dim not in sub.coords or sub.sizes.get(dim, 0) == 0:
+                continue
+            v = np.asarray(sub.coords[dim].values, dtype=np.float64)
+            runs.extend(GapAxis.runs_of(v, partition_cell_width(sub, dim)))
+        ax = GapAxis.from_runs(runs)
+        out = [[float(a), float(b)] for a, b in zip(ax.lo, ax.hi)]
+        cache[key] = out
+        return out
+
     def spw_casa_ids(self) -> dict:
         """``{SpwKey: CASA spw id}`` for windows whose numeric id is known.
         Backends that can read the SPECTRAL_WINDOW table override this."""
@@ -3595,6 +3862,7 @@ class XArrayReader(abc.ABC):
         height: int = 600,
         probe_grid_max_cells: int = 3072,
         ref_scale: Optional[float] = None,
+        x_runs: Optional[list] = None,
     ) -> "ScatterRenderResult":
         """Query, bin, and shade scatter layers; return a bounded result.
 
@@ -3634,6 +3902,12 @@ class XArrayReader(abc.ABC):
         site that existed before this feature -- see the scatter
         two-level rendering handoff notes (2026-09) for the full design
         and ``ScatterLayerReference`` for what it holds.
+
+        ``x_runs`` (issue #36): X = Time with its gaps closed -- the
+        selection's runs (``axis_runs``), and every ``x`` is put on the
+        closed axis they make (``_scatter_render.close_x_gaps``);
+        ``x_range`` is then in closed coordinates too.  ``None``: real
+        times, as before.
 
         Implemented identically by both ``MSv2Backend`` and
         ``MSv4Backend`` (2026-09).

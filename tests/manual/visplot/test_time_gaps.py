@@ -4,9 +4,12 @@ Pre-preview feedback: a field observed in short scans with long gaps in
 between (other fields observed then) drew as thin bands in mostly blank
 space.  The gaps are real -- the time axis is to scale, so that it lines
 up with a scatter of X = Time and a box covers the times it seems to --
-and now, optionally, they can be closed: one position per time cell, a
-blank one at each break (``raster_grid.TimeAxis``), ticks reading the
-times, the readout and flag boxes converted back to real time.
+and now, optionally, they can be closed (``raster_grid.TimeAxis``, a
+``GapAxis``): since #36 (debug-0004) each run of data stays to scale and
+the runs sit side by side with every gap removed, the runs coming from
+the reader at full resolution (``axis_runs``), so a zoomed detail query
+shares the axis; ticks read the real times, the readout and flag boxes
+convert back.
 
 Run:  python -m pytest test_time_gaps.py -q
 """
@@ -23,31 +26,63 @@ from cubevis.toolbox.gridplot.raster_grid import TimeAxis, normalize_time_gaps  
 
 
 class TestTimeAxis:
+    """The runs-based closed axis (#36, debug-0004): runs to scale, side
+    by side, every gap removed (2026-11-21)."""
     T = [0, 8, 16, 60, 68, 76, 300]
 
-    def test_positions_with_one_blank_at_each_break(self):
-        ax = TimeAxis.build(self.T[::-1] + [8])          # any order, repeats
-        assert ax.positions == (0, 1, 2, 4, 5, 6, 8)
-        assert ax.n_positions == 9
+    def _ax(self, t=None):
+        return TimeAxis.build(self.T if t is None else t, width=8.0)
 
-    def test_positions_of(self):
-        ax = TimeAxis.build(self.T)
+    def test_runs_side_by_side(self):
+        ax = self._ax(self.T[::-1] + [8])                # any order, repeats
+        assert ax.lo == (-4.0, 56.0, 296.0) and ax.hi == (20.0, 80.0, 304.0)
+        assert ax.starts == pytest.approx((0.0, 24.0, 48.0))
+        assert ax.ends == pytest.approx((24.0, 48.0, 56.0))
+        assert ax.extent == pytest.approx((0.0, 56.0))
+        assert ax.boundaries() == pytest.approx((24.0, 48.0))
+
+    def test_short_and_long_gaps_alike(self):
+        ax = TimeAxis.from_runs([(0, 100), (101, 200), (1000, 1100)])
+        assert ax.starts == pytest.approx((0.0, 100.0, 199.0))
+        assert ax.extent == pytest.approx((0.0, 299.0))
+
+    def test_positions_of_and_back(self):
+        ax = self._ax()
         p = ax.positions_of([8, 60, 4, 30, 302])
-        assert p[0] == 1 and p[1] == 4 and p[2] == pytest.approx(0.5)
+        assert p[0] == pytest.approx(12.0) and p[1] == pytest.approx(28.0)
+        assert p[2] == pytest.approx(8.0)
         assert np.isnan(p[3])                            # in the gap: not shown
-        assert p[4] == pytest.approx(8.0, abs=0.05)
+        assert p[4] == pytest.approx(54.0)
+        back = ax.real_of(p[~np.isnan(p)])
+        assert back == pytest.approx([8, 60, 4, 302])
+        # where two runs meet, the later one's start
+        assert ax.time_at(24.0) == pytest.approx(56.0)
+        assert ax.time_at(-1.0) is None and ax.time_at(57.0) is None
 
-    def test_real_span_and_cells(self):
-        ax = TimeAxis.build(self.T)
-        assert ax.real_span(1.6, 4.4) == (12.0, 64.0)    # third of run 1 .. first of run 2
-        assert ax.real_span(3.0, 3.2) is None            # only the blank row
-        assert ax.time_at(4) == 60.0 and ax.time_at(3) is None
-        assert ax.cell_at(1) == (4.0, 12.0)
+    def test_real_span(self):
+        ax = self._ax()
+        assert ax.real_span(12.0, 28.0) == pytest.approx((8.0, 60.0))
+        assert ax.real_span(23.0, 25.0) == pytest.approx((19.0, 57.0))   # across a gap
+        assert ax.real_span(-10.0, 100.0) == pytest.approx((-4.0, 304.0))
+        assert ax.real_span(60.0, 70.0) is None          # outside the axis
+        # a range starting where a run starts is not in the run before
+        assert ax.real_span(24.0, 30.0) == pytest.approx((56.0, 62.0))
+        assert ax.real_span(24.0, 24.0) == pytest.approx((56.0, 56.0))
 
-    def test_tick_labels(self):
-        ax = TimeAxis.build(self.T)
-        assert ax.tick_labels(lambda t: f"{t:g}") == (
-            "0", "8", "16", "", "60", "68", "76", "", "300")
+    def test_from_runs_merges(self):
+        ax = TimeAxis.from_runs([(10, 20), (0, 12), (30, 40), (40, 45)])
+        assert ax.lo == (0.0, 30.0) and ax.hi == (20.0, 45.0)
+        assert ax.starts == (0.0, 20.0)
+
+    def test_cells_stay_in_their_run(self):
+        from cubevis.toolbox.gridplot.raster_grid import cell_edges
+        ax = self._ax()
+        u = ax.positions_of(self.T)
+        # widths that would reach into the next run
+        lo, hi = cell_edges(u, width=40.0, runs=ax.run_bounds())
+        st, en = ax.run_bounds()
+        assert hi[2] <= en[0] + 1e-9 and lo[3] >= st[1] - 1e-9
+        assert lo[6] >= st[2] - 1e-9 and hi[6] <= en[2] + 1e-9
 
     def test_normalize(self):
         assert normalize_time_gaps(None) == "shown"
@@ -96,27 +131,42 @@ def _raster(vp):
     return next(s.raster for s in vp._slots if getattr(s, "raster", None) is not None)
 
 
+def _real_times(r):
+    """The real times of the closed raster's cells."""
+    return r._time_axis.real_of(r._agg.coords["time"].values)
+
+
 class TestClosedRaster:
     def test_shown_by_default_and_closed_on_request(self, plotter):
         r = _raster(plotter)
         assert r.time_gaps == "shown" and r._time_axis is None
         y_shown = r._y_range
+        real = np.asarray(r._agg.coords["time"].values, dtype=np.float64)
         r.update_axes(time_gaps="closed")
+        ta = r._time_axis
         assert r._agg.dims[0] == "time"
-        assert list(r._agg.coords["time"].values) == [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14]
-        assert r._y_range == (-0.5, 14.5)
+        assert len(ta) == 4                              # FIELD-1's four scans
+        assert _real_times(r) == pytest.approx(real)
+        # to scale within a scan: 8 s apart
+        assert np.diff(r._agg.coords["time"].values)[:2] == pytest.approx([8.0, 8.0])
+        assert r._y_range == pytest.approx(ta.extent)
         spec = r._panel_spec()
         assert spec.axis_label("y").startswith("Time (gaps closed) [")
-        assert spec.y_ticks[3] == "" and spec.y_ticks[0] != ""
+        assert spec.y_ticks is None and spec.y_runs == ta.state()
         r.update_axes(time_gaps="shown")
         assert r._time_axis is None and r._y_range == y_shown
+
+    def test_runs_come_from_the_reader(self, plotter):
+        r = _raster(plotter)
+        r.update_axes(time_gaps="closed")
+        runs = plotter._reader.axis_runs(r._selection, "time")
+        assert [list(x) for x in zip(r._time_axis.lo, r._time_axis.hi)] == runs
 
     def test_readout_is_in_real_time(self, plotter):
         r = _raster(plotter)
         r.update_axes(time_gaps="closed")
         info = r._probe_raster_pixel_local(2, 4)       # 5th cell: 2nd of scan 4
-        ta = r._time_axis
-        assert info["y_centre"] == ta.times[4]
+        assert info["y_centre"] == pytest.approx(_real_times(r)[4])
         assert info["y_range"][1] - info["y_range"][0] == pytest.approx(8.0)
         assert info.get("scan_names") == ["4"]
 
@@ -124,19 +174,56 @@ class TestClosedRaster:
         r = _raster(plotter)
         r.update_axes(time_gaps="closed")
         ta = r._time_axis
+        u = r._agg.coords["time"].values
+        box = {"x0": -0.5, "x1": 7.5, "y0": float(u[2]) - 1, "y1": float(u[3]) + 1}
+        req = plotter._flags.build_request(r, "raster", box, True)
+        assert (req["y0"], req["y1"]) == pytest.approx(ta.real_span(box["y0"], box["y1"]))
+        # a box across where two scans meet: both scans, and the gap
+        b = ta.boundaries()[0]
         req = plotter._flags.build_request(
-            r, "raster", {"x0": -0.5, "x1": 7.5, "y0": 1.6, "y1": 4.4}, True)
-        assert (req["y0"], req["y1"]) == (ta.lo[2], ta.hi[3])
-        with pytest.raises(ValueError, match="only a gap"):
+            r, "raster", {"x0": -0.5, "x1": 7.5, "y0": b - 1.0, "y1": b + 1.0}, True)
+        assert (req["y0"], req["y1"]) == pytest.approx((ta.hi[0] - 1.0, ta.lo[1] + 1.0))
+        with pytest.raises(ValueError, match="outside the data"):
+            e = ta.extent[1]
             plotter._flags.build_request(
-                r, "raster", {"x0": -0.5, "x1": 7.5, "y0": 3.0, "y1": 3.2}, True)
+                r, "raster", {"x0": -0.5, "x1": 7.5, "y0": e + 5, "y1": e + 6}, True)
 
-    def test_no_detail_query_when_closed(self, plotter):
+    def test_zoom_queries_detail_when_closed(self, plotter):
+        """#36: the closed axis comes from the runs, so a finer query
+        shares it -- zooming in re-queries instead of magnifying."""
         r = _raster(plotter)
         r.update_axes(time_gaps="closed")
+        ta = r._time_axis
         r._is_decimated = True
-        r._ensure_detail(0, 1, 0, 1)
-        assert r._detail is None
+        u0, u1 = ta.starts[1], ta.starts[1] + 10.0         # 10 s of scan 4
+        x0, x1 = r._x_range
+        r._ensure_detail(x0, x1, u0, u1)
+        d = r._detail
+        assert d is not None
+        du = np.asarray(d.agg.coords["time"].values, dtype=np.float64)
+        assert du.size and np.isfinite(du).all()
+        # every cell on the axis (the overscan margin may reach the end
+        # of the scan before), and the viewport's own cells there
+        assert np.isfinite(ta.real_of(du)).all()
+        st, en = ta.run_bounds()
+        assert ((du >= st[1]) & (du <= u1)).sum() >= 1
+        # the same cells as the full aggregate, at the same closed times
+        full_u = np.asarray(r._agg.coords["time"].values)
+        assert np.isin(np.round(du, 6), np.round(full_u, 6)).all()
+
+    def test_scans_meet(self, plotter):
+        """No blank between runs: the row where two scans meet has data
+        (2026-11-21: every gap removed)."""
+        r = _raster(plotter)
+        r.update_axes(time_gaps="closed")
+        img = np.asarray(r._image_source.data["image"][0])
+        rgba = img.view(np.uint8).reshape(img.shape + (4,))
+        h = img.shape[0]
+        y0, y1 = r._y_range
+        for b in r._time_axis.boundaries():
+            for row in (int(np.floor((b - y0) / (y1 - y0) * h)) - 1,
+                        int(np.floor((b - y0) / (y1 - y0) * h)) + 1):
+                assert (rgba[row, :, 3] > 0).any()
 
 
 def test_wired_in_the_gear_tab_and_plot():
@@ -149,19 +236,18 @@ def test_wired_in_the_gear_tab_and_plot():
     assert "tgaps != panel.time_gaps or" in src
 
 
-def test_state_carries_the_cells(plotter):
+def test_state_carries_the_runs(plotter):
     r = _raster(plotter)
-    assert r._state_data()["y_tcells"] == [None]
+    assert r._state_data()["y_runs"] == [None]
     r.update_axes(time_gaps="closed")
     d = r._state_data()
-    ta = r._time_axis
-    assert d["x_tcells"] == [None]
-    assert d["y_tcells"][0] == [list(ta.positions), list(ta.lo), list(ta.hi)]
+    assert d["x_runs"] == [None]
+    assert d["y_runs"][0] == r._time_axis.state()
 
 
 def test_linked_cursor_converts_through_real_time(plotter):
     """The cursor sync (VisibilityPlotter._build_layout) maps a closed
-    axis's position to real time for the other panels, and back."""
+    axis's coordinate to real time for the other panels, and back."""
     import json
     import shutil
     import subprocess
@@ -170,20 +256,20 @@ def test_linked_cursor_converts_through_real_time(plotter):
         pytest.skip("node not on PATH")
     cb = plotter._cursor_source.js_property_callbacks["change:data"][0]
     code = cb.code
-    # Raster: Time (gaps closed) on Y, cells 0,1,2 | 4 (times 0,8,16 | 60).
-    cells = [[0, 1, 2, 4], [-4, 4, 12, 56], [4, 12, 20, 64]]
+    # Raster: Time (gaps closed) on Y; runs -4..20 at 0..24, 56..80 at 25..49.
+    runs = [[0, 25], [-4, 56], [20, 80]]
     script = (
         "const span = () => ({location: NaN});\n"
         "const fig = (xl, yl) => ({below: [{axis_label: xl}], left: [{axis_label: yl}]});\n"
         "const raster = {id: 'R', fig: fig('Channel', 'Time (gaps closed) [UTC, d]'), vspan: span(), hspan: span(),\n"
-        f"  state: {{data: {{x_tcells: [null], y_tcells: [{json.dumps(cells)}]}}}}}};\n"
+        f"  state: {{data: {{x_runs: [null], y_runs: [{json.dumps(runs)}]}}}}}};\n"
         "const scatter = {id: 'S', fig: fig('Time [UTC, d]', 'Amplitude'), vspan: span(), hspan: span(),\n"
-        "  state: {data: {x_tcells: [null], y_tcells: [null]}}};\n"
+        "  state: {data: {x_runs: [null], y_runs: [null]}}};\n"
         "const panels = [raster, scatter];\n"
         "const run = (x, y, f) => new Function('cursor_src', 'panels', CODE)("
         "{data: {x: [x], y: [y], fig: [f]}}, panels);\n"
-        "run(3, 1.25, 'R'); const a = scatter.vspan.location;\n"
-        "run(3, 3.0, 'R'); const b = scatter.vspan.location;\n"
+        "run(3, 10, 'R'); const a = scatter.vspan.location;\n"
+        "run(3, 24.5, 'R'); const b = scatter.vspan.location;\n"
         "run(62, 0.5, 'S'); const c = raster.hspan.location;\n"
         "run(40, 0.5, 'S'); const d = raster.hspan.location;\n"
         "console.log(JSON.stringify([a, b, c, d]));"
@@ -191,7 +277,15 @@ def test_linked_cursor_converts_through_real_time(plotter):
     out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     a, b, c, d = json.loads(out.stdout.strip())
-    assert a == pytest.approx(10.0)        # position 1.25: a quarter into the 8-s cell 4..12
-    assert b is None                       # the blank row: no time (NaN)
-    assert c == pytest.approx(4.25)        # 62 s: three quarters into the cell at position 4
+    assert a == pytest.approx(6.0)         # closed 10: 10 s into the run from -4
+    assert b is None                       # the blank: no time (NaN)
+    assert c == pytest.approx(31.0)        # 62 s: 6 s into the run starting at 25
     assert d is None                       # 40 s: in the closed gap
+
+
+def test_light_mode_reaches_the_status_area(plotter):
+    """The container under the status line had a fixed dark background
+    the theme toggle never reached (debug-0004)."""
+    from cubevis.toolbox.visplot.visibility_plotter import _THEME_RESTYLE_JS
+    assert plotter._theme_restyle_args["status_col"] is plotter._status_col
+    assert "status_col.styles = s;" in _THEME_RESTYLE_JS

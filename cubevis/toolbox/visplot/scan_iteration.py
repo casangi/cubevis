@@ -26,11 +26,18 @@ in the box (or a drill-down from the grid, which writes it) ends the
 stepping; so does **Plot ▶**, which plots what the box says, and ✱,
 which goes back to all of the box's scans.
 
-**Not done here**, deliberately: skipping scans that have no data for the
-chosen SPWs, antennas or time range (the Antenna / Baseline tables' "has
-data" refresh asks the reader; a per-scan answer needs a reader method,
-which changes the remote kernel's fingerprint -- a separate step).  Such
-a scan plots empty, and the next step moves on.
+**Scans without data are skipped** (issue #37, debug-0004): the reader's
+``scans_with_rows`` names the scans with rows in the chosen field, SPWs,
+time range, UV range and autocorrelations.  The answer comes with the
+first page (``scan_table()["has"]``), with every Plot reply and with the
+Antenna / Baseline tables' "has data" refresh when the Data inputs
+change (``scan_has_data``), and is kept in ``window.__cvScanHas``.  The
+Antenna / Baseline *ticks* are deliberately not part of it, as for those
+tables' own flags: a tick change does not ask the reader again (stage,
+then plot), so the list cannot go stale between Plots, and it never
+hides a scan that has data -- but with only some antennas ticked, a scan
+one of them sat out can still plot empty.  ``null`` (the reader cannot
+tell) narrows nothing.
 
 Everything is ``var`` or ``function`` at top level: this block is
 included in several scripts and twice in some (each stepper's and
@@ -66,6 +73,16 @@ def scan_table(scans) -> dict:
 # Needs SCAN_TEXT_JS and STEP_INDEX_JS before it.
 SCAN_ITER_JS = r"""
 window.__cvScanCur = window.__cvScanCur || {scan: null};
+// The scans with data (#37): the first page's list until a Plot reply or
+// the rows refresh brings a newer one.  Looked up lazily, and scan_tab
+// tested with typeof: not every script that includes this block has it.
+function cvScanHasNames() {
+    if (!window.__cvScanHas) {
+        const t = (typeof scan_tab !== 'undefined') ? scan_tab : null;
+        window.__cvScanHas = {names: (t && t.has != null) ? t.has : null};
+    }
+    return window.__cvScanHas.names;
+}
 function cvScanCandidates() {
     const all = (scan_tab && scan_tab.nos) || [];
     const r = cvParseScanText(scan_inp ? scan_inp.value : '', all);
@@ -76,7 +93,14 @@ function cvScanCandidates() {
         const ff = (scan_tab && scan_tab.fields) || {};
         c = c.filter(n => !ff[String(n)] || !ff[String(n)].length || ff[String(n)].indexOf(f) >= 0);
     }
-    return {scans: c};
+    // Only the scans with data in this selection (#37).
+    const has = cvScanHasNames();
+    const before = c.length;
+    if (has) {
+        const hs = new Set(has.map(String));
+        c = c.filter(n => hs.has(String(n)));
+    }
+    return {scans: c, narrowed: c.length < before};
 }
 function cvScanShow() {
     if (!scan_note) return;
@@ -111,8 +135,10 @@ function doIterateScan(delta) {
     const c = r.scans;
     if (c.length <= 1) {
         if (notify_div) notify_div.text = c.length === 0
-            ? '<b>No scans of this field to step through.</b>'
-            : '<b>Only one scan selected — nothing to step through.</b>';
+            ? (r.narrowed ? '<b>No scans with data in this selection to step through.</b>'
+                          : '<b>No scans of this field to step through.</b>')
+            : (r.narrowed ? '<b>Only one scan with data in this selection — nothing to step through.</b>'
+                          : '<b>Only one scan selected — nothing to step through.</b>');
         return;
     }
     const cur = window.__cvScanCur.scan;

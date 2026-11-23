@@ -223,6 +223,17 @@ def test_baselines_with_rows_matches_local(remote_ctx, local_reader):
     assert remote and all(isinstance(p, tuple) and len(p) == 2 for p in remote)
 
 
+def test_scans_with_rows_matches_local(remote_ctx, local_reader):
+    """Issue #37: Scan Prev / Next skip scans with no rows; the question
+    goes to the worker like baselines_with_rows."""
+    from cubevis.toolbox.visplot.selection import SelectionSpec
+    fields = local_reader.metadata()["field_names"]
+    for sel in (SelectionSpec(), SelectionSpec(field_names=[fields[-1]])):
+        remote = remote_ctx.scans_with_rows(sel)
+        assert remote == local_reader.scans_with_rows(sel)
+        assert remote and all(isinstance(n, str) for n in remote)
+
+
 def test_list_fields_and_spws_are_nonempty(remote_ctx):
     assert remote_ctx.list_fields()
     assert remote_ctx.list_spws()

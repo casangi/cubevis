@@ -62,6 +62,12 @@ from typing import Sequence
 import numpy as np
 import xarray as xr
 
+try:
+    from ...gridplot.raster_grid import cell_width_name
+except ImportError:     # loaded on its own (the merge tests): the same rule
+    def cell_width_name(dim: str) -> str:
+        return f"{dim}_cell_width"
+
 
 #: Above this many partition x cell values, "median" falls back to "wmean"
 #: rather than stack every partition's grid in memory.
@@ -100,7 +106,10 @@ def merge_raster_partitions(
     parts :
         Computed 2D arrays, each with 1-D coordinates on ``y_name`` and
         ``x_name`` (any other coordinates must already be stripped, see
-        ``_drop_non_raster_coords``).
+        ``_drop_non_raster_coords``), and optionally their true cell
+        widths (``raster_grid.cell_width_name``), which are carried onto
+        the merged axes: where partitions share a coordinate, the larger
+        width (issue #38).
     y_name, x_name :
         The two dimension names.
     rule :
@@ -142,10 +151,14 @@ def merge_raster_partitions(
         placed.append((yi, xi, vals))
         cover[np.ix_(yi, xi)] += ~np.isnan(vals)
 
+    coords = {y_name: y_union, x_name: x_union}
+    coords.update(_merged_cell_widths(parts, placed, y_name, x_name,
+                                      y_union.size, x_union.size))
+
     def _wrap(out):
         return xr.DataArray(
             out.astype(dtype, copy=False), dims=(y_name, x_name),
-            coords={y_name: y_union, x_name: x_union},
+            coords=coords,
             attrs=dict(parts[0].attrs),
         )
 
@@ -204,6 +217,23 @@ def merge_raster_partitions(
             out = acc / sw
     out[sw <= 0] = np.nan
     return _wrap(out)
+
+
+def _merged_cell_widths(parts, placed, y_name, x_name, ny, nx) -> dict:
+    """The cell-width coordinates of the merged grid: each partition's
+    widths placed on the union axis, the larger where several partitions
+    have a coordinate, NaN (unknown) where none says."""
+    out = {}
+    for dim, n, k in ((y_name, ny, 0), (x_name, nx, 1)):
+        name = cell_width_name(dim)
+        if not any(name in p.coords for p in parts):
+            continue
+        w = np.full(n, np.nan)
+        for p, pl in zip(parts, placed):
+            if name in p.coords:
+                np.fmax.at(w, pl[k], np.asarray(p.coords[name].values, dtype=np.float64))
+        out[name] = (dim, w)
+    return out
 
 
 def _aligned_weights(w, part, y_name, x_name):

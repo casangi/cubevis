@@ -372,6 +372,18 @@ def _composite_flag_mask(img32: np.ndarray, mask: np.ndarray, rgba: tuple) -> np
     return img32
 
 
+def _gaps_closed(label: str, closed) -> str:
+    """*label* with "(gaps closed)" after the name and before any unit
+    ("Time (gaps closed) [s]"), when *closed* says the axis has its gaps
+    closed: the axis label keeps the name, drops the unit and adds the
+    date (PanelSpec.axis_label), so the note must sit in the name.
+    (Raster and scatter, #36.)"""
+    if not closed:
+        return label
+    i = label.find(" [")
+    return (label[:i] + " (gaps closed)" + label[i:]) if i >= 0 else label + " (gaps closed)"
+
+
 def _img_to_uint32(img) -> np.ndarray:
     """Convert a Datashader Image or PIL RGBA Image to a Bokeh uint32 array.
 
@@ -1381,14 +1393,14 @@ class VisibilityPlot(Model):
             args={"state": self._state_source,
                   "axis_key": "y_is_time", "t0_key": "y_t0",
                   "scale_key": "y_scale", "cat_key": "y_cat",
-                  "day_key": "y_day0"},
+                  "day_key": "y_day0", "runs_key": "y_runs"},
             code=TICK_FORMATTER_JS,
         )
         self._fig.xaxis.formatter = CustomJSTickFormatter(
             args={"state": self._state_source,
                   "axis_key": "x_is_time", "t0_key": "x_t0",
                   "scale_key": "x_scale", "cat_key": "x_cat",
-                  "day_key": "x_day0"},
+                  "day_key": "x_day0", "runs_key": "x_runs"},
             code=TICK_FORMATTER_JS,
         )
         # An axis drawn in whole positions (a raster's Baseline axis) has

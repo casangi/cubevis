@@ -230,3 +230,107 @@ def compatible(local: Optional[str], remote: Optional[str], *, allow: Optional[b
     if allow:
         return True, why + "; used anyway: CUBEVIS_ALLOW_MISMATCH is set"
     return False, why
+
+
+# ---------------------------------------------------------------------- #
+# Command line (2026-11-20, debug-0004)                                    #
+# ---------------------------------------------------------------------- #
+# Whether a change needs a new kernel-side fingerprint (and so a cubevis
+# release on the kernel side) used to be judged from a hand-kept list of
+# modules.  The closure above already says it: ask it.
+#
+#   python -m cubevis._fingerprint                  the fingerprint
+#   python -m cubevis._fingerprint --list           ... and the closure
+#   python -m cubevis._fingerprint --changed REF    compared with git REF
+#
+# Standard library only, and Python 3.7-compatible like the rest of this
+# module (it is also sent to nodes and run there).  This module is in SENT,
+# so editing it changes no fingerprint.
+
+def _present_closure(root: str) -> list:
+    """``closure`` from the roots *root* has (``fingerprint``'s rule: a
+    cubevis older than a root is compared, not refused)."""
+    return closure([r for r in ROOTS if _path_of(root, r) is not None], root)
+
+
+def _git(root: str, *args: str) -> str:
+    import subprocess
+    return subprocess.run(("git", "-C", root) + args, check=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True).stdout
+
+
+def _export(root: str, ref: str, dest: str) -> str:
+    """The ``cubevis`` package at git *ref* written under *dest*; returns
+    the directory that holds it (for ``fingerprint(root=...)``)."""
+    import io as _io
+    import subprocess
+    import tarfile
+    top = _git(root, "rev-parse", "--show-toplevel").strip()
+    prefix = os.path.relpath(os.path.join(root, TOP), top).replace(os.sep, "/")
+    data = subprocess.run(("git", "-C", top, "archive", "--format=tar", ref, prefix),
+                          check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+    with tarfile.open(fileobj=_io.BytesIO(data)) as tf:
+        if hasattr(tarfile, "data_filter"):          # 3.12+ (and 3.8.17+ ...)
+            tf.extractall(dest, filter="data")
+        else:
+            tf.extractall(dest)
+    return os.path.dirname(os.path.join(dest, prefix))
+
+
+def changed(ref: str, root: Optional[str] = None) -> dict:
+    """How the kernel-side code here differs from git *ref*:
+    ``{"before", "after", "modules"}`` -- the two fingerprints, and the
+    closure modules (of either side) whose normalized text differs, i.e.
+    whose change is more than comments, docstrings or blank lines."""
+    import tempfile
+    root = root or package_root()
+    with tempfile.TemporaryDirectory() as tmp:
+        old_root = _export(root, ref, tmp)
+        before, after = fingerprint(root=old_root), fingerprint(root=root)
+        mods = []
+        for mod in sorted(set(_present_closure(root)) | set(_present_closure(old_root))):
+            texts = []
+            for r in (old_root, root):
+                p = _path_of(r, mod)
+                if p is None:
+                    texts.append(None)
+                else:
+                    with open(p, encoding="utf-8") as f:
+                        texts.append(normalize(f.read()))
+            if texts[0] != texts[1]:
+                mods.append(mod)
+    return {"before": before, "after": after, "modules": mods}
+
+
+def main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="python -m cubevis._fingerprint",
+        description="The kernel-side fingerprint of this cubevis (remote session design 7c).")
+    ap.add_argument("--list", action="store_true", help="also list the modules it covers")
+    ap.add_argument("--changed", metavar="REF",
+                    help="compare with git REF (e.g. origin/main): say whether the "
+                         "kernel side needs a new fingerprint, and which modules changed")
+    ap.add_argument("--root", help="directory holding the cubevis package (default: this one's)")
+    a = ap.parse_args(argv)
+    root = a.root or package_root()
+    if a.changed:
+        r = changed(a.changed, root)
+        if r["before"] == r["after"]:
+            print(f"kernel side unchanged since {a.changed}: {r['after']}")
+        else:
+            print(f"kernel side CHANGED since {a.changed}: {r['before']} -> {r['after']}")
+            print("a new kernel-side fingerprint (a cubevis release on the kernel side) is needed")
+            for m in r["modules"]:
+                print(f"  {m}")
+        return 0
+    print(fingerprint(root=root))
+    if a.list:
+        for m in _present_closure(root):
+            print(f"  {m}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

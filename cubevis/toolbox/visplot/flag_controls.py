@@ -417,17 +417,20 @@ class FlagController:
             bl_axis = getattr(panel, "_bl_axis", None)
             if bl_axis is not None and Axis.BASELINE in (x_ax, y_ax):
                 req["baseline_order"] = [int(i) for i in bl_axis.ids]
-            # A Time axis with its gaps closed (debug-0003) is in positions
-            # too: the box becomes the real times of the cells it covers.
+            # A Time axis with its gaps closed (debug-0003; runs-based
+            # since #36): the box becomes the real times it covers.
             # Across a closed gap that includes the gap itself, which holds
             # nothing of this selection.
-            t_axis = getattr(panel, "_time_axis", None)
-            if t_axis is not None and Axis.TIME in (x_ax, y_ax):
-                k0, k1 = ("x0", "x1") if x_ax == Axis.TIME else ("y0", "y1")
+            # (And a Frequency axis with its gaps closed, #36 part 3.)
+            for g_ax, g_attr, g_name in ((Axis.TIME, "_time_axis", "time"),
+                                         (Axis.FREQUENCY, "_freq_axis", "frequency")):
+                t_axis = getattr(panel, g_attr, None)
+                if t_axis is None or g_ax not in (x_ax, y_ax):
+                    continue
+                k0, k1 = ("x0", "x1") if x_ax == g_ax else ("y0", "y1")
                 span = t_axis.real_span(req[k0], req[k1])
                 if span is None:
-                    raise ValueError("the box covers only a gap between scans, "
-                                     "where there is no data")
+                    raise ValueError(f"the box is outside the data on the {g_name} axis")
                 req[k0], req[k1] = span
 
             def _span(ax, a, b):
@@ -441,6 +444,16 @@ class FlagController:
         else:
             layers = scatter_layer_entries(panel)
             req.update(x_axis=x_ax.name, layers=layers)
+            # X = Time with its gaps closed (#36): the box as real times,
+            # as on the raster.
+            # (X = Frequency the same, #36 part 3.)
+            t_axis = getattr(panel, "_x_gap_axis", None)
+            if t_axis is not None and x_ax in (Axis.TIME, Axis.FREQUENCY):
+                span = t_axis.real_span(req["x0"], req["x1"])
+                if span is None:
+                    raise ValueError("the box is outside the data on the "
+                                     f"{'time' if x_ax == Axis.TIME else 'frequency'} axis")
+                req["x0"], req["x1"] = span
             prov = (f"scatter box {x_ax.name} {_rng(x_ax, req['x0'], req['x1'])} x "
                     f"{_rng(None, req['y0'], req['y1'])} on "
                     + ", ".join(f"{l['y_axis']}({l['polarization']})" for l in layers))

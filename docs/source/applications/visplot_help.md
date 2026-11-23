@@ -90,9 +90,11 @@ scan at a time: the scans the box selects (every scan when it is empty),
 and only those of the field shown when one field is chosen. A line under
 the box says which, for example "▶ Scan 7 · 3 of 5"; the box itself is
 left as it is. Typing in the box, **Plot**, or ✱ (all of the box's scans
-again) ends it. A scan with no data for the chosen spectral windows,
-antennas or time range plots empty; the next step moves on. See also
-{ref}`vp-iteration`.
+again) ends it. Scans with no data for the chosen field, spectral
+windows, time range or UV range are skipped, and are not counted in
+"3 of 5". The Antenna and Baseline ticks do not count here: with only
+some antennas ticked, a scan that none of them took part in can still
+plot empty. See also {ref}`vp-iteration`.
 
 The text is checked when **Enter** is pressed and when the box loses the
 focus. A problem shows as a ⚠ warning in the status area, which stays
@@ -252,27 +254,54 @@ data are drawn side by side either way.
 
 ### Time gaps
 
-How a raster's Time axis treats stretches with no data, such as the time
-spent on other fields between the scans of the one shown.
+How a Time axis treats stretches with no data, such as the time spent on
+other fields between the scans of the one shown: a raster's, or a
+scatter's with X = Time.
 
 * **Shown** (the default): time is drawn to scale. A field observed in
   short scans with long gaps between them shows as thin bands in
   mostly blank space. The Time axis then lines up with a scatter of
   X = Time beside it.
-* **Closed**: one row (or column) per time with data, side by side, with
-  one thin blank row where there was a gap, much as the AIPS editors
-  draw time. The ticks read the times, and the axis label says "(gaps
-  closed)". The cursor readout and flag boxes work in real time: a box
-  drawn across a closed gap covers the scans on both sides, and the gap
-  itself, which holds no data of the selection.
-* With the gaps closed the axis no longer runs at a constant rate, so it
-  does not line up with a scatter of X = Time beside it. The linked
-  cursor still follows: over the raster it marks the same time on the
-  scatter, and over a scatter's time in a closed gap it shows nothing on
-  the raster.
-* Zooming in magnifies the cells already read rather than reading finer
-  ones.
-* Each panel has its own setting, in its gear tab. Applied by **Plot**.
+* **Closed**: each stretch with data (a scan, or scans back to back)
+  is kept to scale, and the stretches sit side by side: every gap is
+  removed, long or short, so the axis is just the time that has data.
+  The ticks read the real times, so they show where time jumps, and
+  the axis label says "(gaps closed)". The cursor readout and flag boxes work in
+  real time: a box drawn across a closed gap covers the scans on both
+  sides, and the gap itself, which holds no data of the selection.
+* A raster and a scatter of X = Time with their gaps closed share one
+  closed axis, so they line up. With the gaps closed on one and shown on
+  the other they do not, but the linked cursor still follows: over one
+  it marks the same time on the other, and over a time in a closed gap
+  it shows nothing.
+* Zooming in reads finer cells, as with the gaps shown.
+* Each panel has its own setting, in its gear tab (for a scatter, shown
+  when X is Time). Applied by **Plot**.
+* From Python or the `visplot` task: `time_gaps="closed"` sets every
+  panel, `panels=[dict(time_gaps="closed"), None]` one panel.
+
+(vp-freq-gaps)=
+
+### Frequency gaps
+
+How a frequency axis treats the gaps between spectral windows: a
+raster's Channel axis when the selected windows differ (it is then drawn
+in frequency), or a scatter's with X = Frequency.
+
+* **Shown** (the default): frequency is drawn to scale. Windows far
+  apart are thin bands with blank space between them.
+* **Closed**: each window (or windows that touch or overlap) is kept to
+  scale and the windows sit side by side, every gap removed, as for
+  [time gaps](vp-time-gaps). The ticks read the real frequencies, the
+  axis label says "(gaps closed)", and the cursor readout, flag boxes
+  and zooming work in real frequency.
+* A Channel axis drawn as a channel index (one window, or windows that
+  share their channels) has no gaps, and the setting does nothing there.
+* Each panel has its own setting, in its gear tab (for a raster, shown
+  when an axis is Channel; for a scatter, when X is Frequency). Applied
+  by **Plot**.
+* From Python or the `visplot` task: `freq_gaps="closed"` sets every
+  panel, `panels=[...]` one panel, as for time gaps.
 
 (vp-twin)=
 

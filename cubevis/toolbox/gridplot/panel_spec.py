@@ -348,6 +348,12 @@ class PanelSpec:
     y_origin:   Optional[float] = None
     x_ticks:    Optional[tuple] = None
     y_ticks:    Optional[tuple] = None
+    # Added 2026-11-20 (#36): an axis with its gaps closed, as
+    # raster_grid.GapAxis.state() -- [starts, lo, hi]; None otherwise.
+    # Its range is in closed coordinates; tick labels, the d/ prefix and
+    # the linked cursor convert through these.
+    x_runs:     Optional[list] = None
+    y_runs:     Optional[list] = None
     # Added 2026-10-11 (HRS A0): how a time axis is labelled, "utc"
     # (time of day, the default since A0) or "elapsed" (from the axis
     # origin, what every time axis showed before).
@@ -359,6 +365,10 @@ class PanelSpec:
         from .tick_format import time_day0
         if not (self.x_is_time if axis == "x" else self.y_is_time):
             return None
+        runs = self.x_runs if axis == "x" else self.y_runs
+        if runs and runs[1]:
+            # Closed gaps: the range is in closed coordinates (#36).
+            return time_day0(float(runs[1][0]), float(runs[2][-1]))
         lo, hi = self.x_range if axis == "x" else self.y_range
         return time_day0(float(lo), float(hi))
 
@@ -372,6 +382,10 @@ class PanelSpec:
     def axis_ticks(self, axis: str = "x") -> Optional[tuple]:
         """Per-position tick text for one axis, or ``None``."""
         return self.x_ticks if axis == "x" else self.y_ticks
+
+    def axis_runs(self, axis: str = "x") -> Optional[list]:
+        """An axis with its gaps closed: ``GapAxis.state()``, or ``None``."""
+        return self.x_runs if axis == "x" else self.y_runs
 
     # ------------------------------------------------------------------
     # Bokeh interop
@@ -393,6 +407,12 @@ class PanelSpec:
         if is_time:
             return 1.0, unit
         lo, hi = self.x_range if axis == "x" else self.y_range
+        runs = self.axis_runs(axis)
+        if runs and runs[1]:
+            # Gaps closed (#36): the range is in closed coordinates, which
+            # start at 0; the ticks read real values, so the prefix is
+            # chosen from those (a Frequency axis: GHz, not MHz).
+            lo, hi = float(runs[1][0]), float(runs[2][-1])
         return si_prefix(lo, hi, unit)
 
     def axis_label(self, axis: str = "x") -> str:
@@ -465,6 +485,11 @@ class PanelSpec:
             "y_t0":      [self.axis_origin("y")],
             "x_cat":     [list(self.x_ticks) if self.x_ticks is not None else None],
             "y_cat":     [list(self.y_ticks) if self.y_ticks is not None else None],
+            # Added 2026-11-20 (#36): an axis with its gaps closed
+            # (GapAxis.state(), None otherwise), for the tick labels and
+            # the linked cursor.
+            "x_runs":    [self.x_runs],
+            "y_runs":    [self.y_runs],
             # Added deliberately, 2026-10-11 (HRS A0): UTC or elapsed
             # labels on a time axis, and the day number for the d/ prefix
             # of a UTC axis crossing midnight (None otherwise).

@@ -211,6 +211,9 @@ class _Stub:
     _shade_cmap = _VR._shade_cmap
     _resample = _VR._resample
     _axis_half = _VR._axis_half
+    _axis_width = _VR._axis_width          # issue #38
+    _axis_runs = _VR._axis_runs            # issue #36
+    _gap_axis = _VR._gap_axis              # issue #36 part 3
 
     def __init__(self, quantity):
         self._quantity = quantity

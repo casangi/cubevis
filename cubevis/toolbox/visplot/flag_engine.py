@@ -73,7 +73,7 @@ import xarray as xr
 from .axes import Axis
 from .flag_filters import BUILTIN_FILTERS, ALL, FlagFilter, zscore_values
 from ..gridplot.raster_grid import overlapping, positions_of
-from .data.reader import expand_polarization
+from .data.reader import expand_polarization, partition_cell_width
 from .flag_model import (
     BlockCoords, FlagCounts, FlagDelta, SampleBlock, SpwChannels, SpwKey,
     ValueRange, _match_sorted, _region_axis_masks, fold_deltas, FREQ_RTOL,
@@ -231,7 +231,7 @@ def apply_pending(backend, ds, base: xr.DataArray, deltas) -> xr.DataArray:
 # ======================================================================
 
 def _overlap(coords: np.ndarray, lo: float, hi: float,
-             half: Optional[float] = None) -> np.ndarray:
+             half: Optional[float] = None, width=None) -> np.ndarray:
     """Cells (centred on *coords*) overlapping ``[lo, hi]``.
 
     The cells are ``raster_grid.cell_edges`` -- the same ones the raster
@@ -239,9 +239,34 @@ def _overlap(coords: np.ndarray, lo: float, hi: float,
     particular a cell beside a gap (between scans, between spectral
     windows) does not reach into the gap, and a box drawn only over the
     blank gap selects nothing.  (Until 2026-10-07 each cell reached
-    halfway to its neighbour, however far away that was.)
+    halfway to its neighbour, however far away that was.)  *width*: the
+    cells' true widths, as the raster has them, so a lone integration or
+    channel is selected as it is drawn (issue #38).
     """
-    return overlapping(coords, lo, hi, half)
+    return overlapping(coords, lo, hi, half, width)
+
+
+def _union_with_widths(axis: Axis, vals, datasets):
+    """The union (sorted, finite) of the partitions' coordinates *vals*
+    along a raster *axis*, and for Time / Frequency the true cell widths
+    on it -- each partition's integration time or channel width, the
+    larger where partitions share a coordinate, NaN where none says --
+    as ``_raster_merge`` puts them on the displayed grid (issue #38).
+    Width ``None`` for the other axes."""
+    if not vals:
+        return np.zeros(0), None
+    allv = np.concatenate([np.asarray(v, dtype=np.float64).ravel() for v in vals])
+    ok = np.isfinite(allv)
+    union, inv = np.unique(allv[ok], return_inverse=True)
+    dim = {Axis.TIME: "time", Axis.FREQUENCY: "frequency"}.get(axis)
+    if dim is None:
+        return union, None
+    w = np.concatenate([np.full(np.asarray(v).size,
+                                partition_cell_width(ds, dim) or np.nan)
+                        for v, ds in zip(vals, datasets)])
+    width = np.full(union.size, np.nan)
+    np.fmax.at(width, inv, w[ok])
+    return union, width
 
 
 def _baseline_positions(ids: np.ndarray, order) -> np.ndarray:
@@ -296,21 +321,6 @@ def _raster_axis_values(axis: Axis, bc: BlockCoords, ds, backend,
     if axis == Axis.CHANNEL:
         return np.asarray(bc.chans, dtype=np.float64)
     _bad_axis(axis)
-
-
-def _raster_axis_mask(axis: Axis, bc: BlockCoords, ds, backend, lo, hi,
-                      baseline_order=None):
-    """(canonical axis index, mask) for one raster axis."""
-    if axis == Axis.TIME:
-        return 0, _overlap(bc.times, lo, hi)
-    if axis == Axis.BASELINE:
-        pos = _baseline_positions(ds.coords[_bdim(backend)].values, baseline_order)
-        return 1, _overlap(pos, lo, hi, half=0.5) & np.isfinite(pos)
-    if axis == Axis.FREQUENCY:
-        return 2, _overlap(bc.freqs, lo, hi)
-    if axis == Axis.CHANNEL:
-        return 2, _overlap(bc.chans.astype(np.float64), lo, hi, half=0.5) & (bc.chans >= 0)
-    raise ValueError(f"raster flagging on axis {axis.name} is not supported")
 
 
 def _filter_dataset(backend, ds, bc: BlockCoords, data_column: str) -> xr.Dataset:
@@ -492,10 +502,9 @@ def evaluate_request(backend, req: dict) -> dict:
         for ax, lo, hi in ((x_axis, x0, x1), (y_axis, y0, y1)):
             vals = [_raster_axis_values(ax, bc, ds, backend, bl_order)
                     for ds, bc in visited]
-            union = np.unique(np.concatenate(vals)) if vals else np.zeros(0)
-            union = union[np.isfinite(union)]
+            union, width = _union_with_widths(ax, vals, [ds for ds, _ in visited])
             half = 0.5 if ax in (Axis.BASELINE, Axis.CHANNEL) else None
-            chosen[ax] = union[_overlap(union, lo, hi, half=half)]
+            chosen[ax] = union[_overlap(union, lo, hi, half=half, width=width)]
         for ds, bc in visited:
             # Both hands for a parallel-hands raster (2026-10-18).
             mp = (np.isin(bc.pols, expand_polarization(pol, bc.pols))

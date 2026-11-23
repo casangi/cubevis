@@ -121,6 +121,8 @@ from .reader import (
     select_polarization,
     channel_axis_is_unambiguous,
     to_channel_index,
+    with_cell_widths,
+    scale_cell_widths,
     XArrayReader,
     _compute_axis_values,
     ScatterLayerSpec,
@@ -1136,6 +1138,7 @@ class MSv4Backend(XArrayReader):
         height: int = 600,
         probe_grid_max_cells: int = 3072,
         ref_scale: Optional[float] = None,
+        x_runs: Optional[list] = None,
     ) -> ScatterRenderResult:
         """Query, bin, and shade scatter layers; return a bounded render result.
 
@@ -1174,6 +1177,10 @@ class MSv4Backend(XArrayReader):
         # Part 6: frames come from the per-layer cache when this selection
         # was already read (a pan, zoom, recolor or export), else from disk.
         dataframes = self._query_columns_cached(xaxis, all_keys, selection)
+        # Gaps closed (issue #36): X = Time or Frequency on the closed
+        # axis the widget made from the selection's runs (reader.axis_runs).
+        if x_runs and xaxis in (Axis.TIME, Axis.FREQUENCY):
+            dataframes = _scatter_render.close_x_gaps(dataframes, x_runs)
 
         # Part 6: merge each statistical layer's own (y_axis, pol) frame
         # with its (Z_SCORE, pol) frame on the identity columns every
@@ -1225,8 +1232,11 @@ class MSv4Backend(XArrayReader):
         x0, x1 = _scatter_render.nonzero_span(min(xr_), max(xr_))
         y0, y1 = _scatter_render.nonzero_span(min(yr_), max(yr_))
 
+        # X = Time: no more columns than samples in view (#36): see
+        # compute_canvas_size's x_step.
+        x_step = self.scatter_x_step(selection, xaxis)
         canvas_w, canvas_h = _scatter_render.compute_canvas_size(
-            dataframes, layers, x0, x1, y0, y1, width, height,
+            dataframes, layers, x0, x1, y0, y1, width, height, x_step=x_step,
         )
 
         rendered = tuple(
@@ -1240,8 +1250,8 @@ class MSv4Backend(XArrayReader):
 
         ref_canvas_width = ref_canvas_height = None
         if ref_scale is not None:
-            ref_canvas_width  = max(1, int(round(canvas_w * ref_scale)))
-            ref_canvas_height = max(1, int(round(canvas_h * ref_scale)))
+            ref_canvas_width, ref_canvas_height = _scatter_render.reference_size(
+                canvas_w, canvas_h, ref_scale, x0, x1, x_step)
             # Part 6: two-level rendering's Level-1 fast path is not yet
             # taught about "statistical" coloring -- see
             # MSv2Backend.query_columns' own identical comment for the
@@ -1256,6 +1266,7 @@ class MSv4Backend(XArrayReader):
                         x0, x1, y0, y1,
                         ref_canvas_width, ref_canvas_height, canvas_w, canvas_h,
                         color_mode, probe_grid_max_cells=probe_grid_max_cells,
+                        x_step=x_step,
                     ),
                 )
                 for lyr, render, render_df in zip(layers, rendered, render_dataframes)
@@ -2039,6 +2050,10 @@ class MSv4Backend(XArrayReader):
                 _n = arr.attrs.get('zscore_n_reduced')
                 if _n is not None:
                     zscore_n_list.append(int(_n))
+                # The true cell widths (integration time, channel width),
+                # for a cell with no neighbour to take a width from
+                # (raster_grid.cell_edges, issue #38).
+                arr = with_cell_widths(arr, ds)
                 arr, _dec = _decimate_agg(arr, y_name, x_name, max_cells)
                 any_partition_decimated = any_partition_decimated or _dec
                 lazy_arrs.append(arr)
@@ -3147,10 +3162,12 @@ def _decimate_agg(
         max_cells,
     )
 
-    return agg.isel(
+    out = agg.isel(
         {y_name: slice(None, None, stride_y),
          x_name: slice(None, None, stride_x)},
-    ), True
+    )
+    # Each kept cell stands for a stride's worth (issue #38).
+    return scale_cell_widths(out, {y_name: stride_y, x_name: stride_x}), True
 
 
 def _count_selected_time(ds: xr.Dataset, sel: SelectionSpec) -> int:

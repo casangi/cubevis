@@ -50,6 +50,43 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 # ---------------------------------------------------------------------------
+# An axis with its gaps closed (raster_grid.GapAxis, #36), as JavaScript
+# ---------------------------------------------------------------------------
+#
+# ``runs`` is ``GapAxis.state()``: ``[starts, lo, hi]`` -- where each run
+# starts on the closed axis and its real edges.  The tick formatter turns a
+# closed coordinate into the real value it stands for, and the linked
+# cursor converts both ways.  Function declarations only, so the block can
+# be included more than once in a script.  Python twins:
+# ``GapAxis.real_of`` / ``positions_of`` (the formatter's is _gap_real).
+GAP_AXIS_JS = r"""
+function cvGapReal(runs, u) {
+    const st = runs[0], lo = runs[1], hi = runs[2];
+    if (!st || !st.length) return null;
+    let k = 0, a = 0, b = st.length - 1;
+    while (a <= b) {
+        const m = (a + b) >> 1;
+        if (st[m] <= u) { k = m; a = m + 1; } else b = m - 1;
+    }
+    const n = st.length - 1;
+    const tol = 1e-9 * Math.max(Math.abs(st[n] + (hi[n] - lo[n])), 1);
+    if (u < st[k] - tol || u > st[k] + (hi[k] - lo[k]) + tol) return null;
+    return lo[k] + (u - st[k]);
+}
+function cvGapPos(runs, t) {
+    const st = runs[0], lo = runs[1], hi = runs[2];
+    if (!st || !st.length) return null;
+    let k = 0, a = 0, b = lo.length - 1;
+    while (a <= b) {
+        const m = (a + b) >> 1;
+        if (lo[m] <= t) { k = m; a = m + 1; } else b = m - 1;
+    }
+    if (t < lo[k] || t > hi[k]) return null;
+    return st[k] + (t - lo[k]);
+}
+"""
+
+# ---------------------------------------------------------------------------
 # The algorithm, as JavaScript — the single copy
 # ---------------------------------------------------------------------------
 #
@@ -58,7 +95,7 @@ from typing import Optional
 # string.  Kept free of Bokeh references so the test harness can wrap it
 # in a plain function and run it under node; TICK_FORMATTER_JS below adds
 # the Bokeh-specific preamble.
-_JS_CORE = r"""
+_JS_CORE = GAP_AXIS_JS + r"""
 if (typeof labels !== 'undefined' && labels) {
     // An axis drawn in whole positions (a raster's Baseline axis): the
     // tick at position i reads labels[i]; a tick between positions, or
@@ -66,6 +103,13 @@ if (typeof labels !== 'undefined' && labels) {
     const i = Math.round(tick);
     if (Math.abs(tick - i) > 1e-6 || i < 0 || i >= labels.length) return '';
     return String(labels[i]);
+}
+if (typeof runs !== 'undefined' && runs) {
+    // An axis with its gaps closed (#36): the tick is a closed
+    // coordinate; it reads the real value there, a blank nothing.
+    const real = cvGapReal(runs, tick);
+    if (real === null) return '';
+    tick = real;
 }
 if (!is_time) {
     // Scale is fixed from the full extent and supplied by _state_source,
@@ -143,6 +187,9 @@ const day0    = (typeof day_key !== 'undefined' && state.data[day_key])
                 ? state.data[day_key][0] : null;
 const step    = (typeof ticks !== 'undefined' && ticks && ticks.length > 1)
                 ? Math.abs(ticks[1] - ticks[0]) : null;
+// An axis with its gaps closed: GapAxis.state(), else null (#36).
+const runs    = (typeof runs_key !== 'undefined' && state.data[runs_key])
+                ? state.data[runs_key][0] : null;
 """ + _JS_CORE
 
 
@@ -284,9 +331,31 @@ def utc_tick_step(lo: float, hi: float, desired: int = 6) -> float:
     return float(best * mag)
 
 
+def _gap_real(runs, u: float):
+    """``cvGapReal``: the real value at closed coordinate *u* of an axis
+    with its gaps closed (``runs`` = ``GapAxis.state()``), or ``None`` in
+    a blank."""
+    st, lo, hi = runs
+    if not st:
+        return None
+    k, a, b = 0, 0, len(st) - 1
+    while a <= b:
+        m = (a + b) >> 1
+        if st[m] <= u:
+            k, a = m, m + 1
+        else:
+            b = m - 1
+    n = len(st) - 1
+    tol = 1e-9 * max(abs(st[n] + (hi[n] - lo[n])), 1.0)
+    if u < st[k] - tol or u > st[k] + (hi[k] - lo[k]) + tol:
+        return None
+    return lo[k] + (u - st[k])
+
+
 def format_tick(tick: float, is_time: bool, t0: float = 0.0,
                 scale: float = 1.0, labels=None, *,
-                time_mode: str = "elapsed", step=None, day0=None) -> str:
+                time_mode: str = "elapsed", step=None, day0=None,
+                runs=None) -> str:
     """Format one axis tick, matching the browser byte for byte.
 
     Parameters
@@ -313,12 +382,21 @@ def format_tick(tick: float, is_time: bool, t0: float = 0.0,
     -------
     str
         e.g. ``"1234.5678"``, ``"42.5 s"``, ``"2m 05s"``, ``"-1m 30s"``.
+
+    *runs* (``GapAxis.state()``): an axis with its gaps closed -- *tick*
+    is a closed coordinate and reads the real value there, a blank
+    nothing (#36).
     """
     if labels:
         i = _js_round_signed(tick)
         if abs(tick - i) > 1e-6 or i < 0 or i >= len(labels):
             return ""
         return str(labels[i])
+    if runs:
+        real = _gap_real(runs, tick)
+        if real is None:
+            return ""
+        tick = real
     if not is_time:
         if scale and scale > 0 and scale != 1.0:
             tick = tick / scale
@@ -415,7 +493,8 @@ def si_scale(value: float, unit: str) -> tuple[float, str]:
 
 
 def mpl_formatter(is_time: bool, t0: float = 0.0, scale: float = 1.0,
-                  labels=None, *, time_mode: str = "elapsed", day0=None):
+                  labels=None, *, time_mode: str = "elapsed", day0=None,
+                  runs=None):
     """Return a matplotlib formatter wrapping *format_tick*.
 
     matplotlib is imported lazily: this module is imported by
@@ -437,7 +516,8 @@ def mpl_formatter(is_time: bool, t0: float = 0.0, scale: float = 1.0,
             locs = self._cv_locs
             step = abs(locs[1] - locs[0]) if len(locs) > 1 else None
             return format_tick(v, is_time, t0, scale, labels,
-                               time_mode=time_mode, step=step, day0=day0)
+                               time_mode=time_mode, step=step, day0=day0,
+                               runs=runs)
     return _F()
 
 
@@ -503,6 +583,26 @@ GOLDEN_SCALED: tuple[tuple[float, float, bool, float, str], ...] = (
     # human-scaled, and dividing MJD seconds by 1e9 would be nonsense.
     (125.0,        0.0, True,  1e9,  "2m 05s"),
     (142.5,      100.0, True,  1e3,  "42.5 s"),
+)
+
+
+# Closed-gap cases (#36): ``(tick, t0, is_time, runs, time_mode, expected)``.
+# Runs of 0-80 s and 1000-1040 s with a 2.56 blank: closed 0-80, 82.56-122.56.
+_RUNS_A = [[0.0, 82.56], [0.0, 1000.0], [80.0, 1040.0]]
+GOLDEN_RUNS: tuple = (
+    (0.0,     0.0, True, _RUNS_A, "elapsed", "0.0 s"),
+    (40.0,    0.0, True, _RUNS_A, "elapsed", "40.0 s"),
+    (80.0,    0.0, True, _RUNS_A, "elapsed", "1m 20s"),
+    (81.0,    0.0, True, _RUNS_A, "elapsed", ""),          # in the blank
+    (82.56,   0.0, True, _RUNS_A, "elapsed", "16m 40s"),   # 1000 s
+    (102.56,  0.0, True, _RUNS_A, "elapsed", "17m 00s"),
+    (130.0,   0.0, True, _RUNS_A, "elapsed", ""),          # past the end
+    (-5.0,    0.0, True, _RUNS_A, "elapsed", ""),
+    # UTC: a time of day (unix seconds) on the second run.
+    (82.56, 0.0, True, [[0.0, 82.56], [1.7e9, 1.7e9 + 3600.0], [1.7e9 + 80.0, 1.7e9 + 3640.0]],
+     "utc", "23:13:20"),
+    # Not time (a Frequency axis with its gaps closed): the real value.
+    (82.56,   0.0, False, _RUNS_A, "elapsed", "1000"),
 )
 
 

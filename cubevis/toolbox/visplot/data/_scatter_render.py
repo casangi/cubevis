@@ -45,6 +45,7 @@ Package location
 from __future__ import annotations
 
 import logging
+import dataclasses as _dc
 import math
 from typing import NamedTuple, Optional
 
@@ -537,6 +538,7 @@ def compute_canvas_size(
     dataframes: dict, layers: list[ScatterLayerSpec],
     x0: float, x1: float, y0: float, y1: float,
     width: int, height: int,
+    x_step: Optional[float] = None,
 ) -> tuple[int, int]:
     """Adaptive canvas size for sparse data.
 
@@ -544,7 +546,54 @@ def compute_canvas_size(
     see that method's (pre-redesign) docstring for the ``pts_per_px``
     rationale. Excludes hidden (``alpha <= 0``) layers from the count,
     matching the original exactly.
+
+    *x_step* (issue #36, 2026-11-21): X is Time and samples are this far
+    apart (the integration time, or the averaging length).  The canvas
+    then has no more columns than there are samples in view --
+    ``(x1 - x0) / x_step`` -- so each column holds an integration and
+    none is left empty between two.  Finer columns are no real
+    resolution: on an axis where integrations land just over a pixel
+    apart (a closed Time axis, or a zoom), about half the columns caught
+    no sample and the plot showed stripes of background, worst where the
+    rounding came round every few integrations.  The image is stretched
+    to the panel as with the sparse-data shrink; zoomed in far enough,
+    an integration is a block, as a raster cell is.
     """
+    w, h = _adaptive_canvas_size(dataframes, layers, x0, x1, y0, y1, width, height)
+    if x_step is not None and x_step > 0 and x1 > x0:
+        w = min(w, max(1, int((x1 - x0) / x_step)))
+    return w, h
+
+
+def reference_size(
+    canvas_w: int, canvas_h: int, ref_scale: float,
+    x0: float, x1: float, x_step: Optional[float] = None,
+) -> tuple[int, int]:
+    """The Level-1 reference's resolution: ``ref_scale`` x the canvas,
+    but along X no more columns than there are samples in view (the same
+    *x_step* cap as ``compute_canvas_size``; issue #36, 2026-11-22).
+
+    Without the cap a reference twice the capped canvas had an empty
+    column between every two samples, and a Level-1 redraw (which
+    follows a Plot or a step when the range settles) averaged it back
+    down out of step with the samples: half the plot drawn denser and
+    blockier than the other half, a seam where the two met (X = Channel,
+    384 channels).  A reference at one column per sample is the real
+    resolution; a zoom finer than that is a Level-2 query, as it was
+    before for any zoom past ``ref_scale``."""
+    rw = max(1, int(round(canvas_w * ref_scale)))
+    rh = max(1, int(round(canvas_h * ref_scale)))
+    if x_step is not None and x_step > 0 and x1 > x0:
+        rw = min(rw, max(canvas_w, int((x1 - x0) / x_step)))
+    return rw, rh
+
+
+def _adaptive_canvas_size(
+    dataframes: dict, layers: list[ScatterLayerSpec],
+    x0: float, x1: float, y0: float, y1: float,
+    width: int, height: int,
+) -> tuple[int, int]:
+    """The sparse-data shrink of ``compute_canvas_size``."""
     total_in_view = 0
     for lyr in layers:
         if lyr.alpha <= 0.0:
@@ -596,6 +645,37 @@ def _id_grid_size(
     h = max(1, int(round(math.sqrt(max_cells / max(aspect, 1e-9)))))
     w = max(1, int(round(max_cells / h)))
     return w, h
+
+
+def close_x_gaps(dataframes: dict, x_runs) -> dict:
+    """Each frame's ``x`` (real times, or real frequencies with X =
+    Frequency) put on an axis with its gaps closed
+    (``raster_grid.GapAxis.from_runs(x_runs)``, issue #36): binning,
+    shading, extents and the two-level reference then all work in closed
+    coordinates, and a viewport re-render is just a closed range.  The
+    identity columns (``time``, ``frequency``) stay real, so the hover probe
+    and the flag engine are unaffected.  A sample outside every run (the
+    runs and the data disagree) is dropped.  New frames; the cached ones
+    are left as they are.  *x_runs* empty or ``None``: *dataframes*
+    unchanged."""
+    if not x_runs:
+        return dataframes
+    from ...gridplot.raster_grid import GapAxis
+    axis = GapAxis.from_runs(x_runs)
+    out = {}
+    for key, df in dataframes.items():
+        if df is None or len(df) == 0 or "x" not in df.columns:
+            out[key] = df
+            continue
+        u = axis.positions_of(df["x"].to_numpy(dtype=np.float64))
+        keep = np.isfinite(u)
+        d = df.loc[keep].copy() if not keep.all() else df.copy()
+        d["x"] = u[keep]
+        # The cache memoizes a frame's extent (reader._frame_extent);
+        # the copy carried the real one with it.
+        d.attrs = {k: v for k, v in df.attrs.items() if k != "extent"}
+        out[key] = d
+    return out
 
 
 def nonzero_span(lo, hi):
@@ -1151,6 +1231,27 @@ def build_layer_reference(
     x0: float, x1: float, y0: float, y1: float,
     ref_w: int, ref_h: int, canvas_w: int, canvas_h: int,
     color_mode: str, probe_grid_max_cells: int = 3072,
+    x_step: Optional[float] = None,
+) -> ScatterLayerReference:
+    """``_build_layer_reference``, with *x_step* -- the sample spacing
+    along X that ``reference_size`` capped the reference to -- kept on
+    it as ``ref_x_step`` when the reference does have a column per
+    sample, so ``needs_level2_requery`` knows a zoom in X has nothing
+    finer to fetch (#36, 2026-11-22)."""
+    ref = _build_layer_reference(df, lyr, x0, x1, y0, y1, ref_w, ref_h,
+                                 canvas_w, canvas_h, color_mode,
+                                 probe_grid_max_cells=probe_grid_max_cells)
+    if (x_step is not None and x_step > 0 and ref.skip_reason is None
+            and x1 > x0 and ref_w >= int((x1 - x0) / x_step)):
+        ref = _dc.replace(ref, ref_x_step=float(x_step))
+    return ref
+
+
+def _build_layer_reference(
+    df: Optional[pd.DataFrame], lyr: ScatterLayerSpec,
+    x0: float, x1: float, y0: float, y1: float,
+    ref_w: int, ref_h: int, canvas_w: int, canvas_h: int,
+    color_mode: str, probe_grid_max_cells: int = 3072,
 ) -> ScatterLayerReference:
     """Build one layer's cached reference for later Level-1 resampling.
 
@@ -1360,8 +1461,14 @@ def needs_level2_requery(
         return True
     ref_cell_w = (rx1 - rx0) / w
     ref_cell_h = (ry1 - ry0) / h
+    # A reference with a column per sample along X (ref_x_step) has all
+    # the detail there is: a finer X is the same samples drawn as wider
+    # blocks, which Level-1 does (nearest), so only Y can need Level-2.
+    step = getattr(ref, "ref_x_step", None)
+    x_complete = (step is not None and step > 0
+                  and w >= int((rx1 - rx0) / step))
     return (
-        (x1 - x0) / canvas_w < ref_cell_w or
+        (not x_complete and (x1 - x0) / canvas_w < ref_cell_w) or
         (y1 - y0) / canvas_h < ref_cell_h
     )
 

@@ -13,13 +13,32 @@ For each request it gives what was asked, what visplot does today (checked
 against the code), the design questions, and an estimate of size.  The
 order is roughly the order in which they could be taken up.
 
+## Status (`debug-0004`, 2026-11-22)
+
+What changed since the `debug-0003` table below
+(`devel/notes/drs/visplot/visplot_handoff_2026-11-22_debug-0004.md`):
+
+* **#38 lone cell widths**: fixed (see the paragraph after the table).
+* **#37 scan stepping skips scans with no data**: built
+  (`reader.scans_with_rows`, remote too); the Antenna / Baseline ticks
+  are not counted, and the help says so.
+* **#36 rest of gap closing**: built.  Every gap is removed (no blanks or
+  separator lines), on rasters and on scatters with X = Time, which are
+  closed before datashader so the image itself has no gaps.  Frequency
+  gaps between SPWs the same (a raster's Channel axis drawn in Hz, a
+  scatter's X = Frequency).  `time_gaps=` / `freq_gaps=` arguments,
+  `panels=[...]`, the reproducing call and the casatasks / casashell
+  layers.  A raster with closed gaps re-queries finer cells when zoomed.
+  Not covered: grid panels, a scatter's X = Channel across windows.
+* **#35 transport review leftovers**: next, on its own branch.
+
 ## Status (`debug-0003`, 2026-11-19)
 
 Triaged after `debug-0001` and `debug-0002` were merged (#24):
 
 | # | Request | Outcome |
 |---|---|---|
-| 1 | Scan iteration | **Built** (`debug-0003`): Prev / ✱ / Next beside Scan, the box kept as a text box, a "▶ Scan 7 · 3 of 5" readout; only the field shown's scans (`scan_iteration.py`). Skipping scans with no data for the SPWs / antennas / time range needs a reader method (and so a new remote-kernel fingerprint) and is left for later. |
+| 1 | Scan iteration | **Built** (`debug-0003`): Prev / ✱ / Next beside Scan, the box kept as a text box, a "▶ Scan 7 · 3 of 5" readout; only the field shown's scans (`scan_iteration.py`). Skipping scans with no data for the SPWs / antennas / time range needs a reader method (and so a new remote-kernel fingerprint) and is left for later. **Done in `debug-0004` (#37)**, antennas not counted. |
 | 2 | Correlation iteration | Own issue, for discussion. |
 | 3 | "Correlation shown" | **Kept** (option a) and **documented**: a raster may show a product the Data ticks leave out. |
 | 4 | Iterated value in the title | **Built**: a default title ends with what the selection holds one of, of several ("— 1642+689, SPW 1, scan 7, DA41&DV01"). |
@@ -28,7 +47,7 @@ Triaged after `debug-0001` and `debug-0002` were merged (#24):
 | 7 + 8b | Aggregation; windows for every quantity | One issue, for discussion. |
 | 8a | Typed window values | **Built**: "Custom…" in the Time / Channel window dropdowns. |
 | 9 | Help pages from the in-app help | Done in `debug-0002`. |
-| — | Close time gaps (its own ticket) | **Built** for raster panels: the gear tab's *Time gaps: Closed* (`raster_grid.TimeAxis`); the linked cursor converts through real time. Checked on VLBA data (TL016B, fringe finder with 2 scans 84 min apart). Not yet: a constructor argument (scripts, `plotfile=`, the "Describe this plot" call), scatters with X = Time, frequency gaps between SPWs, finer re-query when zoomed. |
+| — | Close time gaps (its own ticket) | **Built** for raster panels: the gear tab's *Time gaps: Closed* (`raster_grid.TimeAxis`); the linked cursor converts through real time. Checked on VLBA data (TL016B, fringe finder with 2 scans 84 min apart). Not yet: a constructor argument (scripts, `plotfile=`, the "Describe this plot" call), scatters with X = Time, frequency gaps between SPWs, finer re-query when zoomed. **Done in `debug-0004` (#36)**, see above. |
 | — | Scan intent selection | Own issue: MSv4 has `scan_intents` (xradio's schema), so it is in scope. |
 
 Rule for feature choices from here on: what MSv4 (xradio's processing

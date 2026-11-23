@@ -1,1 +1,15 @@
 Our Full Gap Analysis on Visplot will live here!
+
+| Feature | MSview | Visplot |
+| --- | --- | --- |
+| **View a MS** | Yes. Confirmed working for MSv2. Takes a while to load and progress is logged in the terminal CASA is running in, not in msview or CASA logger. | Yes. Will support MSv2 and MSv4. Tested with MSv2. Have not found a file import option... |
+| **Data Display Configurability**; Define one or multiple fields, spectral windows, time range, uv range, antennas, correlations, scans, arrays, and ms selection expressions. Define axes to be any of the following: Time, Baseline, Channel, Correlation, Spectral Window | Yes. Lots of different settings all lumped together in this menu. Scrolling is awful because some setting with dropdowns can potentially get altered. | Yes. Lots of options. Left side panel is very easy to understand. |
+| **Layout and Graphics Configurability** | Yes. Love the freedom with these settings. Can change the margins, background color, and number of displayed panels. Changes are applied realtime. The OK button just closes the window. | Yes. Can change the number and orientation of plots and toggle Light and Dark mode. |
+| **Flag Data** | Yes. Fine for small data, not recommended for large data sets. Can toggle whether your flag impacts all Times, Baselines, Channels, Correlations, Spectral Windows, and/or Antennas. Can undo One or All flags | Yes. Can toggle whether your flag impacts all Baselines, Channels, Correlations, Spectral Windows, Fields, and/or the whole Scan. No option for Times or Antennas that I can see? The flas stores a Reason, and can Undo, Redo, or Clear flags. |
+| **Draw Regions** | Yes. Can draw Rectangle, Point, Ellipse, Polygon, and Polyline. | No (haven't found drawing tools yet) |
+| **Plot Interactions** (Zoom and Pan) | Yes. These tools feel very clunky, as you do not pan in real time. | Yes. Includes both Box Zoom and Wheel Zoom. |
+| **Interactive Colormap Fiddling** | Yes. Can fiddle Shift/Slope as well as Brightness/Contrast. It is difficult to tell what each direction of the mouse will do to the colormap. | Yes, much better. Accessed in the panels settings. |
+| **Ruler Drawing** | Yes. Would like a way for the measurement to persist after unclicking the mouse (does this exist?) | No. |
+| **P/V Tool** | Yes. Have not been able to test. | No. |
+| **Animate the series of channels (or any of the axis options)** | Yes. Wish the Animator panel displayed more information, like units on whatever is being iterated through. I have to bring my cursor to the image to get any information. | Yes. Navigate to the Grid layout option to hit Play on the Animation. |
+| **Progress Loading Visibility** | Somewhat. The program appears to freeze with no indication of loading, but the terminal window shows the percentage of progress in real time. | Somewhat. There is a loading wheel when axes or field views have to be changed, but no update on the percent to completion. No progress shown for when visplot is opening, so large MS will take forever to open visplot with no info being shown to users. |

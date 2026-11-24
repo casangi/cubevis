@@ -64,3 +64,66 @@ def test_wrapper_passes_through_without_rules(tmp_path):
     env.pop("SSH_WRAPPER_RULES", None)
     r = subprocess.run([str(WRAPPER), "-V"], capture_output=True, text=True, env=env)
     assert "OpenSSH" in r.stderr
+
+
+# A stand-in for ssh: answers -V and -G, says the shared connection is up
+# once a login has run, and records every other call with its DISPLAY.
+_FAKE_SSH = """#!/bin/sh
+D="$FAKE_SSH_DIR"
+for a in "$@"; do
+  case "$a" in
+    -V) echo "OpenSSH_${FAKE_SSH_VERSION}, fake" >&2; exit 0 ;;
+    -G) printf 'hostname login.example.test\\nuser jo\\nport 22\\ncontrolpath %s/cm/s\\ncontrolpersist 60\\n' "$D"
+        exit 0 ;;
+    -O) [ -e "$D/cm/s" ]; exit $? ;;
+  esac
+done
+echo "DISPLAY=${DISPLAY-<unset>} $*" >> "$D/calls"
+mkdir -p "$D/cm" && touch "$D/cm/s"
+exit 0
+"""
+
+
+def _login_call(tmp_path, version, display):
+    """The wrapper's own login (the first recorded call), as one line."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "ssh"
+    fake.write_text(_FAKE_SSH)
+    fake.chmod(0o755)
+    env = _wrapper_env(tmp_path, "login.example.test backend=command command=echo pw\n")
+    env.update(PATH=f"{bindir}:{env['PATH']}", FAKE_SSH_DIR=str(tmp_path),
+               FAKE_SSH_VERSION=version, TMPDIR=str(tmp_path))
+    env.pop("DISPLAY", None)
+    if display is not None:
+        env["DISPLAY"] = display
+    r = subprocess.run([str(WRAPPER), "gw", "echo", "hi"], capture_output=True, text=True,
+                       env=env, stdin=subprocess.DEVNULL, timeout=60)
+    assert r.returncode == 0, r.stderr
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert len(calls) == 2, calls                      # the login, then the command itself
+    assert "BatchMode=no" in calls[0] and calls[0].endswith(" gw true"), calls[0]
+    assert calls[1].endswith(" gw echo hi"), calls[1]
+    return calls[0]
+
+
+@pytest.mark.skipif(not shutil.which("perl"), reason="needs perl")
+def test_login_leaves_forwarding_to_the_config(tmp_path):
+    """The master's options are what every session sharing it can get: the
+    wrapper's login must not turn X11 (or the agent) off (2026-11-23: -x
+    left every later session without DISPLAY), and on OpenSSH 8.4+ must not
+    give the master a made-up DISPLAY."""
+    login = _login_call(tmp_path, "10.3p1", None)
+    words = login.split()
+    assert "-x" not in words and "-a" not in words, login
+    assert login.startswith("DISPLAY=<unset> "), login
+    # A real DISPLAY is passed on untouched.
+    other = tmp_path / "real"
+    other.mkdir()
+    assert _login_call(other, "10.3p1", "/tmp/xq:0").startswith("DISPLAY=/tmp/xq:0 ")
+
+
+@pytest.mark.skipif(not shutil.which("perl"), reason="needs perl")
+def test_login_on_old_ssh_still_gets_a_display(tmp_path):
+    """Before OpenSSH 8.4 askpass is used only with DISPLAY set."""
+    assert _login_call(tmp_path, "8.0p1", None).startswith("DISPLAY=:0 ")

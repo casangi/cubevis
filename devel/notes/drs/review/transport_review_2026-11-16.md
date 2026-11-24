@@ -80,6 +80,20 @@ would turn each of these from a hang into a visible failure.
 > per-comm record on the other side drops the copy (still running) or resends the stored reply; only
 > an unanswered re-ask is forgotten. Re-asking happens only on a live transport, so a disconnect of
 > any length just waits. JC-1's reopen hook and RK-1 use the same primitive.
+>
+> **Implemented on `35-transport-bugs` (2026-11-23), WebSocket leg.** Both `CommMgr`s:
+> `forget(request_id | callback, error=)` removes a request in flight *or still queued* and moves the
+> comm's queue on. A request with no reply for `REASK_AFTER` (30 s) is sent again with `reask: true`;
+> the receiver answers a still-running one with `__running__` (restarts the wait), a finished one with
+> the stored reply, an unknown one by running it. A re-ask is forgotten (callback gets
+> `{'error': 'no reply: the request was lost'}`) only if it is unanswered for another 30 s *and* the peer
+> sent `REASK_LIVENESS_TICKS` (2) frames meanwhile (`WebSocketTransport.liveness`, pings/pongs count): a
+> blocked or absent peer is waited for. `__running__` is sent only in answer to `reask`, so reconnect
+> replays and older peers behave as before. **Order:** the receiver runs one request per comm at a time
+> (its comm lock), so a forgotten request that does run there finishes before the next on that comm;
+> its late reply is ignored. Tests: `tests/manual/visplot/test_reask.py` (incl.
+> `test_after_a_forget_the_next_request_runs_after_the_forgotten_one`). Not yet on the Jupyter / Colab
+> transports (no liveness count): JC-1.
 
 ---
 
@@ -240,6 +254,17 @@ Supporting fact [C]: replies are sent on `self._transport` at reply time (`cm.py
 why the replayed copy is redundant.
 
 ### HB-1 [C] S1/S2 — the browser heartbeat cannot tell "busy" from "dead"
+
+> **Partly fixed on `35-transport-bugs` (2026-11-23).** (1) `llt.ts`: while a request awaits its reply,
+> a missed pong is not fatal; the socket is declared dead after 3 misses in a row (about 23 s after a
+> wake probe instead of 3 s); with nothing in flight, after one, as before. Checked live with the
+> harness's new `BLOCK_PLOT=20` (holds the loop): the old bundle reconnected 4 s into the Plot, the new
+> one does not. (2) An event-loop lag monitor in `CommMgr` logs `event loop blocked for N s (running:
+> <handler> (<comm>.<message>))`: DEBUG from 1 s, INFO from 8 s. **Still to do:** move what it shows
+> to be long off the loop. The static audit: every image-cube handler (`_image_pipe` channel fetch with
+> statistics and histogram, spectrum, `edit_mask` -- cube scope can be long -- and the colormap
+> histogram) runs on the loop; moving them needs one lock per cube, as casacore is not thread-safe and
+> loop-side code touches the same cube. Decided 2026-11-23: measure first (TW Hya), then move.
 `llt.ts:112-114`: ping every 15 s, 10 s pong deadline (3 s after wake/focus). Python answers pings in the
 socket read loop (`llt.py:377-382`), which needs the event loop. Any handler that holds the loop
 synchronously for longer than the deadline (the comment at `llt.py:384-417` says so itself) gets the
@@ -510,6 +535,11 @@ Chain: P_local `CommMgr(mirror)` ⇄ `KernelClientTransport` ⇄ (jupyter_client
 `WorkerProcessTransport` ⇄ (stdin/stdout frames) ⇄ `WorkerCommTransport` ⇄ worker `CommMgr(default)`.
 
 ### RK-1 [C] S1 — a request that times out leaves its comm pending; the link has one comm
+
+> **Fixed on `35-transport-bugs` (2026-11-23):** `_bridge.request()` calls `CommMgr.forget(callback=…)`
+> when its own timeout fires or it is cancelled (an outer `wait_for`), unless a reply came. The request
+> is removed whether it was in flight or still queued; the comm's queue moves on. Test:
+> `test_reask.py::test_rk1_a_timed_out_request_does_not_wedge_the_comm` (fails on the old bridge).
 `request()` (`_bridge.py`) and every `asyncio.wait_for(request(...))` in `link.py` only abandon the
 *Future*. `CommMgr._pending[comm_id]` stays set until a reply arrives. `RemoteAppLink` sends everything on
 one comm, `"worker"` (`link.py:246`), so if a reply is lost, every later call queues behind it and times

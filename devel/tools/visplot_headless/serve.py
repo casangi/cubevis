@@ -43,6 +43,17 @@ if _slow > 0:
         await asyncio.sleep(_slow)
         return await _orig_plot(self, msg, context=context)
     VisibilityPlotter._handle_plot = _slow_plot
+# BLOCK_PLOT=<seconds>: the same, but holding the event loop (time.sleep), as
+# a handler that does its work on the loop does: Python answers nothing
+# meanwhile, not even the page's pings (HB-1).
+_block = float(os.environ.get("BLOCK_PLOT", "0") or 0)
+if _block > 0:
+    import time as _time
+    _orig_plot_b = VisibilityPlotter._handle_plot
+    async def _block_plot(self, msg, context=None):
+        _time.sleep(_block)
+        return await _orig_plot_b(self, msg, context=context)
+    VisibilityPlotter._handle_plot = _block_plot
 app = VisibilityPlotter(headless=False, enable_flagging=True, **kw)
 ctx = exe.Context(exe.Mode.SYNC)
 ui, task = app(ctx, uuid4())

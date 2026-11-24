@@ -211,6 +211,12 @@ class WebSocketTransport(TransportBase):
         ### drop (sleep, network) was taken as a deliberate close and the
         ### session ended after the 3 s grace instead of waiting.
         self._goodbye_received = False
+        ### Frames received from the page, of any kind (pings included).  The
+        ### CommMgr's re-ask uses it to tell a lost request from a page that is
+        ### merely slow or gone: a request is only given up on once the page
+        ### has shown it is alive (REASK_LIVENESS_TICKS in _comm_mgr.py).
+        ### Transports without it are never re-asked on.
+        self.liveness = 0
 
         ### The page on the other end, from its `initialize` message: a
         ### random id per page load (cubevisjs find.object_id).  CommMgr
@@ -411,6 +417,7 @@ class WebSocketTransport(TransportBase):
                     break
                 try:
                     msg = deserialize(message)
+                    self.liveness += 1
 
                     ### The frontend is being torn down (tab closed, reloaded,
                     ### or navigated away). Record it and keep going -- the

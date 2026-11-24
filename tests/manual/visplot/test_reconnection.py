@@ -703,7 +703,7 @@ async def test_cancelled_handler_is_not_mistaken_for_a_running_one():
            "direction": "j2p", "message": {}}
     task = asyncio.ensure_future(mgr._handle_request(msg))
     await asyncio.sleep(0.1)
-    assert mgr._last_request["data"] == ["r1", None]
+    assert mgr._last_request["data"][:2] == ["r1", None]
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task

@@ -56,6 +56,14 @@ still works for layout only; it has no kernel, so Plot does nothing.
   plot longer than 30 s (`SLOW_PLOT=45 WAIT=60000 DRIVE_TIMEOUT=200
   ./live.sh examples/busy_timeline.py ...`).
 
+- `BLOCK_PLOT=<seconds>` does the same while holding Python's event loop
+  (`time.sleep`), as a handler that works on the loop does: Python answers
+  nothing meanwhile, not even pings (transport review HB-1).
+
+- `CHROME=<path>` runs `drive.py` with that browser executable, and
+  `CVDEBUG=<logger>[,...]` sets those loggers to DEBUG in `serve.log` (e.g.
+  `cubevis.bokeh.transport._comm_mgr` for re-asks and the loop-lag monitor).
+
 - Long runs: start with `setsid nohup ... & disown` and poll for a marker;
   a plain long `sleep` in a tool call has been seen to return early.
 - `DRIVE_TIMEOUT` (default 300 s) bounds the browser part.

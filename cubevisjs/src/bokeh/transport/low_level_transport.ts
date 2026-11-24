@@ -124,6 +124,16 @@ export class WebSocketTransport implements TransportBase {
     private heartbeatTimer?: number
     private pongTimer?: number
     private heartbeatSeq: number = 0
+    // Missed pongs in a row (HB-1): while a request awaits its reply, Python
+    // may be busy in a handler that holds its event loop, which also holds
+    // its pongs.  Then the socket is declared dead only after
+    // MISSED_PONGS_WHILE_BUSY misses in a row (about 23 s after a wake probe,
+    // instead of 3 s); with nothing in flight, after one, as before.
+    private missedPongs: number = 0
+    private static readonly MISSED_PONGS_WHILE_BUSY = 3
+    // Frames received from Python, of any kind (pongs included): the CommMgr
+    // re-ask's evidence that Python is alive (REASK_LIVENESS_TICKS).
+    liveness: number = 0
     private runResolve?: () => void
     private wakeListenersAttached: boolean = false
 
@@ -211,6 +221,7 @@ export class WebSocketTransport implements TransportBase {
             this.heartbeatTimer = undefined
         }
         this.clearPongTimer()
+        this.missedPongs = 0
     }
 
     private clearPongTimer(): void {
@@ -238,14 +249,29 @@ export class WebSocketTransport implements TransportBase {
 
         this.clearPongTimer()
         this.pongTimer = window.setTimeout(
-            () => this.declareDead(`no __pong__ within ${timeoutMs}ms`),
+            () => this.missedPong(timeoutMs),
             timeoutMs
         )
+    }
+
+    private missedPong(timeoutMs: number): void {
+        this.pongTimer = undefined
+        this.missedPongs += 1
+        const busy = this.comm_mgr.awaitingReply() > 0
+        if (busy && this.missedPongs < WebSocketTransport.MISSED_PONGS_WHILE_BUSY) {
+            console.debug(`No __pong__ within ${timeoutMs}ms while a request is in flight ` +
+                          `(${this.missedPongs} in a row); Python may be busy, pinging again`)
+            this.sendPing(this.heartbeatTimeoutMs)
+            return
+        }
+        this.declareDead(`no __pong__ within ${timeoutMs}ms` +
+                         (this.missedPongs > 1 ? ` (${this.missedPongs} in a row)` : ''))
     }
 
     /** Any inbound traffic proves the socket is alive. */
     private notePong(): void {
         this.clearPongTimer()
+        this.missedPongs = 0
     }
 
     /**
@@ -486,6 +512,7 @@ export class WebSocketTransport implements TransportBase {
                 if (typeof event.data === 'string' || event.data instanceof String) {
                     try {
                         const data = deserialize(event.data as string)
+                        this.liveness += 1
 
                         // Transport-level keepalive reply. Handled here and
                         // never surfaced to the application callback.

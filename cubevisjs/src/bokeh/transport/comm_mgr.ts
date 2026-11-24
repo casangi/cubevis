@@ -77,7 +77,25 @@ interface PendingRequest {
      */
     message: any
     callback?: (response: any) => void
+    /** Re-ask bookkeeping (see REASK_AFTER_MS): when the request was sent or
+     *  last heard of, when it was re-asked, and the transport's liveness then. */
+    heard?: number
+    reasked?: number
+    livenessAtReask?: number
 }
+
+// Re-ask, as in _comm_mgr.py (REASK_AFTER; issue #35, 2026-11-23).  There is
+// no deadline on a request: a request is never failed for being slow or for
+// there being no connection.  A request with no reply for REASK_AFTER_MS is
+// sent again (same request_id, reask: true); Python answers with the stored
+// reply, `__running__`, or by running it.  It is forgotten (callback called
+// with {error}) only if the re-ask goes unanswered while Python shows it is
+// alive: REASK_LIVENESS_TICKS frames from it (pongs count) since the re-ask.
+// WebSocket only (the transport with a liveness count).
+const REASK_AFTER_MS = 30000
+const REASK_LIVENESS_TICKS = 2
+const REASK_CHECK_MS = 5000
+const RUNNING_NOTICE = '__running__'
 
 /**
  * CommMgr namespace for Bokeh properties
@@ -956,13 +974,113 @@ private sendImmediate(
             commId,
             messageId,
             message,
-            callback
+            callback,
+            heard: Date.now(),
         })
+        this.ensureReaskWatchdog()
         
         this.transport.send(msg)
         console.debug(`Sent message: ${commId}.${messageId} (request_id=${requestId})`)
     }
     
+    // Re-ask tunables, per instance (from the console, to try them out).
+    reaskAfterMs: number = REASK_AFTER_MS
+    reaskLivenessTicks: number = REASK_LIVENESS_TICKS
+    private reaskTimer?: number
+
+    /**
+     * Stop waiting for one request, in flight or still queued, and move its
+     * comm's queue on; with *error*, its callback is called with {error}.
+     * As in Python, order is kept: Python runs a comm's requests one at a
+     * time, so a forgotten one that does run there finishes before the next.
+     * Returns whether anything was forgotten.
+     */
+    forget(requestId: string, error?: string): boolean {
+        let callback: ((r: any) => void) | undefined
+        let commId: string | undefined
+        let wasPending = false
+        const req = this.pendingRequests.get(requestId)
+        if (req) {
+            this.pendingRequests.delete(requestId)
+            commId = req.commId
+            callback = req.callback
+            if (this.pending.get(commId) === requestId) {
+                this.pending.delete(commId)
+                wasPending = true
+            }
+        } else {
+            for (const [cid, queue] of this.sendQueue) {
+                const i = queue.findIndex(m => m.requestId === requestId)
+                if (i >= 0) {
+                    commId = cid
+                    callback = queue[i].callback
+                    queue.splice(i, 1)
+                    break
+                }
+            }
+        }
+        if (commId === undefined) return false
+        this.requestBorn.delete(requestId)
+        if (error !== undefined && callback) {
+            try { callback({error}) } catch (e) {
+                console.error(`Error notifying a forgotten request on ${commId}:`, e)
+            }
+        }
+        if (wasPending) this.processNextQueued(commId)
+        return true
+    }
+
+    private ensureReaskWatchdog(): void {
+        if (this.reaskTimer !== undefined) return
+        this.reaskTimer = window.setInterval(() => this.reaskCheck(), REASK_CHECK_MS)
+    }
+
+    private reaskCheck(): void {
+        if (this.pendingRequests.size === 0) {
+            clearInterval(this.reaskTimer)
+            this.reaskTimer = undefined
+            return
+        }
+        const transport = this.transport as any
+        const liveness: number | undefined = transport?.liveness
+        if (liveness === undefined || !transport.isConnected() || this.superseded) {
+            return      // no connection, or no way to tell: just wait
+        }
+        const now = Date.now()
+        for (const [requestId, req] of [...this.pendingRequests]) {
+            if (req.reasked === undefined) {
+                if (now - (req.heard ?? now) < this.reaskAfterMs) continue
+                req.reasked = now
+                req.livenessAtReask = liveness
+                console.debug(`CommMgr: no reply to ${req.commId}.${req.messageId} for ` +
+                              `${Math.round((now - (req.heard ?? now)) / 1000)} s; asking again`)
+                transport.send({comm_id: req.commId, message_id: req.messageId,
+                                message: req.message, direction: 'j2p',
+                                request_id: requestId, reask: true})
+            } else if (liveness - (req.livenessAtReask ?? liveness) >= this.reaskLivenessTicks &&
+                       now - req.reasked >= this.reaskAfterMs) {
+                console.warn(`CommMgr: a request on ${req.commId} (${req.messageId}) got no ` +
+                             `answer, though Python is responding; giving up on it`)
+                this.forget(requestId, 'no reply: the request was lost')
+            }
+        }
+    }
+
+    /** Python is still running one of our requests: wait again from now. */
+    private noteRunning(msg: any): void {
+        const req = this.pendingRequests.get(msg.request_id)
+        if (req) {
+            req.heard = Date.now()
+            req.reasked = undefined
+            req.livenessAtReask = undefined
+        }
+    }
+
+    /** Requests sent and awaiting a reply (not those still queued). */
+    awaitingReply(): number {
+        return this.pendingRequests.size
+    }
+
     /**
      * Process next queued message for a comm
      */
@@ -989,6 +1107,10 @@ private sendImmediate(
      * Route incoming message to appropriate handler
      */
     private routeMessage(msg: any): void {
+        if (msg && msg.type === RUNNING_NOTICE) {
+            this.noteRunning(msg)
+            return
+        }
         const direction = msg.direction
         
         if (direction === 'j2p') {
@@ -1078,8 +1200,14 @@ private sendImmediate(
         if (last && last.requestId === requestId) {
             if (last.reply === undefined) {
                 // Still running (an async handler): its reply goes out on
-                // the current transport when it finishes.
+                // the current transport when it finishes.  A re-ask is told
+                // so, or Python would take the silence for a lost request.
                 console.debug(`Replayed ${commId}.${messageId} (${requestId}) is still running; dropped`)
+                if (msg.reask && this.transport) {
+                    this.transport.send({type: RUNNING_NOTICE, comm_id: commId,
+                                         message_id: messageId, request_id: requestId,
+                                         direction: 'p2j'})
+                }
             } else {
                 console.debug(`Replayed ${commId}.${messageId} (${requestId}); sending the reply again`)
                 if (this.transport) this.transport.send(last.reply)
@@ -1228,6 +1356,10 @@ private sendImmediate(
         this.comms.clear()
         this.requestBorn.clear()
         this.lastRequest.clear()
+        if (this.reaskTimer !== undefined) {
+            clearInterval(this.reaskTimer)
+            this.reaskTimer = undefined
+        }
         this.hideSupersededNotice()
         
         this.state = AppState.STOPPED

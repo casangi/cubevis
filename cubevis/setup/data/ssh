@@ -118,6 +118,16 @@
 # Debugging: SSH_WRAPPER_DEBUG=1 logs to $SSH_WRAPPER_LOG
 # (default ~/.ssh/ssh-wrapper.log).
 #
+# Forwarding (2026-11-23): a session riding a shared connection gets X11
+# and agent forwarding only if the master has them -- the client's own
+# ForwardX11/ForwardAgent merely ask -- and from the DISPLAY and
+# SSH_AUTH_SOCK the master started with.  So the wrapper's login leaves
+# both to ~/.ssh/config: it used to pass -x, which left every later
+# session to that host without X11 for the master's life (ControlPersist).
+# A forwarded agent can still be missing for reasons on the far side;
+# `ssh -S none -v HOST` shows them ("Remote: Agent forwarding disabled:
+# ...", e.g. a full /tmp there).
+#
 # Stale shared connections (from Darrell's ~/bin copy, 2026-10-28): a
 # shared connection can go on answering `ssh -O check` locally after its
 # remote session has died -- a laptop put to sleep, a network drop, macOS
@@ -742,6 +752,19 @@ use File::Temp ();
 # resolve).
 $SCRATCH = File::Temp::tempdir( 'ssh-wrapper-XXXXXX', TMPDIR => 1, CLEANUP => 0 );
 
+# OpenSSH before 8.4 (no SSH_ASKPASS_REQUIRE)?  Unknown counts as old.
+our $OLD_SSH = do {
+    my $v = '';
+    my $pid = open( my $ph, '-|' );
+    if ( defined $pid && $pid == 0 ) {
+        open( STDERR, '>&', \*STDOUT );
+        open( STDIN, '<', '/dev/null' );
+        exec $SSH, '-V' or POSIX::_exit(127);
+    }
+    if ( defined $pid ) { local $/; $v = <$ph> // ''; close $ph; }
+    $v =~ /OpenSSH_(\d+)\.(\d+)/ ? ( $1 < 8 || ( $1 == 8 && $2 < 4 ) ) : 1;
+};
+
 sub open_shared {
     my ( $hop, $rule_index, $persist ) = @_;
     my ( $target, $args, $cfg ) = ( $hop->{target}, $hop->{args}, $hop->{cfg} );
@@ -760,14 +783,18 @@ sub open_shared {
         $ENV{SSH_ASKPASS_REQUIRE}         = 'force';     # OpenSSH 8.4+
         # Before 8.4 ssh uses askpass only with no terminal (setsid, above)
         # and DISPLAY set; nothing is drawn, the askpass is this file.
-        $ENV{DISPLAY}                   //= ':0';
+        # Not on 8.4+: this process becomes the ControlMaster, and every
+        # session that rides it forwards X11 to *this* DISPLAY -- a made-up
+        # one would break ForwardX11 for all of them (header, "Forwarding").
+        $ENV{DISPLAY} //= ':0' if $OLD_SSH;
         $ENV{SSH_WRAPPER_ASKPASS_RULE}    = $rule_index;
         $ENV{SSH_WRAPPER_ASKPASS_ACCOUNT} = $hop->{rule}{account} || $cfg->{user} || $ENV{USER} || '';
         # These come first: ssh keeps the first value it is given, and they
         # must hold for this one login whatever the command line or config
         # says (BatchMode yes, which sshpyk recommends and setup's checks
         # use, would turn off askpass).
-        my @cmd = ( $SSH, '-T', '-x',
+        # No -x / -a here: header, "Forwarding".
+        my @cmd = ( $SSH, '-T',
             '-o', 'BatchMode=no', '-o', 'NumberOfPasswordPrompts=1',
             '-o', 'ControlMaster=auto', '-o', "ControlPersist=$persist",
             '-o', 'ConnectTimeout=30',
@@ -878,7 +905,8 @@ for my $hop (@need) {
         }
         note("'$target' ($cfg->{hostname}) asks for a second factor: log in (it is then shared"
            . " for $persist)");
-        my $rc = system( $SSH, '-T', '-x', '-o', 'BatchMode=no', '-o', 'ControlMaster=auto',
+        # No -x / -a here: header, "Forwarding".
+        my $rc = system( $SSH, '-T', '-o', 'BatchMode=no', '-o', 'ControlMaster=auto',
             '-o', "ControlPersist=$persist", '-o', 'ConnectTimeout=30', @$args, '-fN', $target ) >> 8;
         if ( $rc != 0 || run_redirected( [ $SSH, @$args, '-O', 'check', $target ],
                 quiet => 1, null_stdin => 1 ) != 0 ) {

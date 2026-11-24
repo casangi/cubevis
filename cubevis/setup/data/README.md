@@ -178,7 +178,13 @@ login.example.org   twofactor=yes
   no-op over the shared connection, killed after ten seconds), and replaced
   by a fresh login if it does not answer:
   `[ssh-wrapper] the shared connection to '...' is stale ...; logging in again`.
-* **Ending a shared connection** by hand: `ssh -O exit HOST`.
+* **Ending a shared connection** by hand: `ssh -O exit HOST`.  To retire
+  one without cutting off the sessions using it, `ssh -O stop HOST`: it
+  takes no new sessions, and the next `ssh HOST` logs in afresh.
+* **X11 and agent forwarding come from the shared connection.**  A session
+  that rides one gets `ForwardX11` / `ForwardAgent` only as that
+  connection was opened, with the `DISPLAY` and `SSH_AUTH_SOCK` it started
+  with.  The wrapper's login follows `~/.ssh/config` for both.
 * **Updating:** run the `curl` line of step 1 again.  **Removing:** delete
   `~/bin/ssh` and `~/bin/scp`; nothing else depends on them.
 
@@ -211,6 +217,12 @@ Environment variables, all optional:
 * Going the wrong way (straight to a node from outside, or through the
   login host from inside): `ssh --reachable -v NODE`, then
   `ssh --reachable --forget` if the site changed.
+* No `DISPLAY` or no `SSH_AUTH_SOCK` on the remote host: compare with a
+  connection of its own, `ssh -S none -v HOST`.  If that one has them, the
+  shared connection predates a change (`ssh -O stop HOST`, then log in
+  again).  If not, look for `debug1: Remote: ... forwarding disabled: ...`
+  in its output: the reason is on the far side (a full `/tmp` there, or
+  the site's sshd settings).
 * Everything else: `SSH_WRAPPER_DEBUG=1 ssh HOST`, then read
   `~/.ssh/ssh-wrapper.log`.
 

@@ -184,6 +184,7 @@ def _visplot_t(
         remote_endpoint = None,
         enable_flagging = True,
         headless = False,
+        transport = 'websocket',
     )
     return _app()
 

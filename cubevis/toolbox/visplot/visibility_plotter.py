@@ -3475,6 +3475,12 @@ class VisibilityPlotter:
         raster_cmap:      Optional[str]  = None,
         scatter_cmap:     Optional[str]  = None,
         headless:         bool           = False,
+        # Layer argument (sync_layers): the CommMgr transport.  Where the GUI
+        # is shown decides it, not where Python runs: the visplot task opens a
+        # browser tab, which reaches Python only over a websocket -- even from
+        # a notebook kernel, where "auto" would pick Jupyter comms that the tab
+        # cannot reach (2026-11-25).  show() in a notebook cell keeps "auto".
+        transport:        str            = "auto",
         plotfile:         Optional[str]  = None,
         flag_filters:     Optional[dict] = None,
         flag_preview:     bool           = False,
@@ -3501,6 +3507,10 @@ class VisibilityPlotter:
         # the GUI -- what the visplot task's plotfile= means.
         self._plotfile = plotfile or None
         self._headless = bool(headless) or self._plotfile is not None
+        if transport not in ("auto", "websocket", "jupyter", "colab"):
+            raise ValueError(
+                f"transport must be 'auto', 'websocket', 'jupyter' or 'colab', not {transport!r}")
+        self._transport = transport
         # The Grid layout (gridplot G2): what it iterates over, its page
         # shape, and which pages plotfile= writes.  Validated now.
         from .vis_grid_source import normalize_iterate_by
@@ -4296,7 +4306,8 @@ class VisibilityPlotter:
             )
 
         self._app_context = BokehAppContext(
-            comm_mgr  = CommMgr(on_shutdown=_shutdown_handler),
+            comm_mgr  = CommMgr(on_shutdown=_shutdown_handler,
+                                transport_type=self._transport),
             app_state = {
                 "name":        "VisibilityPlotter",
                 "initialized": True,

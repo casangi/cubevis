@@ -3,6 +3,13 @@
 **Status: first pass complete for the four legs; second checkpoint. See "Coverage" and §8 for what has
 not been read or confirmed.**
 
+> **Status at the end of issue #35 (`35-transport-bugs`, 2026-11-25).** Fixed: WS-1…WS-7 (WS-5's
+> remaining bullets are notes), RP-1, JS-1…JS-3, PY-1, PY-2, JC-1…JC-4, CO-3, RK-1; the decided design
+> in §1 (re-ask instead of wall-clock deadlines); HB-1 (1) and (2) (busy-tolerant heartbeat, loop-lag
+> monitor). Moved to new issues: the rest of HB-1 (long handlers off the event loop, after measuring
+> with TW Hya); Colab CO-1, CO-2, CO-4…CO-8; remote RK-2…RK-9 and the OPT items; GUI state
+> after a reload; visplot in notebooks. §7 and §8 below are from the first pass.
+
 Base: `casangi/cubevis` `main` @ `91affeaf` (2026-11-10, "Merge pull request #8 from casangi/network-change").
 
 Purpose: a working list for future sessions that fix problems or inefficiencies in the
@@ -201,7 +208,10 @@ abrupt), and fix WS-1. Consider passing an explicit small `close_timeout` to `we
 > in JupyterLab; reproduced and checked with `devel/tools/jupyterlab_headless`: after the change the
 > restored page carries on the same kernel-side session, both directions answered). Closing a browser
 > tab still ends iclean (the call returned its result ~4 s after the tab closed).
-> `_createmask.py` / `_createregion.py` still call `cube_done` from `beforeunload`: not changed.
+> `_createmask.py` / `_createregion.py` still call `cube_done` from `beforeunload`: not changed, and
+> not needed (2026-11-25). They are the older CubeMask-websocket apps -- no `CommMgr`, `asyncio.run`,
+> no notebook resume -- so a tab closing or reloading ends them either way, and `cube_done` is what
+> sends their result.
 >
 > **Reload of an unsaved notebook (2026-11-25, Darrell):** JupyterLab rebuilds the page from the file,
 > so if the notebook was not saved since the GUI was shown there is no output to restore: a blank
@@ -212,6 +222,14 @@ abrupt), and fix WS-1. Consider passing an explicit small `close_timeout` to `we
 > and anything held for the gone page is replayed. A plain second `show()` (the "GUI active above"
 > placeholder) now says to use it. Checked in JupyterLab for iclean and visplot
 > (`devel/tools/jupyterlab_headless/examples/reload_unsaved.py`). Not in Colab.
+>
+> **GUI state is not restored (2026-11-25), saved or not:** a saved reload restores the output as it was
+> first rendered, and `redisplay=True` renders the kernel-side models, which the browser's changes never
+> reach; either way the GUI starts from its state at `show()` while the kernel carries on. After one
+> iclean cycle (niter 40, 5 left) both came back with niter 50, the first status line and a one-point
+> convergence plot -- so Continue would then send niter=50. Images and masks come from the cubes and are
+> current (`examples/reload_state.py`). Needs the page to ask the kernel for the session's state when it
+> connects: application work, moved to a new issue.
 `llt.py:370-375` sets `_goodbye_received = True` and it is never cleared. `llt.ts:328-329` sends it on
 `pagehide` **and** `beforeunload`. `beforeunload` can be cancelled (another handler prompts "Leave site?"
 and the user stays). After that, a later *abrupt* drop (sleep/network) is classified clean
@@ -235,6 +253,28 @@ JS `goodbyeSent` is also never reset.
   `async with lock` in `_handle_request`/`_route_message` would silently break per-comm ordering.
 
 ### WS-6 [C] S3 — `ws://` is hard-coded (`llt.ts:133`); a page served over https cannot connect (mixed content). Fine for `file://`/localhost; note for any hosted deployment.
+
+> **Fixed on `35-transport-bugs` (2026-11-25):** `llt.ts` opens `wss://` when the page is `https:`, else
+> `ws://` as before. The Python side still serves plain ws, so an https page needs a proxy that
+> terminates TLS in front of the port; nothing changes for `file://` and `http://` pages. Not run against
+> an https page.
+
+### WS-7 [C] S1 — a GUI shown in a browser tab from a notebook kernel uses Jupyter comms (found 2026-11-25)
+
+Not in the first pass. `CommMgr` chose its transport by where Python runs ('auto' → `jupyter` in a
+kernel), but `visplot(...)` and `iclean(...)` run in a notebook cell show the GUI in a browser tab
+(`BokehAppContext.show` → `webbrowser.open('file://...')`). A `file://` tab cannot reach the kernel's
+comms: it shows its first view (the data is embedded) and its first request -- stepping to the first
+Antenna, seen by Darrell with TW Hya -- never returns; the page's CommMgr ends in `error`.
+
+> **Fixed on `35-transport-bugs` (2026-11-25):** where the GUI is shown decides the transport. The visplot
+> task layers pass `transport='websocket'` (a `VisibilityPlotter` layer argument, `project_layers.yaml`);
+> `InteractiveClean` (the iclean task) asks for 'websocket' and `InteractiveCleanNotebook` keeps 'auto'
+> (`_TRANSPORT`, `_app.mustache`); `InteractiveCleanUI` takes `transport`. `BokehAppContext.show` refuses
+> a comms `CommMgr` with a message instead of hanging. Checked in JupyterLab
+> (`devel/tools/jupyterlab_headless/examples/visplot_task_tab.py`): before, the tab's CommMgr was in
+> `error` and the step did nothing; after, it runs over WebSocket and the step selects ANTENNA-0 in ~3 s.
+> `iclean(...)` from a cell: the tab ran a cycle. `tests/manual/visplot/test_tab_transport.py`.
 
 ---
 

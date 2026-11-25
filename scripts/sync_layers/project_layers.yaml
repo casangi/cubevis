@@ -16,6 +16,8 @@ sources:
       remote_endpoint: None
       enable_flagging: True
       headless: False
+      # the task opens a browser tab: a websocket, even from a notebook kernel
+      transport: "'websocket'"
     short_desc_overrides:
       mode:        'Display mode: both, raster, or scatter.'
       preset:      'Named startup preset (vplot, radplot, waterfall).'

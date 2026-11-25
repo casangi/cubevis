@@ -152,7 +152,12 @@ export class WebSocketTransport implements TransportBase {
     
     async connect(): Promise<void> {
         const [host, port] = this.address
-        const ws_address = `ws://${host}:${port}`
+        // WS-6: a page served over https may only open wss:// (a ws:// socket
+        // is blocked as mixed content).  The Python side serves plain ws, so
+        // an https page needs a proxy that terminates TLS in front of it;
+        // file:// and http:// pages keep ws://.
+        const scheme = (typeof window !== 'undefined' && window.location?.protocol === 'https:') ? 'wss' : 'ws'
+        const ws_address = `${scheme}://${host}:${port}`
         
         return new Promise((resolve, reject) => {
             if (this.websocket !== undefined) {

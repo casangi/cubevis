@@ -48,6 +48,11 @@ class InteractiveClean:
     {{docstring}}
     '''
 
+    ### Where the GUI is displayed decides the transport, not where Python runs: a
+    ### browser tab (webbrowser, even from a notebook kernel) can only reach Python
+    ### over a websocket.  InteractiveCleanNotebook displays in a cell: 'auto'.
+    _TRANSPORT = 'websocket'
+
     def __init__( self, vis, imagename{{# initParams}}, {{name}}={{default}}{{/ initParams}}, iclean_backend="PROD", kernel_name=None ):
         ###
         ### iclean_backend can be used to select alternate backends for interactive clean. This could be used
@@ -74,7 +79,7 @@ class InteractiveClean:
         self._gclean = self._session.deconvolver
         self._gclean_paths = self._session.image_products( )
 
-        self._ui = InteractiveCleanUI(self._session, self._args)
+        self._ui = InteractiveCleanUI(self._session, self._args, transport=self._TRANSPORT)
 
     def __call__( self ):
         '''Display GUI and process events until the user stops the application.
@@ -114,6 +119,8 @@ class InteractiveCleanNotebook( InteractiveClean ):
     r'''InteractiveCleanNotebook(...) implements interactive clean using Bokeh
     {{docstring}}
     '''
+
+    _TRANSPORT = 'auto'                     ### a Jupyter cell: comms (or Colab)
 
     def __init__( self, *args, **kwargs ):
         super( ).__init__( *args, **kwargs )

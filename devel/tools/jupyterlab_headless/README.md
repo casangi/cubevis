@@ -49,6 +49,12 @@ script run in the page before anything else, for tracing).
   rendered; `redisplay=True` renders the kernel-side Bokeh models, which the
   browser's changes never reach.  The image and the mask come from the cubes,
   so they are current.  Continue after such a reload sends niter=50, not 5.
+- `visplot(...)` / `iclean(...)` run in a cell open a browser tab, which
+  could not reach the kernel: its CommMgr had chosen Jupyter comms, so the
+  first request (stepping to the first Antenna) never returned (2026-11-25,
+  review WS-7).  The tasks now ask for a websocket
+  (`examples/visplot_task_tab.py`: cell 0 records `webbrowser.open`'s URL,
+  which the steps open in a second page).
 - A reload did not bring the visplot output back (`Bokeh is not defined`: the
   restored embed script ran before BokehJS loaded); the bridge did, opening a
   new comm.  Fixed the same day (`_showable._wait_for_bokehjs`): the output

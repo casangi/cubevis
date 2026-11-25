@@ -126,10 +126,12 @@ class InteractiveCleanUI:
         self.__result_from_gui = None
         self.__history = None                   ### the imager's history, kept at the end (_finish_session)
 
-    def __init__( self, session, user_args ):
+    def __init__( self, session, user_args, transport='auto' ):
         '''``session`` is the imaging layer (``cubevis.imaging.ImagingSession``):
         the imager and the images of each field.  A gclean-like object is
-        accepted too and wrapped in a ``LocalImagingSession``.'''
+        accepted too and wrapped in a ``LocalImagingSession``.  ``transport`` is
+        the ``CommMgr`` transport: 'websocket' for a browser tab, 'auto' for a
+        notebook cell (where the GUI is shown decides, not where Python runs).'''
 
         ###
         ### With Bokeh 3.2.2, the spectrum and convergence plots extend beyond the edge of the
@@ -236,7 +238,8 @@ class InteractiveCleanUI:
                           f"frontend reconnected (generation={generation})" )
 
         self._app_context = BokehAppContext( comm_mgr=CommMgr( on_shutdown=shutdown_handler,
-                                                               on_error=error_handler ),
+                                                               on_error=error_handler,
+                                                               transport_type=transport ),
                                              app_state={                              ### while the state dictionary itself
                                                          'name': 'interactive clean', ### is used, these particular element
                                                          'initialized': True          ### are not currently used for anything

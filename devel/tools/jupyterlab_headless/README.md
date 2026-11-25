@@ -19,8 +19,9 @@ cells are run with JupyterLab's own commands.
 ## Running
 
     python drive.py examples/jc1_views_reload.py /tmp/out/jc1
+    python drive.py examples/visplot_flow.py /tmp/out/flow
 
-Every run starts with a fresh kernel.  The steps file is exec'd with `pg`,
+Every run starts with a fresh kernel and a reset workspace.  The steps file is exec'd with `pg`,
 `ctx` (`ctx.set_offline(True)` drops the kernel connection), `run_cell(i)`
 (returns the cell's output text), `add_cell(code)`, `cell_output(i)`,
 `wait_idle()`, `reload()`, `console` and `out`.  The page's console goes to
@@ -28,14 +29,23 @@ Every run starts with a fresh kernel.  The steps file is exec'd with `pg`,
 
 Environment: `JL_URL` (default `http://127.0.0.1:8899/lab/tree/t.ipynb`),
 `CHROME` (browser executable), `BUNDLE` (a cubevisjs.min.js to serve instead
-of the one in `cubevis/__js__`, e.g. a fresh `bokeh build`).
+of the one in `cubevis/__js__`, e.g. a fresh `bokeh build`), `INIT_JS` (a
+script run in the page before anything else, for tracing).
 
 ## Seen with it (JupyterLab 4.6, 2026-11-24)
 
-- A reload does not bring the visplot output back (`Bokeh is not defined`),
-  but the bridge does, and opens a new comm.  A new Output View does the same.
+- A reload did not bring the visplot output back (`Bokeh is not defined`: the
+  restored embed script ran before BokehJS loaded); the bridge did, opening a
+  new comm.  Fixed the same day (`_showable._wait_for_bokehjs`): the output
+  comes back and carries on the session.
 - Losing the kernel connection for up to 60 s loses nothing: jupyter_server
   replays what was sent meanwhile.
-- One output holds two Bokeh documents with the same CommMgr id on one kernel
-  comm; Plot is sent by the one that does not receive, so it is never answered.
-  Open, outside JC-1.
+- When the cell output and an Output View of it render at the same moment
+  (JupyterLab restoring a workspace with the view open), both copies share one
+  kernel comm; the copy that does not hold `comm.onMsg` gets no replies.  Open.
+- The basic flow (`examples/visplot_flow.py`: Plot, the flag tool, layouts,
+  iteration) behaves as in a browser tab.  The top toolbar row is wider than a
+  default notebook output and is cut off on the right.
+- JupyterLab restores the panels of the previous run (an Output View left open
+  renders the output a second time); `drive.py` opens with `?reset` to avoid
+  it.

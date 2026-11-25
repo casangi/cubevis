@@ -506,8 +506,10 @@ class Showable(LayoutDOM,BokehInit):
             self._notebook_rendering = html
             return html
         else:
-            # In Jupyter Lab/Classic, use components() as before
+            # In Jupyter Lab/Classic, use components() as before -- but wait for
+            # BokehJS and cubevisjs before embedding (_wait_for_bokehjs).
             script, div = components(self)
+            script = _wait_for_bokehjs(script, self.__class__)
             if start_backend:
                 logger.debug( "Showable._get_notebook_html: starting backend" )
                 self._start_backend()
@@ -586,3 +588,49 @@ class Showable(LayoutDOM,BokehInit):
         doc_info = f"doc='{id(self.document)}'" if self.document else "doc=None"
         backend_info = f"backend='{'started' if getattr(self, '_backend_startup_count', 0) else 'not-started'}'"
         return f"{self.__class__.__name__}(id='{self.id}', name='{self.name}', ui='{ui_type}', {doc_info}, {backend_info})"
+
+
+def _wait_for_bokehjs(script: str, cls=None) -> str:
+    """Make a ``components()`` script wait until BokehJS and cubevisjs are loaded.
+
+    ``components()`` assumes BokehJS is already on the page.  In a notebook that
+    holds for a cell just run, but not for an output JupyterLab restores when the
+    notebook is reopened or the page reloaded: the restored script runs before the
+    restored loader has loaded BokehJS ("Bokeh is not defined"), and the visplot
+    output stays empty (seen in JupyterLab 4.6, 2026-11-24).  The wrapped script
+    polls for ``Bokeh.embed`` and for this model being registered (cubevisjs),
+    then runs the original once; it gives up after 60 s with a console error.
+    """
+    import re
+    m = re.search(r"<script[^>]*>(.*)</script>", script, flags=re.S)
+    if not m:
+        return script
+    name = None
+    if cls is not None:
+        name = getattr(cls, "__qualified_model__", None) or f"{cls.__module__}.{cls.__name__}"
+    name_js = "null" if name is None else repr(name)
+    inner = m.group(1)
+    return (
+        '<script type="text/javascript">\n'
+        "(function() {\n"
+        f"  var model = {name_js};\n"
+        "  function ready() {\n"
+        "    var B = window.Bokeh;\n"
+        "    if (!B || !B.embed) return false;\n"
+        "    if (!model) return true;\n"
+        "    try { return !!(B.Models && B.Models.get(model)); } catch (e) { return false; }\n"
+        "  }\n"
+        f"  function run() {{\n{inner}\n  }}\n"
+        "  if (ready()) { run(); return; }\n"
+        "  var waited = 0;\n"
+        "  var timer = setInterval(function() {\n"
+        "    if (ready()) { clearInterval(timer); run(); }\n"
+        "    else if ((waited += 50) > 60000) {\n"
+        "      clearInterval(timer);\n"
+        "      console.error('cubevis: BokehJS or cubevisjs did not load; the output cannot be shown');\n"
+        "    }\n"
+        "  }, 50);\n"
+        "})();\n"
+        "</script>"
+    )
+

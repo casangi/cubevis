@@ -46,11 +46,17 @@ with sync_playwright() as p:
         route.fulfill(path=path, content_type="application/javascript")
     ctx.route(re.compile(r"https://(cdn\.bokeh\.org|cdn\.jsdelivr\.net)/.*"), _serve)
     pg = ctx.new_page()
+    # INIT_JS=<file>: a script run in the page before anything else (tracing).
+    if os.environ.get("INIT_JS"):
+        pg.add_init_script(path=os.environ["INIT_JS"])
     pg.on("console", lambda m: console.append(f"{m.type}: {m.text}"))
-    pg.on("pageerror", lambda e: console.append(f"PAGEERROR: {e}"))
+    pg.on("pageerror", lambda e: console.append(f"PAGEERROR: {e}" + (
+        "\n    " + "\n    ".join((getattr(e, "stack", "") or "").splitlines()[1:6]) if getattr(e, "stack", "") else "")))
 
     def open_nb():
-        pg.goto(URL)
+        # ?reset: JupyterLab otherwise restores the panels of the previous
+        # run -- an Output View left open renders the output a second time.
+        pg.goto(URL + ("&" if "?" in URL else "?") + "reset")
         pg.wait_for_function("() => window.jupyterapp && window.jupyterapp.shell.currentWidget"
                              " && window.jupyterapp.shell.currentWidget.sessionContext"
                              " && window.jupyterapp.shell.currentWidget.sessionContext.session"

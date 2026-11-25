@@ -396,10 +396,22 @@ After either, a late reply for a forgotten request logs `Received response for u
 > or sent straight away). `CommMgr.send` now queues behind held messages; squash mode never drops a
 > held replay. Test: `test_reask.py::test_a_send_while_the_page_is_away_goes_after_the_replay`.
 >
-> **Found, not fixed (outside JC-1, before this branch):** in a notebook the visplot output holds two
-> Bokeh documents with the same CommMgr id sharing one kernel comm; `comm.onMsg` holds one handler, and
-> Plot is sent by the CommMgr that does not get it, so Plot is never answered (seen with and without
-> `jupyter_bokeh`, with this branch's bundle and the one before).
+> **Found, not fixed (outside JC-1, before this branch; an edge case):** when the visplot cell output and
+> an **Output View** of it render at the same moment -- JupyterLab restoring a workspace that had the
+> view open -- both copies take the page's one bridge entry (`window["cubevis_"+id]`), so one kernel
+> comm; `comm.onMsg` holds one handler, and the other copy gets no replies (its Plot never completes).
+> A view opened while the notebook is open gets its own comm and works. (Corrected 2026-11-24: first
+> reported as happening in every notebook; that was the harness re-opening an Output View JupyterLab had
+> restored. `drive.py` now opens with `?reset`.)
+>
+> **Reload now resumes the session (2026-11-24).** The restored output stayed empty because
+> `components()`'s script runs before the restored loader has loaded BokehJS. `Showable` now wraps it
+> (`_wait_for_bokehjs`): it waits for `Bokeh.embed` and for the Showable model (cubevisjs), then embeds.
+> After a reload the output comes back, its CommMgr completes the handshake, the held requests go out
+> and Plot works -- the kernel-side session carries on. A notebook reopened after its kernel has gone
+> shows the saved output greyed with the existing "No active session — re-run the cell to restart"
+> (it was blank). Tests: `test_showable_notebook_script.py`; harness: `examples/visplot_flow.py`
+> (Plot, flag tool, layouts, iteration all answered in a notebook, as in a browser tab).
 `CommsTransport._on_comm_open` (`llt.py:625-835`) appends each newly opened comm and wires `_recv`, but
 never registers `comm.on_close`. `_connected` is set True once and only cleared in `close()`; the
 docstring of `run()` (`llt.py:1480-1486`) says a reload "briefly clears `_connected`" — nothing does.

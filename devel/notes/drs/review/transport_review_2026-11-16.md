@@ -194,10 +194,14 @@ abrupt), and fix WS-1. Consider passing an explicit small `close_timeout` to `we
 > "Leave site?" -> Stay, a `beforeunload` that does not end the page includes a click on a link that
 > turns out to be a download. Tests: `test_goodbye_followed_by_traffic_is_forgotten`,
 > `test_goodbye_then_silence_still_ends_the_session`.
-> **Same pattern outside the transport, not changed:** iclean (`iclean/_ui.py`, the `initialize`
-> script) sends `stop` from `beforeunload`, and `_createmask.py` / `_createregion.py` call
-> `cube_done` there; a cancelled unload ends those sessions outright. Moving them to `pagehide` is
-> a separate, app-level change.
+> **Same pattern outside the transport:** iclean (`iclean/_ui.py`, the `initialize` script) sent
+> `stop` from `beforeunload`. **Changed 2026-11-25:** only in a browser tab (`stop_on_unload`, the
+> CommMgr's transport is the WebSocket), and from `pagehide`. In a notebook leaving the page no longer
+> stops the session: a reload stopped iclean before the restored page could reconnect (seen by Darrell
+> in JupyterLab; reproduced and checked with `devel/tools/jupyterlab_headless`: after the change the
+> restored page carries on the same kernel-side session, both directions answered). Closing a browser
+> tab still ends iclean (the call returned its result ~4 s after the tab closed).
+> `_createmask.py` / `_createregion.py` still call `cube_done` from `beforeunload`: not changed.
 `llt.py:370-375` sets `_goodbye_received = True` and it is never cleared. `llt.ts:328-329` sends it on
 `pagehide` **and** `beforeunload`. `beforeunload` can be cancelled (another handler prompts "Leave site?"
 and the user stays). After that, a later *abrupt* drop (sleep/network) is classified clean

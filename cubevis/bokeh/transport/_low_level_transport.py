@@ -1485,6 +1485,16 @@ class CommsTransport(TransportBase):
             display(self._bridge)
             logger.debug(f"CommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")
 
+    def redisplay_bridge(self) -> None:
+        """Display the bridge widget again (Showable.show(redisplay=True)):
+        a new view opens a new comm, which the re-displayed GUI's CommMgr
+        completes the handshake on.  JupyterLab only."""
+        if self._bridge is None or self._is_colab():
+            return
+        from IPython.display import display
+        display(self._bridge)
+        logger.debug(f"CommsTransport.redisplay_bridge: bridge displayed again for {self._comm_mgr_id}")
+
     # ------------------------------------------------------------------
     # Phase 2: async – wait for the JS handshake to complete
     # ------------------------------------------------------------------

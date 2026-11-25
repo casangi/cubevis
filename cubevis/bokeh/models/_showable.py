@@ -430,11 +430,16 @@ class Showable(LayoutDOM,BokehInit):
 
         if self._notebook_rendering:
             # Return a lightweight reference instead of re-rendering the full GUI
+            # (two copies of one app on a page share its one bridge comm).  The
+            # kernel cannot tell whether the first copy is still on the page: a
+            # reload of a notebook not saved since then leaves none.  So say how
+            # to show it again (show(redisplay=True), 2026-11-25).
             return f'''
             <div style="padding: 10px; background: #f0f8f0; border-left: 4px solid #4CAF50; margin: 5px 0;">
-                <strong>→ iclean GUI active above</strong>
+                <strong>→ GUI active above</strong>
                 <small style="color: #666; display: block; margin-top: 5px;">
-                    Showable ID: {self.id[-8:]} | Backend: Running
+                    Not there (e.g. after reloading the page)? Use <code>.show(redisplay=True)</code>
+                    to show the running session here. &nbsp;Showable ID: {self.id[-8:]} | Backend: Running
                 </small>
             </div>
             '''
@@ -546,14 +551,25 @@ class Showable(LayoutDOM,BokehInit):
         # Return None to let Bokeh handle it
         return None
 
-    def show(self, start_backend=True):
-        """Explicitly show this Showable using inline display in Jupyter"""
+    def show(self, start_backend=True, redisplay=False):
+        """Explicitly show this Showable using inline display in Jupyter.
+
+        ``redisplay=True`` (notebook, after the first show): show the running
+        session again in this cell's output -- for a page reloaded when the
+        notebook had not been saved since the first show, which leaves the GUI's
+        output gone while the session runs on in the kernel.  The new copy
+        takes the session (JupyterLab comm transport, JC-1); one still on the
+        page stops getting the session's updates."""
         if self.__class__._usage_mode is None:
             self.__class__._usage_mode = "custom"
 
         from bokeh.io.state import curstate
 
         state = curstate()
+
+        if state.notebook and redisplay and self._notebook_rendering:
+            self._redisplay()
+            return
 
         if state.notebook:
             # In Jupyter, display directly using IPython.display
@@ -576,6 +592,31 @@ class Showable(LayoutDOM,BokehInit):
         if start_backend:
             self._start_backend(deregister_after=True)
         bokeh_show(self)
+
+    def _redisplay(self):
+        """show(redisplay=True): BokehJS, the bridge and the GUI again, from the
+        current state of the document (not the first rendering: the session has
+        moved on since)."""
+        from IPython.display import display, HTML
+        from bokeh.io import output_notebook
+        from bokeh.embed import components
+        if is_colab():
+            display(HTML('<div style="color: #a00">show(redisplay=True) is not available in Colab yet.</div>'))
+            return
+        mgr = getattr(self._app_context, 'comm_mgr', None) if self._app_context is not None else None
+        state = getattr(getattr(mgr, 'state', None), 'name', '') if mgr is not None else ''
+        if state in ('STOPPED', 'ERROR'):
+            display(HTML('<div style="color: #a00">This session has ended; run the cell that created it again.</div>'))
+            return
+        # BokehJS and the cubevis libraries: the reloaded page has neither.
+        output_notebook(hide_banner=True)
+        # A new view of the bridge widget: a new comm for the new copy.
+        transport = getattr(mgr, '_transport', None)
+        if transport is not None and hasattr(transport, 'redisplay_bridge'):
+            transport.redisplay_bridge()
+        self._ensure_in_document()
+        script, div = components(self)
+        display(HTML(f'{_wait_for_bokehjs(script, self.__class__)}\n{div}'))
 
     def __str__(self):
         """String conversion"""

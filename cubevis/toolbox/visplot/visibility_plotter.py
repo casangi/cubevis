@@ -5246,9 +5246,20 @@ for (const dt of other.tools) {
     # Public entry point                                                       #
     # ====================================================================== #
 
-    def show(self) -> "Showable":
-        """Display the plotter in a Jupyter notebook cell."""
+    def show(self, redisplay: bool = False) -> "Showable":
+        """Display the plotter in a Jupyter notebook cell.
+
+        ``redisplay=True``: show the session this plotter is already running
+        again, in this cell -- for a page reloaded when the notebook had not
+        been saved since the first ``show()``, which leaves no GUI on the page
+        while the session runs on in the kernel (``Showable.show``)."""
         from bokeh.io.state import curstate
+        if redisplay:
+            showable = getattr(self, "_showable", None)
+            if showable is None:
+                raise RuntimeError("show(redisplay=True): nothing shown yet; use show()")
+            showable.show(redisplay=True)
+            return None
         if not curstate().notebook:
             from bokeh.io import output_notebook
             output_notebook()
@@ -5267,10 +5278,11 @@ for (const dt of other.tools) {
                 raise RuntimeError("VisibilityPlotter has not been launched yet")
             return future_holder[0]
 
-        return Showable(
+        self._showable = Showable(
             app_context, startup, get_future,
             name="visibility-plotter-jpy",
         )
+        return self._showable
 
     # ====================================================================== #
     # cubevis application protocol                                             #

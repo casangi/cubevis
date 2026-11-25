@@ -34,6 +34,12 @@ script run in the page before anything else, for tracing).
 
 ## Seen with it (JupyterLab 4.6, 2026-11-24)
 
+- A reload of a notebook **not saved** since the GUI was shown leaves no GUI
+  (JupyterLab rebuilds the page from the file) while the session runs on in
+  the kernel, which cannot tell.  `vp.show(redisplay=True)` /
+  `ic.show(redisplay=True)` shows it again and it carries on; a plain second
+  `show()` says so (`examples/reload_unsaved.py`; iclean checked the same way,
+  with CASA 6.7.6 and a simulated VLA MS).
 - A reload did not bring the visplot output back (`Bokeh is not defined`: the
   restored embed script ran before BokehJS loaded); the bridge did, opening a
   new comm.  Fixed the same day (`_showable._wait_for_bokehjs`): the output

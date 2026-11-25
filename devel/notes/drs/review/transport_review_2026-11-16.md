@@ -202,6 +202,16 @@ abrupt), and fix WS-1. Consider passing an explicit small `close_timeout` to `we
 > restored page carries on the same kernel-side session, both directions answered). Closing a browser
 > tab still ends iclean (the call returned its result ~4 s after the tab closed).
 > `_createmask.py` / `_createregion.py` still call `cube_done` from `beforeunload`: not changed.
+>
+> **Reload of an unsaved notebook (2026-11-25, Darrell):** JupyterLab rebuilds the page from the file,
+> so if the notebook was not saved since the GUI was shown there is no output to restore: a blank
+> cell, while the session runs on in the kernel. The kernel cannot tell (no comm closes, none opens;
+> it cannot ask the page while a cell runs), so it is explicit: `ic.show(redisplay=True)` /
+> `vp.show(redisplay=True)` loads BokehJS again, displays the bridge again (a new comm) and renders the
+> GUI afresh from the current document; its CommMgr completes the handshake and takes the session,
+> and anything held for the gone page is replayed. A plain second `show()` (the "GUI active above"
+> placeholder) now says to use it. Checked in JupyterLab for iclean and visplot
+> (`devel/tools/jupyterlab_headless/examples/reload_unsaved.py`). Not in Colab.
 `llt.py:370-375` sets `_goodbye_received = True` and it is never cleared. `llt.ts:328-329` sends it on
 `pagehide` **and** `beforeunload`. `beforeunload` can be cancelled (another handler prompts "Leave site?"
 and the user stays). After that, a later *abrupt* drop (sleep/network) is classified clean

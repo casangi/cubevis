@@ -5,6 +5,7 @@
 # for use with CommMgr.
 ########################################################################
 
+from collections import OrderedDict
 import os
 import asyncio
 import threading
@@ -671,9 +672,40 @@ class CommsTransport(TransportBase):
         # that built the application), so connect() reports this cause instead
         # of only "display_bridge() must be called before connect()".
         self._bridge_error: Optional[BaseException] = None
-        self._bridge_started = { }                   # key is self._comm_mgr_id
+        self._bridge_started = False
         self._callback: Optional[Callable] = None
         self._connected = False
+        ### Which comm Python -> JS messages go on (JupyterLab; transport review
+        ### JC-1, checked in JupyterLab 4.6, 2026-11-24).  Every rendering of
+        ### the bridge opens a comm (a reload, a second view of the output), but
+        ### only a page whose CommMgr sent `comm_opened` on it has an app behind
+        ### it: after a reload the output does not come back (BokehJS is not
+        ### loaded when the restored output runs) while the bridge does.  So:
+        ###   * _active_comm: the comm whose page last sent comm_opened.  Sends
+        ###     go there; with none, is_connected() is False and the CommMgr
+        ###     holds messages (instead of losing them on a page with no app);
+        ###   * a new comm opening makes the active one unconfirmed (None) --
+        ###     the page behind it may be gone -- and its requests in flight are
+        ###     queued again (on_frontend('lost')), to go to the next page that
+        ###     completes the handshake (on_frontend('ready'));
+        ###   * the newest page to complete it gets Python's own requests.
+        ###     Older ones keep working for theirs (next point) but no longer
+        ###     get Python's; they are not told (no notice): the WebSocket's
+        ###     full-window notice would cover all of JupyterLab, the view
+        ###     that has the session included (seen 2026-11-24);
+        ###   * a reply goes on the comm its request came on (_reply_comm): with
+        ###     a second view open, replies to the first view's requests went to
+        ###     the newest comm and the first view waited for ever.
+        ### Colab has its own delivery (eval_js) and keeps the old behaviour.
+        self._active_comm = None
+        self._handshaken: list = []               # comms that sent comm_opened, still open
+        self._reply_comm: "OrderedDict[str, Any]" = OrderedDict()
+        self._callback_tasks: set = set()         # JC-4: keep the tasks alive
+        self._comm_manager = None                 # where the target is registered (close)
+        # CommMgr's hook: on_frontend('lost' | 'ready'), on the kernel's loop.
+        self.on_frontend: Optional[Callable[[str], None]] = None
+        self._run_event: Optional[asyncio.Event] = None
+        self._run_loop = None
         self._closed = False
         self._debug = "CUBEVIS_DEBUG" in os.environ
         # _conn_event is set once Comm connection is established
@@ -746,13 +778,33 @@ class CommsTransport(TransportBase):
         self._comm_objs.append(comm)
         self._comm = comm
 
+        if not self._is_colab() and self._active_comm is not None:
+            # A new page or view: the active one may be gone (JC-1).
+            logger.debug(f"CommsTransport: a new comm opened for {self._comm_mgr_id}; "
+                         "waiting for a page to complete the handshake")
+            self._active_comm = None
+            self._notify_frontend('lost')
+
+        def _on_close(msg=None, comm=comm):
+            self._comm_closed(comm)
+
+        try:
+            comm.on_close(_on_close)
+        except Exception:                                # noqa: BLE001
+            logger.debug("CommsTransport: could not register on_close", exc_info=True)
+
         def _invoke_callback(msg):
             if self._callback:
                 # the comm.on_msg callback mechanism is synchronous by design. It expects
                 # a standard function and does not await the result
-                self._main_ioloop.add_callback(
-                    lambda: asyncio.ensure_future(self._callback(msg))
-                )
+                def _start(msg=msg):
+                    task = asyncio.ensure_future(self._callback(msg))
+                    # Keep a reference until done (JC-4): the loop holds
+                    # only a weak one, so an unreferenced task can be
+                    # collected mid-flight.
+                    self._callback_tasks.add(task)
+                    task.add_done_callback(self._callback_tasks.discard)
+                self._main_ioloop.add_callback(_start)
             else:
                 logger.error(f"_recv: no callback is available")
 
@@ -883,6 +935,16 @@ class CommsTransport(TransportBase):
                     if isinstance( raw, str ):
                         actual_message = deserialize(raw)
                         #logger.debug(f"CommsTransport._recv app message: {actual_message}")
+                        if not self._is_colab() and isinstance(actual_message, dict):
+                            if actual_message.get('type') == 'comm_opened':
+                                self._frontend_ready(comm)
+                                return
+                            # A request from this page: its reply goes back here.
+                            rid = actual_message.get('request_id')
+                            if rid and actual_message.get('direction') == 'j2p':
+                                self._reply_comm[rid] = comm
+                                while len(self._reply_comm) > 1024:
+                                    self._reply_comm.popitem(last=False)
                         _invoke_callback(actual_message)
                     else:
                         logger.error(f"_recv: data does not seem to be in a serialized format")
@@ -942,6 +1004,38 @@ class CommsTransport(TransportBase):
     # ------------------------------------------------------------------
     # Phase 1: synchronous – must run inside the cell output context
     # ------------------------------------------------------------------
+    def _notify_frontend(self, event: str) -> None:
+        """Tell the CommMgr (on_frontend), on the kernel's loop, where its
+        handlers run."""
+        hook = self.on_frontend
+        if hook is not None:
+            self._main_ioloop.add_callback(lambda: hook(event))
+
+    def _frontend_ready(self, comm) -> None:
+        """A page's CommMgr completed the handshake on *comm* (comm_opened):
+        Python's own requests go there from now on."""
+        if comm not in getattr(self, '_comm_objs', []):
+            return
+        if comm not in self._handshaken:
+            self._handshaken.append(comm)
+        if self._active_comm is not None and self._active_comm is not comm:
+            self._notify_frontend('lost')    # what is in flight there is sent again here
+        self._active_comm = comm
+        logger.debug(f"CommsTransport: a page has the session {self._comm_mgr_id}")
+        self._notify_frontend('ready')
+
+    def _comm_closed(self, comm) -> None:
+        """The frontend closed *comm* (JC-1)."""
+        for lst in (getattr(self, '_comm_objs', []), self._handshaken):
+            if comm in lst:
+                lst.remove(comm)
+        for rid in [r for r, c in self._reply_comm.items() if c is comm]:
+            del self._reply_comm[rid]
+        if self._active_comm is comm:
+            self._active_comm = None
+            logger.debug(f"CommsTransport: the active comm closed for {self._comm_mgr_id}")
+            self._notify_frontend('lost')
+
     def display_bridge(self) -> None:
         """Display the bridge (``_display_bridge``), recording why it failed."""
         try:
@@ -964,14 +1058,14 @@ class CommsTransport(TransportBase):
 
         In Colab, also enables the custom widget manager automatically.
         """
-        if self._bridge_started.get( self._comm_mgr_id, False ):
+        if self._bridge_started:
             logger.debug( f"display_bridge: already started for {self._comm_mgr_id}" )
             return
 
         logger.debug( f"display_bridge: starting for {self._comm_mgr_id}" )
 
         # prevent restarting a particular Jupyter/Colab comm
-        self._bridge_started[self._comm_mgr_id] = True
+        self._bridge_started = True
 
         # Colab: enable CDN widget manager before any widget is displayed
         if self._is_colab():
@@ -1336,7 +1430,8 @@ class CommsTransport(TransportBase):
         if comm_class_name == "create_comm":
             try:
                 import comm as _comm_pkg
-                _comm_pkg.get_comm_manager().register_target(
+                self._comm_manager = _comm_pkg.get_comm_manager()
+                self._comm_manager.register_target(
                     self._comm_mgr_id, self._on_comm_open
                 )
             except Exception as e:
@@ -1346,7 +1441,8 @@ class CommsTransport(TransportBase):
             shell = get_ipython_kernel_shell()
             if shell is not None:
                 try:
-                    shell.kernel.comm_manager.register_target(
+                    self._comm_manager = shell.kernel.comm_manager
+                    self._comm_manager.register_target(
                         self._comm_mgr_id, self._on_comm_open
                     )
                 except Exception as e:
@@ -1430,7 +1526,10 @@ class CommsTransport(TransportBase):
     # TransportBase interface
     # ------------------------------------------------------------------
     def is_connected(self) -> bool:
-        return self._connected
+        if self._is_colab():
+            return self._connected
+        # JupyterLab: a page with an app behind it has the session (JC-1).
+        return self._connected and self._active_comm is not None
 
     def set_message_callback(self, callback: Callable) -> None:
         import inspect
@@ -1536,34 +1635,25 @@ class CommsTransport(TransportBase):
             except Exception as e:
                 logger.warning("CommsTransport.send_message: eval_js failed: %s", e)
         else:
-            # JupyterLab: single bidirectional kernel comm
-            comm_objs = getattr(self, '_comm_objs', None)
-            if not comm_objs:
-                raise RuntimeError("CommsTransport: not connected (no comm available)")
-
-            ### Send on the most recently opened comm.
-            ###
-            ### _on_comm_open( ) *appends*, so after a browser reload or a
-            ### wake-from-sleep the frontend opens a fresh comm and
-            ### _comm_objs[0] is the dead one from the previous page. Walk
-            ### backwards from newest to oldest and prune anything that raises.
-            for comm in reversed(list(comm_objs)):
-                try:
-                    comm.send(envelope)
-                    #logger.debug("<<send_message>> sent via comm")
-                    return
-                except Exception as e:
-                    logger.debug(
-                        "CommsTransport.send_message: comm send failed (%s); trying an older comm", e
-                    )
-                    try:
-                        comm_objs.remove(comm)
-                    except ValueError:
-                        pass
-
-            logger.warning(
-                "CommsTransport.send_message: no live comm could accept the message"
-            )
+            # JupyterLab: kernel comms, one per rendering of the bridge (JC-1).
+            # A reply goes back on the comm its request came on; anything
+            # else on the comm of the page that has the session.
+            rid = message.get('request_id') if isinstance(message, dict) else None
+            comm = self._reply_comm.pop(rid, None) if rid and message.get('direction') == 'j2p' else None
+            if comm is None:
+                comm = self._active_comm
+            if comm is None:
+                # No page with an app: raise, so the CommMgr holds the
+                # message rather than losing it (JC-2: a warning used to be
+                # logged and the message dropped, leaving the comm pending).
+                raise TransportNotConnectedError(
+                    "CommsTransport: no page has completed the handshake")
+            try:
+                comm.send(envelope)
+            except Exception as e:
+                logger.debug("CommsTransport.send_message: comm send failed (%s)", e)
+                self._comm_closed(comm)
+                raise TransportNotConnectedError(f"CommsTransport: comm send failed: {e}") from e
 
     async def run(self) -> None:
         """
@@ -1576,8 +1666,13 @@ class CommsTransport(TransportBase):
         CommMgr.process_messages( ) as "the transport closed", which ends the
         session instead of waiting for the frontend to come back.
         """
-        while not self._closed:
-            await asyncio.sleep(0.1)
+        # An event set by close(), not a 100 ms poll (JC-4).  close() may run
+        # on another loop, so it sets it with call_soon_threadsafe.
+        self._run_loop = asyncio.get_running_loop()
+        self._run_event = asyncio.Event()
+        if self._closed:
+            return
+        await self._run_event.wait()
 
 
     async def close(self) -> None:
@@ -1632,6 +1727,21 @@ class CommsTransport(TransportBase):
             #logger.debug(f"CommsTransport.close: teardown done={_done.is_set()} for {self._comm_mgr_id}")
 
         self._comm_objs = []
+        self._handshaken = []
+        self._active_comm = None
+        self._reply_comm.clear()
         self._connected = False
         self._bridge = None
+        # The comm target held this transport for the life of the kernel (JC-4).
+        if self._comm_manager is not None:
+            try:
+                self._comm_manager.unregister_target(self._comm_mgr_id, self._on_comm_open)
+            except Exception:                            # noqa: BLE001
+                logger.debug("CommsTransport: could not unregister the comm target", exc_info=True)
+            self._comm_manager = None
+        if self._run_event is not None and self._run_loop is not None:
+            try:
+                self._run_loop.call_soon_threadsafe(self._run_event.set)
+            except RuntimeError:
+                pass                                     # that loop has ended
 

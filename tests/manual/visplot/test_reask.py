@@ -437,3 +437,29 @@ async def test_loop_lag_monitor_names_the_blocking_handler():
         _cm.logger.removeHandler(cap)
         _cm.logger.setLevel(old)
         server.close(); await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_a_send_while_the_page_is_away_goes_after_the_replay():
+    # A request in flight when the page went is put back at the head of its
+    # queue (RP-1).  A message sent before the page returns used to be held
+    # at the head as well -- in front of it -- and so went first (found
+    # 2026-11-24; the same in the Jupyter comm transport).
+    port = _port()
+    mgr = _new_mgr(port)
+    comm = mgr.open("data")
+    server = await _serve(mgr, port)
+    try:
+        peer = await Peer(mgr, port, lambda m: "drop").connect()
+        got = []
+        await comm.send("first", {}, callback=got.append)
+        await asyncio.sleep(0.2)
+        await peer.suspend()
+        await asyncio.sleep(0.3)
+        await comm.send("second", {}, callback=got.append)
+        peer = await Peer(mgr, port, lambda m: "reply").connect()
+        assert await _until(lambda: len(got) == 2, 3)
+        assert [m["message_id"] for m in peer.received] == ["first", "second"]
+        await peer.close()
+    finally:
+        server.close(); await server.wait_closed()

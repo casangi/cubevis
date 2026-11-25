@@ -618,19 +618,34 @@ export class CommsTransport implements TransportBase {
     private isOpen: boolean = false
     private onMessageCallback?: (msg: any) => void
     private shouldRun: boolean = true
+    // Resolves run() (JC-4: was a 100 ms poll).
+    private stopRun?: () => void
     
     constructor(private comm_mgr: CommMgr) {
         this.targetName = `comm_${comm_mgr.comm_mgr_id}`
+    }
+
+    /**
+     * Tell Python this page's CommMgr is ready on its comm.  Python sends its
+     * own requests on the comm of the page that last did so, and replies on
+     * the comm the request came on (transport review JC-1).
+     */
+    private sendHandshake(): void {
+        this.comm.send({
+            type: 'cubevis_message',
+            comm_mgr_id: this.comm_mgr.comm_mgr_id,
+            data: serialize({
+                type: 'comm_opened',
+                comm_mgr_id: this.comm_mgr.comm_mgr_id,
+                frontend_ready: true
+            })
+        })
     }
     
     setMessageCallback(callback: (msg: any) => void): void {
         this.onMessageCallback = callback
     }
     
-    private getAppContext(): any {
-        return find.context(this.comm_mgr)
-    }
-
     async connect(): Promise<void> {
 
         try {
@@ -666,20 +681,7 @@ export class CommsTransport implements TransportBase {
             this.isOpen = true
 
             // Send explicit handshake so the backend knows we're ready
-            const envelope = {
-                type: 'cubevis_message',
-                comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                data: serialize({
-                    type: 'comm_opened',
-                    comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                    frontend_ready: true
-                })
-            }
-
-            console.group( '------------------------------connect------------------------------' )
-            console.log( this.getAppContext( ) )
-            console.groupEnd( )
-            this.comm.send(envelope)
+            this.sendHandshake()
 
         } catch (e) {
             console.error("Error initializing Comms:", e)
@@ -690,9 +692,8 @@ export class CommsTransport implements TransportBase {
     async run(): Promise<void> {
 
         // Keep alive until shutdown
-        while (this.shouldRun && this.isOpen) {
-            await new Promise(resolve => setTimeout(resolve, 100))
-        }
+        if (!this.shouldRun || !this.isOpen) return
+        await new Promise<void>(resolve => { this.stopRun = resolve })
 
     }
     
@@ -713,12 +714,20 @@ export class CommsTransport implements TransportBase {
      */
     private async retrieveComm(): Promise<any> {
         const target_id = this.comm_mgr.comm_mgr_id
-        const cachedComm = window["cubevis_" + target_id]?.comm
-        console.log(`retrieveComm: target_id=${target_id} window keys=`,
-          Object.keys(window).filter(k => k.startsWith('cubevis_')))
+        let cachedComm = window["cubevis_" + target_id]?.comm
+        // The bridge sets window["cubevis_"+id] from an ESM imported
+        // asynchronously; this model can initialise first.  Wait for it a
+        // while before giving up (JC-3) -- until 2026-11-24 it was looked for
+        // once, and a lost race read as "No active session -- re-run the cell".
+        const colabHere = typeof google !== "undefined" && google?.colab?.kernel?.comms
+        for (let waited = 0; !cachedComm && !colabHere && waited < 5000; waited += 100) {
+            await new Promise(resolve => setTimeout(resolve, 100))
+            cachedComm = window["cubevis_" + target_id]?.comm
+        }
+        console.debug(`retrieveComm: target_id=${target_id} found=${!!cachedComm}`)
 
         if ( cachedComm ) {
-            console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, cachedComm)
+            console.debug(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`)
             const el = window["cubevis_" + target_id].dbg_el
             if ( el ) {
                 el.insertAdjacentHTML( 'beforeend',
@@ -910,6 +919,7 @@ export class CommsTransport implements TransportBase {
         console.debug(`Jupyter comm closed for ${this.targetName}`)
         this.isOpen = false
         this.shouldRun = false
+        this.stopRun?.()
     }
 
     // --------------------------------------------------------------------------
@@ -935,6 +945,7 @@ export class CommsTransport implements TransportBase {
 
     close(): void {
         this.shouldRun = false
+        this.stopRun?.()
 
         if (this.comm && this.isOpen) {
             try {

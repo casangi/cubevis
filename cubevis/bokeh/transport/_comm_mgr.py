@@ -767,26 +767,38 @@ class CommMgr( Model, BokehInit ):
             'request_id': request_id
         }
 
+        kick = False
         async with self._lock:
-            # Check if this comm has a pending request
-            if comm_id in self._pending:
-                # This comm is waiting for a response - queue this message
+            # Queue behind a request waiting for its reply, and also behind
+            # messages already held for this comm: after a reconnect (or a
+            # lost Jupyter page) the requests that were in flight wait at the
+            # head of the queue, and a new message sent straight away -- or
+            # held at the head itself -- would overtake them (found
+            # 2026-11-24, test_comms_transport.py).
+            if comm_id in self._pending or self._send_queue.get(comm_id):
                 if comm.squash_queue:
-                    # Squash mode: replace any queued message with same message_id
+                    # Squash mode: replace any queued message with same message_id.
+                    # Not a held replay (it has a request_id): it may already
+                    # have run, and its caller waits for the reply.
                     self._send_queue[comm_id] = [
                         item for item in self._send_queue[comm_id]
-                        if item[0] != message_id
+                        if item[0] != message_id or item[3] is not None
                     ]
 
                 # Add to queue
-                self._send_queue[comm_id].append((message_id, message, callback, None))
+                self._send_queue.setdefault(comm_id, []).append((message_id, message, callback, None))
                 logger.debug(
                     f"Queued message for {comm_id}.{message_id} "
                     f"(queue size: {len(self._send_queue[comm_id])})"
                 )
+                kick = comm_id not in self._pending
             else:
                 # No pending request for this comm - send immediately
                 await self._send_immediate(comm_id, message_id, message, request_id, callback)
+        if kick and self._transport and self._transport.is_connected():
+            # Held messages and nothing in flight, but connected (the flush has
+            # not run yet): send the head now.
+            await self._process_next_queued(comm_id)
 
     async def _send_immediate(self, comm_id: str, message_id: str, message: Dict[str, Any],
                               request_id: str, callback: Optional[Callable]):
@@ -971,6 +983,28 @@ class CommMgr( Model, BokehInit ):
                         f"other side is responding; giving up on it ({rid})")
                     self.forget(rid, error='no reply: the request was lost')
 
+    def _on_comms_frontend(self, event: str) -> None:
+        """The Jupyter comm transport's page changed (transport review JC-1).
+
+        'lost': the page that had the session may be gone (a new comm opened,
+        e.g. a reload or a second view of the output, or its comm closed).
+        Requests waiting for a reply from it go back to the head of their
+        queues, as on a WebSocket reconnect (RP-1: the request_id is kept, so
+        a page that already ran one sends its reply again), and wait.
+        'ready': a page completed the handshake; what is queued is sent."""
+        if event == 'lost':
+            self._connection_generation += 1
+            n = 0
+            for request_id, (comm_id, message_id, message, callback) in list(self._pending_requests.items()):
+                self._send_queue.setdefault(comm_id, []).insert(0, (message_id, message, callback, request_id))
+                n += 1
+            self._pending.clear()
+            self._pending_requests.clear()
+            self._request_meta.clear()
+            logger.debug(f"CommMgr: the page may have gone; {n} request(s) wait for the next one")
+        elif event == 'ready':
+            asyncio.ensure_future(self._flush_all_queues())
+
     def _note_running(self, msg: Dict[str, Any]) -> None:
         """The peer is still running one of our requests (RUNNING_NOTICE):
         wait again from now."""
@@ -1073,6 +1107,8 @@ class CommMgr( Model, BokehInit ):
             if not self._transport:
                 raise RuntimeError(f"transport should be set earlier for {self.transport_type}")
             self._transport.set_message_callback(self._route_message)
+            if hasattr(self._transport, 'on_frontend'):
+                self._transport.on_frontend = self._on_comms_frontend
             await self._transport.connect()
             self._initialized = True
             self.state = AppState.RUNNING

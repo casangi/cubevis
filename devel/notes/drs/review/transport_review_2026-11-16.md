@@ -372,6 +372,34 @@ After either, a late reply for a forgotten request logs `Received response for u
 ## 4. Jupyter comm leg (notebook ↔ kernel)
 
 ### JC-1 [C/L] S1 — no close detection, no reset, no replay
+
+> **Checked and fixed on `35-transport-bugs` (2026-11-24), JupyterLab 4.6 in headless Chromium**
+> (`devel/tools/jupyterlab_headless/`). What happens is not what was assumed below:
+> - **Reload:** the visplot output does *not* come back (`Bokeh is not defined` when the restored
+>   output runs), but the bridge does and opens a new comm. Python sent on the newest comm, i.e. to a
+>   page with no app: requests vanished and the comm stayed pending.
+> - **Second view of the output** (Create New View for Output): a new comm; replies to the *first*
+>   view's requests went to the newest comm, so the first view waited for ever.
+> - **Kernel connection lost** (browser offline 5 s, 60 s): nothing lost; jupyter_server replays.
+>
+> Fix (`CommsTransport`, JupyterLab only; Colab unchanged): Python's own messages go on the comm of the
+> page whose CommMgr last sent `comm_opened` (`_active_comm`); with none, `is_connected()` is False and
+> the CommMgr holds them. A new comm opening makes the active one unconfirmed and its requests in flight
+> go back to the head of their queues (`on_frontend('lost')` -> `CommMgr._on_comms_frontend`), replayed
+> with their request_ids when a page completes the handshake (`'ready'`). A reply goes back on the comm
+> its request came on (`_reply_comm`). `on_close` is registered. Older views are **not** told they lost
+> the session: the WebSocket's full-window notice covered all of JupyterLab, the active view included;
+> they keep working for their own requests. Tests: `tests/manual/visplot/test_comms_transport.py`.
+>
+> **Found on the way, fixed:** after in-flight requests are put back at the head of a queue (here, and
+> on a WebSocket reconnect), a new `send()` on that comm went ahead of them (held at the head itself,
+> or sent straight away). `CommMgr.send` now queues behind held messages; squash mode never drops a
+> held replay. Test: `test_reask.py::test_a_send_while_the_page_is_away_goes_after_the_replay`.
+>
+> **Found, not fixed (outside JC-1, before this branch):** in a notebook the visplot output holds two
+> Bokeh documents with the same CommMgr id sharing one kernel comm; `comm.onMsg` holds one handler, and
+> Plot is sent by the CommMgr that does not get it, so Plot is never answered (seen with and without
+> `jupyter_bokeh`, with this branch's bundle and the one before).
 `CommsTransport._on_comm_open` (`llt.py:625-835`) appends each newly opened comm and wires `_recv`, but
 never registers `comm.on_close`. `_connected` is set True once and only cleared in `close()`; the
 docstring of `run()` (`llt.py:1480-1486`) says a reload "briefly clears `_connected`" — nothing does.
@@ -389,6 +417,10 @@ reload actually re-creates a working frontend — confirm in JupyterLab 4.]
 `_comm_objs` and close superseded comms.
 
 ### JC-2 [C] S2 — send failures are swallowed, wedging the comm
+
+> **Fixed on `35-transport-bugs` (2026-11-24) for JupyterLab:** no page with an app, or a comm whose
+> `send` raises, now raises `TransportNotConnectedError`, so the CommMgr holds and re-sends. The Colab
+> branch is unchanged (it queues before it can fail; see CO-*).
 - `llt.py:1472-1474`: if no comm accepts the message, a warning is logged and `send_message` returns
   normally → `_send_immediate` has already marked the comm pending → wedged.
 - `llt.py:1450`: raises plain `RuntimeError`, not `TransportNotConnectedError`, so CommMgr treats it as a
@@ -397,6 +429,10 @@ reload actually re-creates a working frontend — confirm in JupyterLab 4.]
 **Fix:** raise `TransportNotConnectedError` in all three places.
 
 ### JC-3 [L] S2 — frontend looks for the bridge comm exactly once
+
+> **Fixed on `35-transport-bugs` (2026-11-24):** `retrieveComm` waits up to 5 s for the window entry
+> (not in Colab, which has its own path). Not exercised by the JupyterLab runs, where the bridge was
+> always first.
 `llt.ts:651-666`: `retrieveComm()` reads `window["cubevis_"+id]` once. The anywidget bridge sets it from an
 ESM that is imported asynchronously; if BokehJS initialises the `CommMgr` model first, the result is
 "Could not create Jupyter comm" and the Showable is disabled with "No active session — re-run the cell"
@@ -404,6 +440,11 @@ ESM that is imported asynchronously; if BokehJS initialises the `CommMgr` model 
 window entry for a few seconds before giving up.
 
 ### JC-4 [C] S3
+
+> **Fixed on `35-transport-bugs` (2026-11-24), all bullets:** callback tasks kept in a set until done;
+> the comm target is unregistered on `close()`; `run()` waits on an event (Python) / a promise (JS);
+> the `console.group` and the window-keys log are gone (`console.debug` now); `_bridge_started` is a
+> boolean. The design-constraint bullet stands as written.
 - Callback tasks are created with `asyncio.ensure_future` inside an IOLoop callback and not retained
   (`llt.py:648-650`) — the GC hazard the WebSocket path guards against with `_pending_message_tasks`.
 - The comm target is never unregistered on `close()`; each session leaves a closure holding the transport

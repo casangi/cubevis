@@ -1,0 +1,646 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="./">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html"><link rel="next" title="Historical reference" href="historical/index.html"><link rel="prev" title="Slide decks" href="slides.html">
+        <link rel="canonical" href="https://casangi.github.io/cubevis/contributing.html">
+
+    <!-- Generated with Sphinx 9.1.1 and Furo 2025.12.19 -->
+        <title>Writing this documentation - cubevis</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="_static/css/s4defs-roles.css?v=4e6db181" />
+    <link rel="stylesheet" type="text/css" href="_static/css/cubevis-docs.css?v=8a4cc0d1" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="index.html"><div class="brand">cubevis</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
+  
+  <span class="sidebar-brand-text">cubevis</span>
+  
+</a><form class="sidebar-search-container" method="get" action="search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="applications/installing.html">Installing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="applications/remote_kernels.html">Setting up remote execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="applications/visplot_starting.html">Starting visplot</a></li>
+<li class="toctree-l1"><a class="reference internal" href="applications/visplot.html">The visplot window</a></li>
+<li class="toctree-l1"><a class="reference internal" href="applications/visplot_help.html">visplot controls, in full</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="applications/capabilities/index.html">What visplot can do</a><input aria-label="Toggle navigation of What visplot can do" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/from_plotms.html">Coming from plotms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/from_aips.html">Coming from AIPS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/data_access.html">Data formats and access</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/selection.html">Selecting data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/plot_types.html">Rasters, scatter plots and layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/standard_views.html">Standard views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/quantities.html">Plotted quantities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/phase_stability.html">Phase stability: Phase RMS and Coherence</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/vector_difference.html">Difference from the mean: Amp V Diff and Phase Diff</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/z_score.html">Z-Score</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/averaging.html">Averaging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/colormaps.html">Colormaps and color scaling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/flagging.html">Flagging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="applications/capabilities/output.html">Saving and describing plots</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="applications/iclean_starting.html">Starting iclean</a></li>
+<li class="toctree-l1"><a class="reference internal" href="applications/iclean_parameters.html">iclean parameters</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Slides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="slides.html">Slide decks</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Background and development</span></p>
+<ul class="current">
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Writing this documentation</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="historical/index.html">Historical reference</a><input aria-label="Toggle navigation of Historical reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="historical/intro.html">System Design</a><input aria-label="Toggle navigation of System Design" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="historical/applications/interactive_clean_pathfinder.html">Interactive clean as a pathfinder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="historical/applications/interactive_clean.html">Interactive Clean Design</a></li>
+<li class="toctree-l3"><a class="reference internal" href="historical/boundary.html">CASA/Viz Boundary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="historical/components/cube_mask.html">Cube Mask Design</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="_sources/contributing.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section class="tex2jax_ignore mathjax_ignore" id="writing-this-documentation">
+<h1>Writing this documentation<a class="headerlink" href="#writing-this-documentation" title="Link to this heading">¶</a></h1>
+<p>The documentation is built with <a class="reference external" href="https://www.sphinx-doc.org">Sphinx</a>. Its
+source is in <a class="reference external" href="https://github.com/casangi/cubevis/tree/main/docs/source"><code class="docutils literal notranslate"><span class="pre">docs/source</span></code></a>
+and is published at <a class="reference external" href="https://casangi.github.io/cubevis/">https://casangi.github.io/cubevis/</a> by a GitHub
+Actions workflow.</p>
+<section id="editing-a-page">
+<h2>Editing a page<a class="headerlink" href="#editing-a-page" title="Link to this heading">¶</a></h2>
+<p>Pages are Markdown (<code class="docutils literal notranslate"><span class="pre">.md</span></code>) files. New pages should be Markdown; the older
+reStructuredText (<code class="docutils literal notranslate"><span class="pre">.rst</span></code>) pages build alongside them and can be converted
+when convenient.</p>
+<p>To add a page, create the <code class="docutils literal notranslate"><span class="pre">.md</span></code> file and add its name (without the
+extension) to a <code class="docutils literal notranslate"><span class="pre">toctree</span></code> list, for example the <em>User guide</em> list in
+<code class="docutils literal notranslate"><span class="pre">index.md</span></code>.</p>
+<p>The Markdown dialect is <a class="reference external" href="https://myst-parser.readthedocs.io">MyST</a>. Beyond
+ordinary Markdown, three things are used here:</p>
+<div class="highlight-markdown notranslate"><div class="highlight"><pre><span></span>A link to another page, by file name:  [](remote_kernels.md)
+
+:::{note}
+A highlighted note.  Also: warning, tip.
+:::
+
+```{figure} _static/window.png
+:alt: the visplot window
+:width: 100%
+
+A figure with a caption.
+```
+</pre></div>
+</div>
+</section>
+<section id="including-text-from-the-python-source">
+<h2>Including text from the Python source<a class="headerlink" href="#including-text-from-the-python-source" title="Link to this heading">¶</a></h2>
+<p>Parameter descriptions are written once, in the docstring of the class
+that implements a task. The CASA task and CASA shell layers are generated
+from that docstring by <code class="docutils literal notranslate"><span class="pre">scripts/sync_layers</span></code>, and the documentation
+includes it with the same scraper. To change what a parameter’s
+description says, change the docstring.</p>
+<div class="highlight-markdown notranslate"><div class="highlight"><pre><span></span>```{task-doc} visplot
+```
+</pre></div>
+</div>
+<p>inserts the description at the top of the task’s docstring. With
+<code class="docutils literal notranslate"><span class="pre">:section:</span> <span class="pre">Resource</span> <span class="pre">lifecycle</span></code> it inserts that section of the docstring
+instead.</p>
+<div class="highlight-markdown notranslate"><div class="highlight"><pre><span></span>```{task-params} visplot
+:only: vis, ms, ps
+```
+</pre></div>
+</div>
+<p>inserts parameters with their types, defaults and full descriptions.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Effect</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>(none)</p></td>
+<td><p>every parameter, in the order of the signature</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">:only:</span> <span class="pre">a,</span> <span class="pre">b,</span> <span class="pre">c</span></code></p></td>
+<td><p>these parameters, in this order</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">:exclude:</span> <span class="pre">a,</span> <span class="pre">b</span></code></p></td>
+<td><p>every parameter but these</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">:all:</span></code></p></td>
+<td><p>every parameter not already shown by another <code class="docutils literal notranslate"><span class="pre">task-params</span></code> block on the same page</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The name after the directive is a task name or class name from
+<code class="docutils literal notranslate"><span class="pre">scripts/sync_layers/project_layers.yaml</span></code>. Parameters listed there as
+<code class="docutils literal notranslate"><span class="pre">layer_args</span></code> are supplied by the layers themselves and are never shown.</p>
+<p>Two docstring layouts are understood:</p>
+<ul class="simple">
+<li><p><strong>numpy style</strong>, as in <code class="docutils literal notranslate"><span class="pre">visplot</span></code>: a <code class="docutils literal notranslate"><span class="pre">Parameters</span></code> heading underlined with
+dashes. The descriptions are reStructuredText.</p></li>
+<li><p><strong>the CASA task layout</strong>, as in <code class="docutils literal notranslate"><span class="pre">iclean</span></code>, whose task is generated from
+<code class="docutils literal notranslate"><span class="pre">tclean</span></code>’s XML: a <code class="docutils literal notranslate"><span class="pre">---------</span> <span class="pre">parameter</span> <span class="pre">descriptions</span> <span class="pre">---------</span></code> block.
+The descriptions are preformatted text, so the first line is shown and
+the rest is behind a <strong>more</strong> control.</p></li>
+</ul>
+<p>A task generated by <code class="docutils literal notranslate"><span class="pre">sync_layers</span></code> (an entry under <code class="docutils literal notranslate"><span class="pre">templates</span></code> in the YAML
+file) is available to the directives without further configuration. A
+task generated another way is added to the <code class="docutils literal notranslate"><span class="pre">documentation</span></code> list at the
+end of that file, as <code class="docutils literal notranslate"><span class="pre">iclean</span></code> is, naming the file, class and method to
+read.</p>
+<p>On GitHub, where the directives are not expanded, each appears as a small
+code block marking where the text will go.</p>
+<p>Included text is drawn in a bordered, tinted box that names the class it
+came from. This is how it looks:</p>
+<div class="pydoc-box docutils container">
+<p class="pydoc-source">visplot parameters · from the Python source: <a class="reference external" href="https://github.com/casangi/cubevis/blob/main/cubevis/toolbox/visplot/visibility_plotter.py"><code class="docutils literal notranslate"><span class="pre">VisibilityPlotter</span></code></a></p>
+<dl class="simple pydoc-params">
+<dt id="visplot-param-vis"><code class="pydoc-name docutils literal notranslate"><span class="pre">vis</span></code><code class="pydoc-type docutils literal notranslate"> <span class="pre">:</span> <span class="pre">str</span> <span class="pre">|</span> <span class="pre">None</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">None</span></code></dt><dd><p>Path to the data, MSv2 measurement set or MSv4 / Processing Set:
+the format is detected (on the kernel’s host when <code class="docutils literal notranslate"><span class="pre">kernel_name</span></code>
+is given).  Exactly one of <code class="docutils literal notranslate"><span class="pre">vis</span></code>, <code class="docutils literal notranslate"><span class="pre">ms</span></code> or <code class="docutils literal notranslate"><span class="pre">ps</span></code> must be
+supplied.</p>
+</dd>
+<dt id="visplot-param-autocorr"><code class="pydoc-name docutils literal notranslate"><span class="pre">autocorr</span></code><code class="pydoc-type docutils literal notranslate"> <span class="pre">:</span> <span class="pre">str</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">'exclude'</span></code></dt><dd><p>Autocorrelations (baselines from an antenna to itself):
+<code class="docutils literal notranslate"><span class="pre">&quot;exclude&quot;</span></code> (default; cross-correlations only), <code class="docutils literal notranslate"><span class="pre">&quot;include&quot;</span></code>
+or <code class="docutils literal notranslate"><span class="pre">&quot;only&quot;</span></code>.  On VLBI data before amplitude calibration the
+autocorrelations are hundreds of times the cross-correlations and
+flatten every plot of all baselines.  A baseline named in
+<code class="docutils literal notranslate"><span class="pre">antenna</span></code> (<code class="docutils literal notranslate"><span class="pre">&quot;BR&amp;BR&quot;</span></code>) is plotted whatever this says.  Also the
+“Autocorrelations” switch in the Data section.</p>
+</dd>
+</dl>
+</div>
+<p>and for a task in the CASA layout:</p>
+<div class="pydoc-box docutils container">
+<p class="pydoc-source">iclean parameters · from the Python source: <a class="reference external" href="https://github.com/casangi/cubevis/blob/main/cubevis/private/casatasks/iclean.py"><code class="docutils literal notranslate"><span class="pre">_iclean</span></code></a></p>
+<dl class="pydoc-params">
+<dt id="iclean-param-kernel-name"><code class="pydoc-name docutils literal notranslate"><span class="pre">kernel_name</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">None</span></code></dt><dd><p>Jupyter kernel to run tclean and the image access on</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>default: None; everything runs in this Python.
+With a kernel name, tclean runs and the images are
+read and written on the kernel's computer, and only
+the window runs here.  vis and imagename are then
+paths on that computer, relative to the kernel's
+working directory, and this computer needs no CASA.
+Kernels are set up with: python -m cubevis.setup
+example: kernel_name='cvpost106-iclean'
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-niter"><code class="pydoc-name docutils literal notranslate"><span class="pre">niter</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">0</span></code></dt><dd><p>Maximum number of iterations.</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>A stopping criterion based on total iteration count.
+Currently the parameter type is defined as an integer therefore the integer value
+larger than 2147483647 will not be set properly as it causes an overflow.
+
+Iterations are typically defined as the selecting one flux component
+and partially subtracting it out from the residual image.
+
+niter=0 : Do only the initial major cycle (make dirty image, psf, pb, etc).
+
+niter larger than zero : Run major and minor cycles.
+
+Note : Global stopping criteria vs major-cycle triggers.
+
+           In addition to global stopping criteria, the following rules are
+           used to determine when to terminate a set of minor cycle iterations
+           and trigger major cycles [derived from Cotton-Schwab Clean, 1984].
+
+           'cycleniter' : controls the maximum number of iterations per image
+                               plane before triggering a major cycle.
+           'cyclethreshold' : Automatically computed threshold related to the
+                                       max sidelobe level of the PSF and peak residual.
+            Divergence, detected as an increase of 10% in peak residual from the
+            minimum so far (during minor cycle iterations).
+
+            The first criterion to be satisfied takes precedence.
+
+Note :  Iteration counts for cubes or multi-field images :
+            For images with multiple planes (or image fields) on which the
+            deconvolver operates in sequence, iterations are counted across
+            all planes (or image fields). The iteration count is compared with
+            'niter' only after all channels/planes/fields have completed their
+            minor cycles and exited either due to 'cycleniter' or 'cyclethreshold'.
+            Therefore, the actual number of iterations reported in the logger
+            can sometimes be larger than the user specified value in 'niter'.
+            For example, with niter=100, cycleniter=20,nchan=10,threshold=0,
+            a total of 200 iterations will be done in the first set of minor cycles
+            before the total is compared with niter=100 and it exits.
+
+ Note : Additional global stopping criteria include:
+           - no change in peak residual across two major cycles.
+           - a 50% or more increase in peak residual across one major cycle.
+</pre></div>
+</div>
+</details></dd>
+</dl>
+</div>
+</section>
+<section id="slide-decks">
+<h2>Slide decks<a class="headerlink" href="#slide-decks" title="Link to this heading">¶</a></h2>
+<p>Each folder in <code class="docutils literal notranslate"><span class="pre">devel/slides</span></code> that contains a <code class="docutils literal notranslate"><span class="pre">slides.html</span></code> is copied to
+the site as <code class="docutils literal notranslate"><span class="pre">&lt;folder&gt;/slides.html</span></code> and listed on the <a class="reference internal" href="slides.html"><span class="std std-doc">Slide decks</span></a> page.
+Adding a deck needs no change to the documentation.</p>
+</section>
+<section id="visplot-s-in-window-help">
+<span id="visplots-in-window-help"></span><h2>visplot’s in-window help<a class="headerlink" href="#visplot-s-in-window-help" title="Link to this heading">¶</a></h2>
+<p>In the <code class="docutils literal notranslate"><span class="pre">visplot</span></code> window, text in the status area that has a longer
+explanation here carries a ⓘ, and pressing <strong>?</strong> opens this
+documentation at that explanation (<a class="reference internal" href="applications/visplot.html"><span class="std std-doc">The visplot window</span></a>, <em>Help in
+the window</em>). The code names each entry by a label, a target in
+<a class="reference internal" href="applications/visplot_help.html"><span class="std std-doc">visplot controls, in full</span></a> or anywhere else, such as</p>
+<div class="highlight-markdown notranslate"><div class="highlight"><pre><span></span>(vp-flag-reach)=
+
+<span class="gu">### Flag reaches</span>
+</pre></div>
+</div>
+<p>and the build writes <code class="docutils literal notranslate"><span class="pre">help/&lt;label&gt;.html</span></code> for every label starting with
+<code class="docutils literal notranslate"><span class="pre">vp-</span></code>, a page that forwards to wherever the label is
+(<code class="docutils literal notranslate"><span class="pre">docs/source/extensions/vp_help.py</span></code>). So:</p>
+<ul class="simple">
+<li><p><strong>A label can go anywhere</strong> in the documentation, on any page, before
+a heading or before a paragraph, list or note inside a section. So the
+entry can be the place that already explains the control (a
+capability page, say) rather than a copy of it on the help page; two
+labels above one heading are fine. Each label is defined once.</p></li>
+<li><p><strong>Moving an entry</strong>, to another heading or another page, needs no
+change to the code: keep its label.</p></li>
+<li><p><strong>A new entry</strong> the code points at needs its label here in the same
+pull request. <code class="docutils literal notranslate"><span class="pre">tests/manual/visplot/test_help_labels.py</span></code> (run with the
+quick tests) fails for a label the code uses and the documentation
+does not define.</p></li>
+<li><p><strong>Do not remove or rename a label within a major.minor version.</strong> A
+later patch release replaces that version’s copy of the documentation,
+and the earlier patch releases still installed would lose the entry. To
+rename one, keep the old label as a second target above the heading.</p></li>
+</ul>
+<p>A message gets a ⓘ by including <code class="docutils literal notranslate"><span class="pre">help_text.marker(&quot;vp-…&quot;)</span></code> in its text;
+a control’s description by giving its help spec a label
+(<code class="docutils literal notranslate"><span class="pre">(text,</span> <span class="pre">&quot;vp-…&quot;)</span></code>).</p>
+<p>A copy without the label (a release made before it, or a development
+version, which has no copy of its own and uses the latest) is sent to
+the latest copy’s entry by the site’s <code class="docutils literal notranslate"><span class="pre">404.html</span></code>. To try <strong>?</strong> against a
+local build, set <code class="docutils literal notranslate"><span class="pre">CUBEVIS_DOCS_URL</span></code> to it before starting <code class="docutils literal notranslate"><span class="pre">visplot</span></code>,
+for example <code class="docutils literal notranslate"><span class="pre">CUBEVIS_DOCS_URL=http://localhost:8000/</span></code> with
+<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">http.server</span> <span class="pre">8000</span></code> running in <code class="docutils literal notranslate"><span class="pre">docs/build/html</span></code>. Or push the change to a
+<code class="docutils literal notranslate"><span class="pre">docs-&lt;name&gt;</span></code> branch and set <code class="docutils literal notranslate"><span class="pre">CUBEVIS_DOCS_URL</span></code> to its preview copy,
+<code class="docutils literal notranslate"><span class="pre">https://casangi.github.io/cubevis/dev/docs-&lt;name&gt;/</span></code>, to try it before
+it is merged.</p>
+</section>
+<section id="building-locally">
+<h2>Building locally<a class="headerlink" href="#building-locally" title="Link to this heading">¶</a></h2>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>docs/requirements.txt
+<span class="gp">$ </span><span class="nb">cd</span><span class="w"> </span>docs
+<span class="gp">$ </span>make<span class="w"> </span>html
+<span class="gp">$ </span>open<span class="w"> </span>build/html/index.html
+</pre></div>
+</div>
+<p>The Python source is parsed, not imported, so <code class="docutils literal notranslate"><span class="pre">cubevis</span></code> and its
+dependencies do not need to be installed to build the documentation.</p>
+</section>
+<section id="publishing">
+<h2>Publishing<a class="headerlink" href="#publishing" title="Link to this heading">¶</a></h2>
+<p>The workflow in <code class="docutils literal notranslate"><span class="pre">.github/workflows/docs.yml</span></code> builds the site whenever the
+documentation, the slides, <code class="docutils literal notranslate"><span class="pre">scripts/sync_layers</span></code> or a documented source
+file changes. When a task from another source file is documented, add
+that file to the two <code class="docutils literal notranslate"><span class="pre">paths</span></code> lists in the workflow.</p>
+<p>Several copies of the documentation are published side by side, all
+reachable from the <em>Version</em> menu under the sidebar title:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Copy</p></th>
+<th class="head"><p>Address</p></th>
+<th class="head"><p>Made by</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>latest</p></td>
+<td><p><a class="reference external" href="https://casangi.github.io/cubevis/">https://casangi.github.io/cubevis/</a></p></td>
+<td><p>every documentation change on <code class="docutils literal notranslate"><span class="pre">main</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>a release</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">https://casangi.github.io/cubevis/v1.2/</span></code></p></td>
+<td><p>the first <code class="docutils literal notranslate"><span class="pre">v1.2.x</span></code> tag; later <code class="docutils literal notranslate"><span class="pre">v1.2.x</span></code> tags replace it</p></td>
+</tr>
+<tr class="row-even"><td><p>a preview</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">https://casangi.github.io/cubevis/dev/docs-&lt;name&gt;/</span></code></p></td>
+<td><p>creating or pushing to a <code class="docutils literal notranslate"><span class="pre">docs-&lt;name&gt;</span></code> branch</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Releases are kept per major and minor version only: <code class="docutils literal notranslate"><span class="pre">v1.2.0</span></code>, <code class="docutils literal notranslate"><span class="pre">v1.2.1</span></code>, …
+all publish to <code class="docutils literal notranslate"><span class="pre">v1.2/</span></code>, so the 1.2 documentation is that of the newest
+1.2 release (set <code class="docutils literal notranslate"><span class="pre">CUBEVIS_DOCS_PATCH_UPDATES</span></code> to <code class="docutils literal notranslate"><span class="pre">&quot;0&quot;</span></code> in the workflow to
+keep the copy the first 1.2 tag made instead). Releases and previews show a
+banner pointing to the latest copy; previews are hidden from search
+engines.</p>
+<p>To show documentation changes to other people before they are merged,
+work on a branch named <code class="docutils literal notranslate"><span class="pre">docs-&lt;something&gt;</span></code>. Its preview appears under
+<code class="docutils literal notranslate"><span class="pre">dev/</span></code> a minute or two after the branch is pushed, is rebuilt on each
+push, and is removed when the branch is deleted. On a pull request the
+site is also built and attached to the workflow run as the <code class="docutils literal notranslate"><span class="pre">docs-site</span></code>
+artifact.</p>
+<p>The published site lives on the <code class="docutils literal notranslate"><span class="pre">gh-pages</span></code> branch, which
+<code class="docutils literal notranslate"><span class="pre">docs/publish_site.py</span></code> rewrites as a single commit each time; it is never
+edited by hand.</p>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="historical/index.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Historical reference</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="slides.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Slide decks</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2021-2026 Associated Universities, Inc. Washington DC, USA.
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Writing this documentation</a><ul>
+<li><a class="reference internal" href="#editing-a-page">Editing a page</a></li>
+<li><a class="reference internal" href="#including-text-from-the-python-source">Including text from the Python source</a></li>
+<li><a class="reference internal" href="#slide-decks">Slide decks</a></li>
+<li><a class="reference internal" href="#visplot-s-in-window-help">visplot’s in-window help</a></li>
+<li><a class="reference internal" href="#building-locally">Building locally</a></li>
+<li><a class="reference internal" href="#publishing">Publishing</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/scripts/furo.js?v=46bd48cc"></script>
+    <script data-current="" data-site="/cubevis/" src="_static/js/versions.js?v=56d3ce4a"></script>
+    </body>
+</html>

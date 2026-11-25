@@ -1,0 +1,553 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="prev" title="CASA/Viz Boundary" href="../boundary.html">
+        <link rel="canonical" href="https://casangi.github.io/cubevis/historical/components/cube_mask.html">
+
+    <!-- Generated with Sphinx 9.1.1 and Furo 2025.12.19 -->
+        <title>Cube Mask Design - cubevis (docs-site)</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/s4defs-roles.css?v=4e6db181" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/cubevis-docs.css?v=8a4cc0d1" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style>
+    <meta name="robots" content="noindex, nofollow"></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+<div class="announcement">
+  <aside class="announcement-content">
+     Preview of the <code>docs-site</code> branch, not yet merged. The <a href="https://casangi.github.io/cubevis/">published documentation</a> is the one to cite or link to. 
+  </aside>
+</div>
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../../index.html"><div class="brand">cubevis (docs-site)</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
+  
+  <span class="sidebar-brand-text">cubevis (docs-site)</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/installing.html">Installing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/remote_kernels.html">Setting up remote execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/visplot_starting.html">Starting visplot</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/visplot.html">The visplot window</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../applications/capabilities/index.html">What visplot can do</a><input aria-label="Toggle navigation of What visplot can do" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/from_plotms.html">Coming from plotms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/from_aips.html">Coming from AIPS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/data_access.html">Data formats and access</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/selection.html">Selecting data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/plot_types.html">Rasters, scatter plots and layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/standard_views.html">Standard views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/quantities.html">Plotted quantities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/phase_stability.html">Phase stability: Phase RMS and Coherence</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/vector_difference.html">Difference from the mean: Amp V Diff and Phase Diff</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/z_score.html">Z-Score</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/averaging.html">Averaging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/colormaps.html">Colormaps and color scaling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/flagging.html">Flagging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/output.html">Saving and describing plots</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/iclean_starting.html">Starting iclean</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/iclean_parameters.html">iclean parameters</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Slides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../slides.html">Slide decks</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Background and development</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../contributing.html">Writing this documentation</a></li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">Historical reference</a><input aria-label="Toggle navigation of Historical reference" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2 current has-children"><a class="reference internal" href="../intro.html">System Design</a><input aria-label="Toggle navigation of System Design" checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../applications/interactive_clean_pathfinder.html">Interactive clean as a pathfinder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../applications/interactive_clean.html">Interactive Clean Design</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../boundary.html">CASA/Viz Boundary</a></li>
+<li class="toctree-l3 current current-page"><a class="current reference internal" href="#">Cube Mask Design</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../../_sources/historical/components/cube_mask.rst.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <blockquote>
+<div></div></blockquote>
+<section id="cube-mask-design">
+<h1>Cube Mask Design<a class="headerlink" href="#cube-mask-design" title="Link to this heading">¶</a></h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><strong>Historical reference.</strong>  This page describes the design and
+implementation of the <code class="docutils literal notranslate"><span class="pre">casagui</span></code> package, as it stood after the
+visualization trade study.  <code class="docutils literal notranslate"><span class="pre">cubevis</span></code> grew out of that work.  The page
+is kept for reference and is not maintained; names, figures and plans in
+it may no longer match <code class="docutils literal notranslate"><span class="pre">cubevis</span></code>.  See <a class="reference internal" href="../index.html"><span class="doc">Historical reference</span></a>.</p>
+</div>
+<p>The cube mask toolkit is a group of related components that can be used to construct different
+GUIs related to image cube applications. Application builders do not need to adopt all of the
+lements in this collection. A few of the widgets can be used or all can be used. The only
+component that must be used is the <code class="docutils literal notranslate"><span class="pre">image</span></code> widget. This component is the central image cube
+display window which includes the ability to step through the channels of the image cube, and
+it is the users interaction with this component that drives the other component.</p>
+<section id="image">
+<h2>Image<a class="headerlink" href="#image" title="Link to this heading">¶</a></h2>
+<p>An image cube can be displayed with this code:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">bokeh.plotting</span><span class="w"> </span><span class="kn">import</span> <span class="n">show</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">bokeh.layouts</span><span class="w"> </span><span class="kn">import</span> <span class="n">row</span><span class="p">,</span> <span class="n">column</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">bokeh.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Button</span><span class="p">,</span> <span class="n">CustomJS</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">cubevis.toolbox</span><span class="w"> </span><span class="kn">import</span> <span class="n">CubeMask</span>
+
+<span class="n">cube</span> <span class="o">=</span> <span class="n">CubeMask</span><span class="p">(</span> <span class="s1">'g35_sma_usb_12co.image'</span> <span class="p">)</span>
+<span class="n">image</span> <span class="o">=</span> <span class="n">cube</span><span class="o">.</span><span class="n">image</span><span class="p">(</span> <span class="p">)</span>
+<span class="n">cube</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span> <span class="p">)</span>
+<span class="n">show</span><span class="p">(</span> <span class="n">image</span> <span class="p">)</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">loop</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">get_event_loop</span><span class="p">(</span> <span class="p">)</span>
+    <span class="n">loop</span><span class="o">.</span><span class="n">run_until_complete</span><span class="p">(</span><span class="n">cube</span><span class="o">.</span><span class="n">loop</span><span class="p">(</span> <span class="p">))</span>
+    <span class="n">loop</span><span class="o">.</span><span class="n">run_forever</span><span class="p">(</span> <span class="p">)</span>
+<span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'</span><span class="se">\n</span><span class="s1">Interrupt received, stopping GUI...'</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span> <span class="sa">f</span><span class="s2">"cube exited with </span><span class="si">{</span><span class="n">cube</span><span class="o">.</span><span class="n">result</span><span class="p">(</span><span class="w"> </span><span class="p">)</span><span class="si">}</span><span class="s2">"</span> <span class="p">)</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">image</span></code> function creates a two-dimensional plot that displays one channel from the
+image cube which was passed in as a constructor parameter. Even without any controls the
+image display can be used to create regions and move through the channels of the cube
+(Option-Ctrl-Up on MacOS and Alt-Ctrl-Up on Linux moves to the next channel).</p>
+<a class="reference internal image-reference" href="../../_images/image.png"><img alt="Image Cube" src="../../_images/image.png" width="400" />
+</a>
+<p>The image update is managed via the <code class="docutils literal notranslate"><span class="pre">asyncio</span></code> event loop. The tools along the edge
+can be used to draw regions, scroll, pan, zoom, etc. The regions are accessable after
+successful completion of GUI interactions. The image used in these examples is
+<a class="reference external" href="https://casa.nrao.edu/download/devel/casavis/data/g35-12co-img.tar.gz">available for download</a>.
+Channel Scrolling
+====================
+The <code class="docutils literal notranslate"><span class="pre">CubeMask</span></code> object provides access to other GUI components that are integrated with
+the image display. Scrolling with a slider that makes traversing the channels much easier,
+and it can be added, assuming the same imports as above, like:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cube</span> <span class="o">=</span> <span class="n">CubeMask</span><span class="p">(</span> <span class="s1">'g35_sma_usb_12co.image'</span> <span class="p">)</span>
+<span class="n">layout</span> <span class="o">=</span> <span class="n">column</span><span class="p">(</span> <span class="n">cube</span><span class="o">.</span><span class="n">image</span><span class="p">(</span> <span class="p">),</span>
+                 <span class="n">cube</span><span class="o">.</span><span class="n">slider</span><span class="p">(</span> <span class="p">)</span> <span class="p">)</span>
+<span class="n">cube</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span> <span class="p">)</span>
+<span class="n">show</span><span class="p">(</span> <span class="n">layout</span> <span class="p">)</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">loop</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">get_event_loop</span><span class="p">(</span> <span class="p">)</span>
+    <span class="n">loop</span><span class="o">.</span><span class="n">run_until_complete</span><span class="p">(</span><span class="n">cube</span><span class="o">.</span><span class="n">loop</span><span class="p">(</span> <span class="p">))</span>
+    <span class="n">loop</span><span class="o">.</span><span class="n">run_forever</span><span class="p">(</span> <span class="p">)</span>
+<span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'</span><span class="se">\n</span><span class="s1">Interrupt received, stopping GUI...'</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span> <span class="sa">f</span><span class="s2">"cube exited with </span><span class="si">{</span><span class="n">cube</span><span class="o">.</span><span class="n">result</span><span class="p">(</span><span class="w"> </span><span class="p">)</span><span class="si">}</span><span class="s2">"</span> <span class="p">)</span>
+</pre></div>
+</div>
+<a class="reference internal image-reference" href="../../_images/image-slider.png"><img alt="Image Cube w/ Slider" src="../../_images/image-slider.png" width="400" />
+</a>
+<p>The component usage is indicated by calling the accessor functions, e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code> or
+<code class="docutils literal notranslate"><span class="pre">slider</span></code> here, and the call to the <code class="docutils literal notranslate"><span class="pre">connect</span></code> member function connects the <em>behind
+the scenes</em> connections to make all of the elements (<em>that are in use</em>) interact and
+update in response to user input.</p>
+</section>
+<section id="spectra-z-axis-display">
+<h2>Spectra (Z-Axis) Display<a class="headerlink" href="#spectra-z-axis-display" title="Link to this heading">¶</a></h2>
+<p>Another useful component included in <code class="docutils literal notranslate"><span class="pre">CubeMask</span></code> is the spectra display. This display
+shows the image spectra along the z-axis of the image cube. As with <code class="docutils literal notranslate"><span class="pre">slider</span></code> above
+the spectra display is accessed with the <code class="docutils literal notranslate"><span class="pre">spectra</span></code> member function:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cube</span> <span class="o">=</span> <span class="n">CubeMask</span><span class="p">(</span> <span class="s1">'g35_sma_usb_12co.image'</span> <span class="p">)</span>
+<span class="n">layout</span> <span class="o">=</span> <span class="n">column</span><span class="p">(</span> <span class="n">cube</span><span class="o">.</span><span class="n">image</span><span class="p">(</span> <span class="p">),</span>
+                 <span class="n">cube</span><span class="o">.</span><span class="n">slider</span><span class="p">(</span> <span class="p">),</span>
+                 <span class="n">cube</span><span class="o">.</span><span class="n">spectra</span><span class="p">(</span> <span class="n">width</span><span class="o">=</span><span class="mi">400</span> <span class="p">)</span> <span class="p">)</span>
+<span class="n">cube</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span> <span class="p">)</span>
+<span class="n">show</span><span class="p">(</span> <span class="n">layout</span> <span class="p">)</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">loop</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">get_event_loop</span><span class="p">(</span> <span class="p">)</span>
+    <span class="n">loop</span><span class="o">.</span><span class="n">run_until_complete</span><span class="p">(</span><span class="n">cube</span><span class="o">.</span><span class="n">loop</span><span class="p">(</span> <span class="p">))</span>
+    <span class="n">loop</span><span class="o">.</span><span class="n">run_forever</span><span class="p">(</span> <span class="p">)</span>
+<span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'</span><span class="se">\n</span><span class="s1">Interrupt received, stopping GUI...'</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span> <span class="sa">f</span><span class="s2">"cube exited with </span><span class="si">{</span><span class="n">cube</span><span class="o">.</span><span class="n">result</span><span class="p">(</span><span class="w"> </span><span class="p">)</span><span class="si">}</span><span class="s2">"</span> <span class="p">)</span>
+</pre></div>
+</div>
+<a class="reference internal image-reference" href="../../_images/image-slider-spectra.png"><img alt="Image Cube w Slider Spectra" src="../../_images/image-slider-spectra.png" width="400" />
+</a>
+<p>By default, the spectra display is wider, but these components generally support the
+same parameters supported by the underlying Bokeh components. In this case, the <code class="docutils literal notranslate"><span class="pre">width</span></code>
+is specified.</p>
+</section>
+<section id="integration-with-bokeh">
+<h2>Integration with Bokeh<a class="headerlink" href="#integration-with-bokeh" title="Link to this heading">¶</a></h2>
+<p>While we have already seen some integration with Bokeh models, e.g. <code class="docutils literal notranslate"><span class="pre">layout</span></code> above,
+It is also possible to include reactive models. The <code class="docutils literal notranslate"><span class="pre">js_obj</span></code> member function provides
+access to control elements of the <code class="docutils literal notranslate"><span class="pre">CubeMask</span></code> components. This example shows how this
+interface can be used to close the GUI, exit the event loop and return control to
+Python:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cube</span> <span class="o">=</span> <span class="n">CubeMask</span><span class="p">(</span> <span class="s1">'g35_sma_usb_12co.image'</span> <span class="p">)</span>
+<span class="n">done</span> <span class="o">=</span> <span class="n">Button</span><span class="p">(</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Done"</span><span class="p">,</span> <span class="n">width</span><span class="o">=</span><span class="mi">80</span><span class="p">,</span> <span class="n">button_type</span><span class="o">=</span><span class="s2">"danger"</span> <span class="p">)</span>
+<span class="n">layout</span> <span class="o">=</span> <span class="n">column</span><span class="p">(</span> <span class="n">cube</span><span class="o">.</span><span class="n">image</span><span class="p">(</span> <span class="p">),</span>
+                 <span class="n">row</span><span class="p">(</span> <span class="n">cube</span><span class="o">.</span><span class="n">slider</span><span class="p">(</span> <span class="p">),</span> <span class="n">done</span> <span class="p">),</span>
+                 <span class="n">cube</span><span class="o">.</span><span class="n">spectra</span><span class="p">(</span> <span class="n">width</span><span class="o">=</span><span class="mi">400</span> <span class="p">)</span> <span class="p">)</span>
+<span class="n">done</span><span class="o">.</span><span class="n">js_on_click</span><span class="p">(</span> <span class="n">CustomJS</span><span class="p">(</span> <span class="n">args</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span> <span class="n">obj</span><span class="o">=</span><span class="n">cube</span><span class="o">.</span><span class="n">js_obj</span><span class="p">(</span> <span class="p">)</span> <span class="p">),</span>
+                            <span class="n">code</span><span class="o">=</span><span class="s2">"obj.done( )"</span> <span class="p">)</span> <span class="p">)</span>
+<span class="n">cube</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span> <span class="p">)</span>
+<span class="n">show</span><span class="p">(</span> <span class="n">layout</span> <span class="p">)</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">loop</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">get_event_loop</span><span class="p">(</span> <span class="p">)</span>
+    <span class="n">loop</span><span class="o">.</span><span class="n">run_until_complete</span><span class="p">(</span><span class="n">cube</span><span class="o">.</span><span class="n">loop</span><span class="p">(</span> <span class="p">))</span>
+    <span class="n">loop</span><span class="o">.</span><span class="n">run_forever</span><span class="p">(</span> <span class="p">)</span>
+<span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'</span><span class="se">\n</span><span class="s1">Interrupt received, stopping GUI...'</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span> <span class="sa">f</span><span class="s2">"cube exited with </span><span class="si">{</span><span class="n">cube</span><span class="o">.</span><span class="n">result</span><span class="p">(</span><span class="w"> </span><span class="p">)</span><span class="si">}</span><span class="s2">"</span> <span class="p">)</span>
+</pre></div>
+</div>
+<a class="reference internal image-reference" href="../../_images/image-slider-spectra-done.png"><img alt="Image Cube w Slider Spectra and Button" src="../../_images/image-slider-spectra-done.png" width="400" />
+</a>
+<p>This example adds a button to invoke the completion function of the
+<code class="docutils literal notranslate"><span class="pre">CubeMask</span></code> JavaScript control object which is returned by the
+<code class="docutils literal notranslate"><span class="pre">js_obj</span></code> function. The <code class="docutils literal notranslate"><span class="pre">code</span></code> in this example is JavaScript
+rather than Python code, and the execution takes place in the
+browser displaying our GUI.</p>
+</section>
+<section id="channel-statistics">
+<h2>Channel Statistics<a class="headerlink" href="#channel-statistics" title="Link to this heading">¶</a></h2>
+<p>The channel statistics widget provides statistics information about
+the current channel displayed and it updates along with the channel
+displayed in the <code class="docutils literal notranslate"><span class="pre">image</span></code> widget. It is incorporated into the
+display just like all of the other elements:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cube</span> <span class="o">=</span> <span class="n">CubeMask</span><span class="p">(</span> <span class="s1">'g35_sma_usb_12co.image'</span> <span class="p">)</span>
+<span class="n">done</span> <span class="o">=</span> <span class="n">Button</span><span class="p">(</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Done"</span><span class="p">,</span> <span class="n">width</span><span class="o">=</span><span class="mi">80</span><span class="p">,</span> <span class="n">button_type</span><span class="o">=</span><span class="s2">"danger"</span> <span class="p">)</span>
+<span class="n">layout</span> <span class="o">=</span> <span class="n">row</span><span class="p">(</span> <span class="n">column</span><span class="p">(</span> <span class="n">cube</span><span class="o">.</span><span class="n">image</span><span class="p">(</span> <span class="p">),</span>
+                      <span class="n">row</span><span class="p">(</span> <span class="n">cube</span><span class="o">.</span><span class="n">slider</span><span class="p">(</span> <span class="p">),</span> <span class="n">done</span> <span class="p">)</span> <span class="p">),</span>
+              <span class="n">column</span><span class="p">(</span> <span class="n">cube</span><span class="o">.</span><span class="n">statistics</span><span class="p">(</span> <span class="p">),</span>
+                      <span class="n">cube</span><span class="o">.</span><span class="n">spectra</span><span class="p">(</span> <span class="n">width</span><span class="o">=</span><span class="mi">400</span> <span class="p">)</span> <span class="p">)</span> <span class="p">)</span>
+
+<span class="n">done</span><span class="o">.</span><span class="n">js_on_click</span><span class="p">(</span> <span class="n">CustomJS</span><span class="p">(</span> <span class="n">args</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span> <span class="n">obj</span><span class="o">=</span><span class="n">cube</span><span class="o">.</span><span class="n">js_obj</span><span class="p">(</span> <span class="p">)</span> <span class="p">),</span>
+                            <span class="n">code</span><span class="o">=</span><span class="s2">"obj.done( )"</span> <span class="p">)</span> <span class="p">)</span>
+<span class="n">cube</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span> <span class="p">)</span>
+<span class="n">show</span><span class="p">(</span> <span class="n">layout</span> <span class="p">)</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">loop</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">get_event_loop</span><span class="p">(</span> <span class="p">)</span>
+    <span class="n">loop</span><span class="o">.</span><span class="n">run_until_complete</span><span class="p">(</span><span class="n">cube</span><span class="o">.</span><span class="n">loop</span><span class="p">(</span> <span class="p">))</span>
+    <span class="n">loop</span><span class="o">.</span><span class="n">run_forever</span><span class="p">(</span> <span class="p">)</span>
+<span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'</span><span class="se">\n</span><span class="s1">Interrupt received, stopping GUI...'</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span> <span class="sa">f</span><span class="s2">"cube exited with </span><span class="si">{</span><span class="n">cube</span><span class="o">.</span><span class="n">result</span><span class="p">(</span><span class="w"> </span><span class="p">)</span><span class="si">}</span><span class="s2">"</span> <span class="p">)</span>
+</pre></div>
+</div>
+<a class="reference internal image-reference" href="../../_images/image-slider-spectra-done-stats.png"><img alt="Image Cube w Slider Spectra and Button" src="../../_images/image-slider-spectra-done-stats.png" width="600" />
+</a>
+<p>Here the elements have been rearranged to so how easy it is to organize
+the display.</p>
+</section>
+<section id="implementation">
+<h2>Implementation<a class="headerlink" href="#implementation" title="Link to this heading">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">CubeMask</span></code> implementation uses the Bokeh <a class="reference external" href="https://docs.bokeh.org/en/latest/docs/reference/plotting/figure.html?highlight=figure#bokeh.plotting.figure">figure</a>
+to implement the image and spectra display. It also uses <a class="reference external" href="https://docs.bokeh.org/en/latest/docs/reference/models/widgets/sliders.html?highlight=slider#bokeh.models.Slider">Slider</a> and
+<a class="reference external" href="https://docs.bokeh.org/en/latest/docs/reference/models/widgets/tables.html?highlight=datatable#bokeh.models.DataTable">DataTable</a>.
+These are updated from Python using <a class="reference external" href="https://websockets.readthedocs.io/en/stable/">websockets</a> to request (from GUI) and receive (from Python) the data updates
+for the GUI elements.</p>
+<p>Two websockets are used by <code class="docutils literal notranslate"><span class="pre">CubeMask</span></code>. One websocket is devoted to updating the image and statistics, which
+are both updated with the same message. The other websocket is used for control. Currently, just signaling
+that the GUI should shutdown, but later it may be used for other control messages.</p>
+</section>
+<section id="conclusion">
+<h2>Conclusion<a class="headerlink" href="#conclusion" title="Link to this heading">¶</a></h2>
+<p>In addition to the elements shown above there is a <code class="docutils literal notranslate"><span class="pre">help</span></code> text box which
+can be used to provide a description of how to interact with the <code class="docutils literal notranslate"><span class="pre">CubeMask</span></code>
+interfaces. This text box can be added to the GUI and shown and hidden as
+desired.</p>
+<p>The goal of the design of <code class="docutils literal notranslate"><span class="pre">CubeMask</span></code> is to incorporate added functionality
+that is specific to our use case without interfering with the the integration
+of these elements into Bokeh displays. This means that the Bokeh elements must
+be exposed while also adding our extensions behind the scenes.</p>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          
+          <a class="prev-page" href="../boundary.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">CASA/Viz Boundary</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2021-2026 Associated Universities, Inc. Washington DC, USA.
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Cube Mask Design</a><ul>
+<li><a class="reference internal" href="#image">Image</a></li>
+<li><a class="reference internal" href="#spectra-z-axis-display">Spectra (Z-Axis) Display</a></li>
+<li><a class="reference internal" href="#integration-with-bokeh">Integration with Bokeh</a></li>
+<li><a class="reference internal" href="#channel-statistics">Channel Statistics</a></li>
+<li><a class="reference internal" href="#implementation">Implementation</a></li>
+<li><a class="reference internal" href="#conclusion">Conclusion</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script data-current="dev/docs-site/" data-site="/cubevis/" src="../../_static/js/versions.js?v=56d3ce4a"></script>
+    </body>
+</html>

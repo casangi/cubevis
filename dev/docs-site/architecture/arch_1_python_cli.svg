@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+<defs><marker id="a-ws" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#1F6FB2"/></marker><marker id="a-comms" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-ccomm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-evaljs" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-bc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0F8B8D"/></marker><marker id="a-ssh" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#C0392B"/></marker><marker id="a-pipe" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2E7D5B"/></marker><marker id="a-fs" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#555555"/></marker></defs>
+<rect width="1600" height="900" fill="white"/>
+<rect x="40" y="140" width="1520" height="650" rx="18" fill="#F3F5F8" stroke="#8A94A0" stroke-width="2.5" stroke-dasharray="10 6"/>
+<text x="60" y="172" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="#4A5563" text-anchor="start" >User's host (laptop / workstation)</text>
+<rect x="110" y="200" width="560" height="420" rx="10" fill="white" stroke="#3B6EA8" stroke-width="2.5"/>
+<path d="M110 244 V210 a10 10 0 0 1 10 -10 H660 a10 10 0 0 1 10 10 V244 Z" fill="#3B6EA8"/>
+<text x="390.0" y="229" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Python process  (python / ipython)</text>
+<rect x="140" y="260" width="500" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="390.0" y="296.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >User script / REPL</text>
+<rect x="140" y="330" width="500" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="390.0" y="357.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >VisibilityPlotter</text>
+<text x="390.0" y="379.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >Showable.show() writes the HTML page</text>
+<rect x="140" y="400" width="500" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="390.0" y="427.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >CommMgr</text>
+<text x="390.0" y="449.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >WebSocketTransport (websockets.serve)</text>
+<rect x="140" y="470" width="500" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="390.0" y="497.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >VisibilityRaster / VisibilityScatter</text>
+<text x="390.0" y="519.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >VisibilityPlot (Bokeh Models)</text>
+<rect x="140" y="540" width="500" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="390.0" y="567.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >LocalVisibilityReader</text>
+<text x="390.0" y="589.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >MSv2Backend / MSv4Backend (XArrayReader)</text>
+<rect x="930" y="200" width="560" height="420" rx="10" fill="white" stroke="#C9711F" stroke-width="2.5"/>
+<path d="M930 244 V210 a10 10 0 0 1 10 -10 H1480 a10 10 0 0 1 10 10 V244 Z" fill="#C9711F"/>
+<text x="1210.0" y="229" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Browser process</text>
+<rect x="960" y="260" width="500" height="130" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1210.0" y="322.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >cubevis GUI (BokehJS)</text>
+<text x="1210.0" y="344.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >VisibilityPlotter layout · plots · sidebar · tools</text>
+<rect x="960" y="400" width="500" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1210.0" y="427.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >CommMgr / Comm (JS)</text>
+<text x="1210.0" y="449.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >casalib.min.js · reconnects on sleep / reload</text>
+<path d="M640 430 L960 430" fill="none" stroke="#1F6FB2" stroke-width="5"  marker-start="url(#a-ws)" marker-end="url(#a-ws)"/>
+<text x="800" y="415" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1F6FB2" text-anchor="middle" >WebSocket</text>
+<text x="800" y="458" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >JSON + binary payloads</text>
+<path d="M720 655 H858 L880 677 V750 H720 Z" fill="white" stroke="#555" stroke-width="2"/>
+<path d="M858 655 V677 H880" fill="#E4E7EB" stroke="#555" stroke-width="2"/>
+<text x="800.0" y="702.5" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#222" text-anchor="middle" >HTML page</text>
+<text x="800.0" y="724.5" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#5A6573" text-anchor="middle" >generated by Bokeh</text>
+<path d="M600 620 L600 700 L720 700" fill="none" stroke="#555555" stroke-width="5"   marker-end="url(#a-fs)"/>
+<path d="M880 700 L1210 700 L1210 620" fill="none" stroke="#555555" stroke-width="5"   marker-end="url(#a-fs)"/>
+<text x="1225" y="680" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="start" >browser opens file</text>
+<path d="M390 600 L390 660" fill="none" stroke="#555555" stroke-width="5"   marker-end="url(#a-fs)"/>
+<path d="M240.0 679 V756 A150.0 14 0 0 0 540.0 756 V679" fill="#FFF7E0" stroke="#A88A2E" stroke-width="2"/>
+<ellipse cx="390" cy="679" rx="150.0" ry="14" fill="#FFEFC2" stroke="#A88A2E" stroke-width="2"/>
+<text x="390" y="727.5" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >Measurement Set</text>
+<text x="390" y="749.5" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#5A6573" text-anchor="middle" >MSv2 (casacore)  /  MSv4 (Zarr)</text>
+<text x="40" y="62" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="bold" fill="#1C2733" text-anchor="start" >Python CLI</text>
+<text x="40" y="102" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="normal" fill="#4A5563" text-anchor="start" >Everything on one host: Bokeh writes an HTML page, the browser opens it, then GUI traffic flows over a WebSocket.</text>
+<line x1="40" y1="845" x2="90" y2="845" stroke="#1F6FB2" stroke-width="5" />
+<text x="100" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >WebSocket</text>
+<line x1="218.39999999999998" y1="845" x2="268.4" y2="845" stroke="#555555" stroke-width="5" />
+<text x="278.4" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >File I/O</text>
+<text x="1560" y="885" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#8A94A0" text-anchor="end" font-style="italic">Draft · v0.3</text>
+</svg>

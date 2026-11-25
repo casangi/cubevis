@@ -1,0 +1,1024 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="next" title="Coming from AIPS" href="from_aips.html"><link rel="prev" title="What visplot can do" href="index.html">
+        <link rel="canonical" href="https://casangi.github.io/cubevis/applications/capabilities/from_plotms.html">
+
+    <!-- Generated with Sphinx 9.1.1 and Furo 2025.12.19 -->
+        <title>Coming from plotms - cubevis 1.1</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/s4defs-roles.css?v=4e6db181" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/cubevis-docs.css?v=8a4cc0d1" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+<div class="announcement">
+  <aside class="announcement-content">
+     This is the documentation for cubevis 1.1. The <a href="https://casangi.github.io/cubevis/">latest documentation</a> describes the current development version. 
+  </aside>
+</div>
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../../index.html"><div class="brand">cubevis 1.1</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
+  
+  <span class="sidebar-brand-text">cubevis 1.1</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Installing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../remote_kernels.html">Setting up remote execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../visplot_starting.html">Starting visplot</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../visplot.html">The visplot window</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../visplot_help.html">visplot controls, in full</a></li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">What visplot can do</a><input aria-label="Toggle navigation of What visplot can do" checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Coming from plotms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="from_aips.html">Coming from AIPS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_access.html">Data formats and access</a></li>
+<li class="toctree-l2"><a class="reference internal" href="selection.html">Selecting data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="plot_types.html">Rasters, scatter plots and layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="standard_views.html">Standard views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="quantities.html">Plotted quantities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="phase_stability.html">Phase stability: Phase RMS and Coherence</a></li>
+<li class="toctree-l2"><a class="reference internal" href="vector_difference.html">Difference from the mean: Amp V Diff and Phase Diff</a></li>
+<li class="toctree-l2"><a class="reference internal" href="z_score.html">Z-Score</a></li>
+<li class="toctree-l2"><a class="reference internal" href="averaging.html">Averaging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="colormaps.html">Colormaps and color scaling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="flagging.html">Flagging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="output.html">Saving and describing plots</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../iclean_starting.html">Starting iclean</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../iclean_parameters.html">iclean parameters</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Slides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../slides.html">Slide decks</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Background and development</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../contributing.html">Writing this documentation</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../historical/index.html">Historical reference</a><input aria-label="Toggle navigation of Historical reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../historical/intro.html">System Design</a><input aria-label="Toggle navigation of System Design" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../historical/applications/interactive_clean_pathfinder.html">Interactive clean as a pathfinder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../historical/applications/interactive_clean.html">Interactive Clean Design</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../historical/boundary.html">CASA/Viz Boundary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../historical/components/cube_mask.html">Cube Mask Design</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../../_sources/applications/capabilities/from_plotms.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section class="tex2jax_ignore mathjax_ignore" id="cap-from-plotms">
+<span id="coming-from-plotms"></span><h1>Coming from plotms<a class="headerlink" href="#cap-from-plotms" title="Link to this heading">¶</a></h1>
+<p>This page goes through CASA <code class="docutils literal notranslate"><span class="pre">plotms</span></code>’s parameters in the order the CASA
+documentation lists them, and gives the <code class="docutils literal notranslate"><span class="pre">visplot</span></code> equivalent of each:
+the Python argument, the value, or the setting in the window.</p>
+<div class="note admonition">
+<p class="admonition-title">Review status</p>
+<p>This table was compiled on 2026-11-16 from the CASA <code class="docutils literal notranslate"><span class="pre">plotms</span></code>
+documentation and the <code class="docutils literal notranslate"><span class="pre">visplot</span></code> source, and <strong>no row has been
+reviewed yet</strong>. When a tester confirms a row, the <em>Reviewed</em> column
+gets their initials and the date. Corrections are welcome, especially
+for rows marked <em>Different</em>.</p>
+</div>
+<p><strong>Status</strong> means:</p>
+<ul class="simple">
+<li><p><strong>Same</strong>: works the same way.</p></li>
+<li><p><strong>Different</strong>: available, but works differently; the note says how.</p></li>
+<li><p><strong>Partial</strong>: some of it is available.</p></li>
+<li><p><strong>Not yet</strong>: not available.</p></li>
+<li><p><strong>N/A</strong>: does not apply to how <code class="docutils literal notranslate"><span class="pre">visplot</span></code> draws.</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">visplot</span></code>’s arguments are those of the <code class="docutils literal notranslate"><span class="pre">visplot(...)</span></code> task call; see
+<a class="reference internal" href="../visplot_starting.html"><span class="std std-doc">Starting visplot</span></a>.</p>
+<section id="data-and-selection">
+<h2>Data and selection<a class="headerlink" href="#data-and-selection" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>plotms</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">vis</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">vis</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>MSv2 or MSv4; the format is detected</p></td>
+<td><p><a class="reference internal" href="data_access.html#cap-data"><span class="std std-ref">Data</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">caltable</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>Calibration tables cannot be plotted</p></td>
+<td><p><a class="reference internal" href="data_access.html#cap-data-limits"><span class="std std-ref">Data</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">xdatacolumn</span></code>, <code class="docutils literal notranslate"><span class="pre">ydatacolumn</span></code>: <code class="docutils literal notranslate"><span class="pre">data</span></code>, <code class="docutils literal notranslate"><span class="pre">corrected</span></code>, <code class="docutils literal notranslate"><span class="pre">model</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">datacolumn</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>One column for the whole plot, not one per axis</p></td>
+<td><p><a class="reference internal" href="data_access.html#cap-data"><span class="std std-ref">Data</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">xdatacolumn</span></code>, <code class="docutils literal notranslate"><span class="pre">ydatacolumn</span></code>: <code class="docutils literal notranslate"><span class="pre">float</span></code>, residuals (<code class="docutils literal notranslate"><span class="pre">corrected-model</span></code> …), ratios</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="data_access.html#cap-data-limits"><span class="std std-ref">Data</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">field</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">field</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">spw</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">spw</span></code></p></td>
+<td><p>Partial</p></td>
+<td><p>Spectral windows by index; no <code class="docutils literal notranslate"><span class="pre">spw:chan</span></code> channel ranges</p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection-limits"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">timerange</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timerange</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>One range</p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">uvrange</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">uvrange</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">antenna</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">antenna</span></code></p></td>
+<td><p>Partial</p></td>
+<td><p>Names, IDs, <code class="docutils literal notranslate"><span class="pre">!</span></code> exclusion and <code class="docutils literal notranslate"><span class="pre">NAME&amp;NAME</span></code> baselines</p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection-limits"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">scan</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scan</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">correlation</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">correlation</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>Stokes conversion is not offered</p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">array</span></code>, <code class="docutils literal notranslate"><span class="pre">observation</span></code>, <code class="docutils literal notranslate"><span class="pre">intent</span></code>, <code class="docutils literal notranslate"><span class="pre">feed</span></code>, <code class="docutils literal notranslate"><span class="pre">msselect</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>autocorrelations, selected through <code class="docutils literal notranslate"><span class="pre">antenna</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">autocorr</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>A separate setting: <code class="docutils literal notranslate"><span class="pre">&quot;exclude&quot;</span></code> (the default), <code class="docutils literal notranslate"><span class="pre">&quot;include&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;only&quot;</span></code></p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="averaging">
+<h2>Averaging<a class="headerlink" href="#averaging" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>plotms</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">avgtime</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scatter_avg_time</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>Seconds or <code class="docutils literal notranslate"><span class="pre">&quot;scan&quot;</span></code>, per plot. Never across a scan boundary. A raster cell instead averages what it covers</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">avgchannel</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scatter_avg_chan</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>A number of channels, or <code class="docutils literal notranslate"><span class="pre">&quot;all&quot;</span></code></p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">avgscan</span></code>, <code class="docutils literal notranslate"><span class="pre">avgfield</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>Time averaging never crosses scans or fields</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging-limits"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">avgbaseline</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">baseline_combine</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>Rasters only: the baselines in a cell are combined as mean, median, maximum or coherent</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging-calc"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">avgantenna</span></code>, <code class="docutils literal notranslate"><span class="pre">avgspw</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging-limits"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">scalar</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">averaging=&quot;scalar&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;vector&quot;</span></code> is the default, as in plotms</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>averages weighted by the data weights</p></td>
+<td><p></p></td>
+<td><p>Different</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">visplot</span></code> does not use the weights: every unflagged sample counts equally</p></td>
+<td><p><a class="reference internal" href="averaging.html#cap-averaging-calc"><span class="std std-ref">Averaging</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="transformations">
+<h2>Transformations<a class="headerlink" href="#transformations" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>plotms</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">freqframe</span></code>, <code class="docutils literal notranslate"><span class="pre">restfreq</span></code>, <code class="docutils literal notranslate"><span class="pre">veldef</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>There is no velocity axis</p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">phasecenter</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="flag-extension">
+<h2>Flag extension<a class="headerlink" href="#flag-extension" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>plotms</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">extendflag</span></code>, <code class="docutils literal notranslate"><span class="pre">extcorr</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_reach=&quot;correlations&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">extchannel</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_reach=&quot;channels&quot;</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_reach</span></code>: baselines, spectral windows, scan, fields</p></td>
+<td><p>(more)</p></td>
+<td><p>Reaches plotms does not have; for a raster box with the <em>All selected</em> filter</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging-calc"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="iteration-and-grids">
+<h2>Iteration and grids<a class="headerlink" href="#iteration-and-grids" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>plotms</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">iteraxis</span></code>: <code class="docutils literal notranslate"><span class="pre">scan</span></code>, <code class="docutils literal notranslate"><span class="pre">field</span></code>, <code class="docutils literal notranslate"><span class="pre">spw</span></code>, <code class="docutils literal notranslate"><span class="pre">baseline</span></code>, <code class="docutils literal notranslate"><span class="pre">antenna</span></code>, <code class="docutils literal notranslate"><span class="pre">corr</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">layout=&quot;grid&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">iterate_by</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>Two axes can be combined (<code class="docutils literal notranslate"><span class="pre">&quot;antenna,spw&quot;</span></code>)</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">iteraxis=&quot;time&quot;</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots-limits"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">gridrows</span></code>, <code class="docutils literal notranslate"><span class="pre">gridcols</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gridrows</span></code>, <code class="docutils literal notranslate"><span class="pre">gridcols</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>For iteration only (1–8). Two different plots are two panels (<code class="docutils literal notranslate"><span class="pre">layout=&quot;side&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;over&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">panels=</span></code>)</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rowindex</span></code>, <code class="docutils literal notranslate"><span class="pre">colindex</span></code>, <code class="docutils literal notranslate"><span class="pre">plotindex</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">panels=[{...},</span> <span class="pre">{...}]</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>At most two independently configured panels</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots-limits"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">xselfscale</span></code>, <code class="docutils literal notranslate"><span class="pre">yselfscale</span></code>, <code class="docutils literal notranslate"><span class="pre">xsharedaxis</span></code>, <code class="docutils literal notranslate"><span class="pre">ysharedaxis</span></code></p></td>
+<td><p></p></td>
+<td><p>Different</p></td>
+<td><p>A grid has a common or per-plot axis scale, set in the window; <code class="docutils literal notranslate"><span class="pre">gridcolor</span></code> does the same for the color range</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="axes">
+<h2>Axes<a class="headerlink" href="#axes" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>plotms</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">time</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TIME</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>UTC by default, or elapsed (<code class="docutils literal notranslate"><span class="pre">time_labels</span></code>)</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">chan</span></code>, <code class="docutils literal notranslate"><span class="pre">freq</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">CHANNEL</span></code>, <code class="docutils literal notranslate"><span class="pre">FREQUENCY</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>Frequency is a scatter X axis; a raster’s Channel axis reads frequency across several spectral windows</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">vel</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">amp</span></code>, <code class="docutils literal notranslate"><span class="pre">phase</span></code>, <code class="docutils literal notranslate"><span class="pre">real</span></code>, <code class="docutils literal notranslate"><span class="pre">imag</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">AMPLITUDE</span></code>, <code class="docutils literal notranslate"><span class="pre">PHASE</span></code>, <code class="docutils literal notranslate"><span class="pre">REAL</span></code>, <code class="docutils literal notranslate"><span class="pre">IMAGINARY</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="quantities.html#cap-quantities"><span class="std std-ref">Quantities</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">uvdist</span></code>, <code class="docutils literal notranslate"><span class="pre">uvwave</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">UVDIST</span></code>, <code class="docutils literal notranslate"><span class="pre">UVDIST_LAMBDA</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>Scatter X axis</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">u</span></code>, <code class="docutils literal notranslate"><span class="pre">v</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">U</span></code>, <code class="docutils literal notranslate"><span class="pre">V</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>U against V gives UV coverage</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">w</span></code>, <code class="docutils literal notranslate"><span class="pre">uwave</span></code>, <code class="docutils literal notranslate"><span class="pre">vwave</span></code>, <code class="docutils literal notranslate"><span class="pre">wwave</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">baseline</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">BASELINE</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>A raster axis, by number or by length (<code class="docutils literal notranslate"><span class="pre">baseline_order</span></code>)</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ant1</span></code>, <code class="docutils literal notranslate"><span class="pre">ant2</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ANTENNA1</span></code> × <code class="docutils literal notranslate"><span class="pre">ANTENNA2</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>Together, as the antenna × antenna matrix raster</p></td>
+<td><p><a class="reference internal" href="standard_views.html#cap-views"><span class="std std-ref">Standard views</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">corr</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>Not an axis; each raster shows one correlation or the parallel hands averaged (<code class="docutils literal notranslate"><span class="pre">raster_corr</span></code>), and a scatter shows correlations as layers</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots-limits"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">scan</span></code>, <code class="docutils literal notranslate"><span class="pre">field</span></code>, <code class="docutils literal notranslate"><span class="pre">spw</span></code> as axes</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>Available for coloring and iteration instead</p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">flag</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">FLAG</span></code> (raster)</p></td>
+<td><p>Different</p></td>
+<td><p>The flagged fraction of each cell; flagged data can also be shown (<code class="docutils literal notranslate"><span class="pre">flag_show_flagged</span></code>)</p></td>
+<td><p><a class="reference internal" href="quantities.html#cap-quantities"><span class="std std-ref">Quantities</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">wt</span></code>, <code class="docutils literal notranslate"><span class="pre">wtamp</span></code>, <code class="docutils literal notranslate"><span class="pre">wtsp</span></code>, <code class="docutils literal notranslate"><span class="pre">sigma</span></code>, <code class="docutils literal notranslate"><span class="pre">sigmasp</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="quantities.html#cap-quantities-limits"><span class="std std-ref">Quantities</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">interval</span></code>, <code class="docutils literal notranslate"><span class="pre">row</span></code>, <code class="docutils literal notranslate"><span class="pre">observation</span></code>, <code class="docutils literal notranslate"><span class="pre">intent</span></code>, <code class="docutils literal notranslate"><span class="pre">feed1</span></code>, <code class="docutils literal notranslate"><span class="pre">feed2</span></code>, <code class="docutils literal notranslate"><span class="pre">flagrow</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">azimuth</span></code>, <code class="docutils literal notranslate"><span class="pre">elevation</span></code>, <code class="docutils literal notranslate"><span class="pre">hourang</span></code>, <code class="docutils literal notranslate"><span class="pre">parang</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots-limits"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>antenna-based and calibration axes (<code class="docutils literal notranslate"><span class="pre">ant-azimuth</span></code>, <code class="docutils literal notranslate"><span class="pre">gainamp</span></code>, <code class="docutils literal notranslate"><span class="pre">delay</span></code>, <code class="docutils literal notranslate"><span class="pre">tsys</span></code>, …)</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">PHASE_RMS</span></code>, <code class="docutils literal notranslate"><span class="pre">COHERENCE</span></code>, <code class="docutils literal notranslate"><span class="pre">AMP_VDIFF</span></code>, <code class="docutils literal notranslate"><span class="pre">PHASE_DIFF</span></code>, <code class="docutils literal notranslate"><span class="pre">Z_SCORE</span></code></p></td>
+<td><p>(more)</p></td>
+<td><p>Quantities plotms does not have</p></td>
+<td><p><a class="reference internal" href="quantities.html#cap-quantities-calc"><span class="std std-ref">Quantities</span></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="display">
+<h2>Display<a class="headerlink" href="#display" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>plotms</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">coloraxis</span></code>: <code class="docutils literal notranslate"><span class="pre">scan</span></code>, <code class="docutils literal notranslate"><span class="pre">field</span></code>, <code class="docutils literal notranslate"><span class="pre">spw</span></code>, <code class="docutils literal notranslate"><span class="pre">antenna1</span></code>, <code class="docutils literal notranslate"><span class="pre">antenna2</span></code>, <code class="docutils literal notranslate"><span class="pre">baseline</span></code></p></td>
+<td><p>scatter layer coloring</p></td>
+<td><p>Same</p></td>
+<td><p>Also coloring by Z-Score</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">coloraxis</span></code>: <code class="docutils literal notranslate"><span class="pre">corr</span></code></p></td>
+<td><p>scatter layers</p></td>
+<td><p>Different</p></td>
+<td><p>Each correlation is a layer in its own color</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">coloraxis</span></code>: <code class="docutils literal notranslate"><span class="pre">channel</span></code>, <code class="docutils literal notranslate"><span class="pre">time</span></code>, <code class="docutils literal notranslate"><span class="pre">observation</span></code>, <code class="docutils literal notranslate"><span class="pre">intent</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">clearplots=False</span></code> (overplot)</p></td>
+<td><p>scatter layers</p></td>
+<td><p>Different</p></td>
+<td><p>Layers in one scatter plot</p></td>
+<td><p><a class="reference internal" href="plot_types.html#cap-plots"><span class="std std-ref">Plots</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">customsymbol</span></code>, <code class="docutils literal notranslate"><span class="pre">symbolshape</span></code>, <code class="docutils literal notranslate"><span class="pre">symbolsize</span></code>, <code class="docutils literal notranslate"><span class="pre">symbolcolor</span></code>, …</p></td>
+<td><p></p></td>
+<td><p>N/A</p></td>
+<td><p>Points are drawn as density; the colormap is selectable (<code class="docutils literal notranslate"><span class="pre">scatter_cmap</span></code>)</p></td>
+<td><p><a class="reference internal" href="colormaps.html#cap-colormaps"><span class="std std-ref">Colormaps</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">customflaggedsymbol</span></code>, <code class="docutils literal notranslate"><span class="pre">flaggedsymbolcolor</span></code>, …</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">flag_show_flagged</span></code>, <code class="docutils literal notranslate"><span class="pre">flag_flagged_color</span></code></p></td>
+<td><p>Same</p></td>
+<td><p></p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">plotrange</span></code></p></td>
+<td><p></p></td>
+<td><p>Different</p></td>
+<td><p>Zoom in the window; <code class="docutils literal notranslate"><span class="pre">time_range</span></code> / <code class="docutils literal notranslate"><span class="pre">uvrange</span></code> narrow the data instead</p></td>
+<td><p><a class="reference internal" href="selection.html#cap-selection"><span class="std std-ref">Selection</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">title</span></code>, <code class="docutils literal notranslate"><span class="pre">xlabel</span></code>, <code class="docutils literal notranslate"><span class="pre">ylabel</span></code>, fonts, grid lines, <code class="docutils literal notranslate"><span class="pre">legendposition</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>Titles and legends are generated</p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">xconnector</span></code>, <code class="docutils literal notranslate"><span class="pre">timeconnector</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">showatm</span></code>, <code class="docutils literal notranslate"><span class="pre">showtsky</span></code>, <code class="docutils literal notranslate"><span class="pre">showimage</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="export-and-other">
+<h2>Export and other<a class="headerlink" href="#export-and-other" title="Link to this heading">¶</a></h2>
+<div class="crosswalk docutils container">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>plotms</p></th>
+<th class="head"><p>visplot</p></th>
+<th class="head"><p>Status</p></th>
+<th class="head"><p>Notes</p></th>
+<th class="head"><p>See</p></th>
+<th class="head"><p>Reviewed</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">plotfile</span></code> (PNG)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">plotfile</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>Writes the PNG instead of opening the window</p></td>
+<td><p><a class="reference internal" href="output.html#cap-output"><span class="std std-ref">Output</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">expformat</span></code>: <code class="docutils literal notranslate"><span class="pre">jpg</span></code>, <code class="docutils literal notranslate"><span class="pre">pdf</span></code>, <code class="docutils literal notranslate"><span class="pre">ps</span></code>, <code class="docutils literal notranslate"><span class="pre">txt</span></code></p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p>PNG only</p></td>
+<td><p><a class="reference internal" href="output.html#cap-output"><span class="std std-ref">Output</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">exprange</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">exprange</span></code></p></td>
+<td><p>Same</p></td>
+<td><p>Also page numbers, such as <code class="docutils literal notranslate"><span class="pre">&quot;1-3,5&quot;</span></code></p></td>
+<td><p><a class="reference internal" href="output.html#cap-output"><span class="std std-ref">Output</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">width</span></code>, <code class="docutils literal notranslate"><span class="pre">height</span></code>, <code class="docutils literal notranslate"><span class="pre">dpi</span></code>, <code class="docutils literal notranslate"><span class="pre">highres</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">row_height</span></code>, <code class="docutils literal notranslate"><span class="pre">column_width</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>Sizes per row and column of plots, in pixels</p></td>
+<td><p><a class="reference internal" href="output.html#cap-output"><span class="std std-ref">Output</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">showgui=False</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">plotfile</span></code></p></td>
+<td><p>Different</p></td>
+<td><p>Giving <code class="docutils literal notranslate"><span class="pre">plotfile</span></code> implies no window</p></td>
+<td><p><a class="reference internal" href="output.html#cap-output"><span class="std std-ref">Output</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">headeritems</span></code></p></td>
+<td><p>plot description page</p></td>
+<td><p>Different</p></td>
+<td><p>Every setting of the plot, and the call that reproduces it</p></td>
+<td><p><a class="reference internal" href="output.html#cap-output"><span class="std std-ref">Output</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">callib</span></code> (on-the-fly calibration)</p></td>
+<td><p></p></td>
+<td><p>Not yet</p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>Locate (GUI)</p></td>
+<td><p>cursor readout</p></td>
+<td><p>Partial</p></td>
+<td><p>The readout names the baseline, time and value under the pointer; there is no list of selected points</p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>Flag / Unflag (GUI)</p></td>
+<td><p>flag and unflag boxes</p></td>
+<td><p>Same</p></td>
+<td><p>With filters, preview, undo and a backup before writing</p></td>
+<td><p><a class="reference internal" href="flagging.html#cap-flagging"><span class="std std-ref">Flagging</span></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>Reload (GUI)</p></td>
+<td><p>Reload</p></td>
+<td><p>Same</p></td>
+<td><p>Re-reads the data from disk</p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="sources">
+<h2>Sources<a class="headerlink" href="#sources" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>CASA documentation, <a class="reference external" href="https://casadocs.readthedocs.io/en/latest/api/tt/casaplotms.plotms.html"><code class="docutils literal notranslate"><span class="pre">plotms</span></code> task</a>.</p></li>
+</ul>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="from_aips.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Coming from AIPS</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="index.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">What visplot can do</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2021-2026 Associated Universities, Inc. Washington DC, USA.
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Coming from plotms</a><ul>
+<li><a class="reference internal" href="#data-and-selection">Data and selection</a></li>
+<li><a class="reference internal" href="#averaging">Averaging</a></li>
+<li><a class="reference internal" href="#transformations">Transformations</a></li>
+<li><a class="reference internal" href="#flag-extension">Flag extension</a></li>
+<li><a class="reference internal" href="#iteration-and-grids">Iteration and grids</a></li>
+<li><a class="reference internal" href="#axes">Axes</a></li>
+<li><a class="reference internal" href="#display">Display</a></li>
+<li><a class="reference internal" href="#export-and-other">Export and other</a></li>
+<li><a class="reference internal" href="#sources">Sources</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../../_static/documentation_options.js?v=56dcb7b8"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script data-current="v1.1/" data-site="/cubevis/" src="../../_static/js/versions.js?v=56d3ce4a"></script>
+    </body>
+</html>

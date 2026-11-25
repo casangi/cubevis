@@ -1,0 +1,1077 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="iclean parameters" href="iclean_parameters.html"><link rel="prev" title="Saving and describing plots" href="capabilities/output.html">
+        <link rel="canonical" href="https://casangi.github.io/cubevis/applications/iclean_starting.html">
+
+    <!-- Generated with Sphinx 9.1.1 and Furo 2025.12.19 -->
+        <title>Starting iclean - cubevis (docs-site)</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/s4defs-roles.css?v=4e6db181" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/cubevis-docs.css?v=8a4cc0d1" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style>
+    <meta name="robots" content="noindex, nofollow"></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+<div class="announcement">
+  <aside class="announcement-content">
+     Preview of the <code>docs-site</code> branch, not yet merged. The <a href="https://casangi.github.io/cubevis/">published documentation</a> is the one to cite or link to. 
+  </aside>
+</div>
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">cubevis (docs-site)</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  <span class="sidebar-brand-text">cubevis (docs-site)</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="installing.html">Installing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="remote_kernels.html">Setting up remote execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="visplot_starting.html">Starting visplot</a></li>
+<li class="toctree-l1"><a class="reference internal" href="visplot.html">The visplot window</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="capabilities/index.html">What visplot can do</a><input aria-label="Toggle navigation of What visplot can do" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/from_plotms.html">Coming from plotms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/from_aips.html">Coming from AIPS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/data_access.html">Data formats and access</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/selection.html">Selecting data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/plot_types.html">Rasters, scatter plots and layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/standard_views.html">Standard views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/quantities.html">Plotted quantities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/phase_stability.html">Phase stability: Phase RMS and Coherence</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/vector_difference.html">Difference from the mean: Amp V Diff and Phase Diff</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/z_score.html">Z-Score</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/averaging.html">Averaging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/colormaps.html">Colormaps and color scaling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/flagging.html">Flagging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="capabilities/output.html">Saving and describing plots</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Starting iclean</a></li>
+<li class="toctree-l1"><a class="reference internal" href="iclean_parameters.html">iclean parameters</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Slides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../slides.html">Slide decks</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Background and development</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../contributing.html">Writing this documentation</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../historical/index.html">Historical reference</a><input aria-label="Toggle navigation of Historical reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../historical/intro.html">System Design</a><input aria-label="Toggle navigation of System Design" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../historical/applications/interactive_clean_pathfinder.html">Interactive clean as a pathfinder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../historical/applications/interactive_clean.html">Interactive Clean Design</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../historical/boundary.html">CASA/Viz Boundary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../historical/components/cube_mask.html">Cube Mask Design</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/applications/iclean_starting.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section class="tex2jax_ignore mathjax_ignore" id="starting-iclean">
+<h1>Starting iclean<a class="headerlink" href="#starting-iclean" title="Link to this heading">¶</a></h1>
+<p><code class="docutils literal notranslate"><span class="pre">iclean</span></code> is interactive clean: it runs CASA’s image reconstruction,
+<code class="docutils literal notranslate"><span class="pre">tclean</span></code>, one cycle at a time, and shows the residual image, the mask and
+the convergence in a window where you can change the mask and the
+iteration control between cycles.</p>
+<p><code class="docutils literal notranslate"><span class="pre">iclean</span></code> takes <code class="docutils literal notranslate"><span class="pre">tclean</span></code>’s parameters, and its documentation is <code class="docutils literal notranslate"><span class="pre">tclean</span></code>’s:</p>
+<div class="pydoc-box docutils container">
+<p class="pydoc-source">iclean · from the Python source: <a class="reference external" href="https://github.com/casangi/cubevis/blob/docs-site/cubevis/private/casatasks/iclean.py"><code class="docutils literal notranslate"><span class="pre">_iclean</span></code></a></p>
+<p>tclean — Radio Interferometric Image Reconstruction</p>
+<p>Form images from visibilities and reconstruct a sky model. This task handles continuum images and spectral line cubes, supports outlier fields, contains standard clean based algorithms along with algorithms for multi-scale and wideband image reconstruction, widefield imaging correcting for the w-term, full primary-beam imaging and joint mosaic imaging (with heterogeneous array support for ALMA).</p>
+</div>
+<section id="before-you-start">
+<h2>Before you start<a class="headerlink" href="#before-you-start" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>An environment with <code class="docutils literal notranslate"><span class="pre">cubevis[iclean]</span></code>, which brings in CASA6’s
+<code class="docutils literal notranslate"><span class="pre">casatasks</span></code> and <code class="docutils literal notranslate"><span class="pre">casatools</span></code>: see <a class="reference internal" href="installing.html"><span class="std std-doc">Installing</span></a>.</p></li>
+<li><p>A calibrated measurement set.</p></li>
+</ul>
+</section>
+<section id="starting">
+<h2>Starting<a class="headerlink" href="#starting" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">iclean</span></code> is called as <code class="docutils literal notranslate"><span class="pre">tclean</span></code> is. <code class="docutils literal notranslate"><span class="pre">vis</span></code> and <code class="docutils literal notranslate"><span class="pre">imagename</span></code> are required:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cubevis</span><span class="w"> </span><span class="kn">import</span> <span class="n">iclean</span>
+
+<span class="n">iclean</span><span class="p">(</span> <span class="n">vis</span><span class="o">=</span><span class="s1">'refim_twopoints_twochan.ms'</span><span class="p">,</span> <span class="n">imagename</span><span class="o">=</span><span class="s1">'test'</span><span class="p">,</span>
+        <span class="n">imsize</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">cell</span><span class="o">=</span><span class="s1">'8.0arcsec'</span><span class="p">,</span>
+        <span class="n">phasecenter</span><span class="o">=</span><span class="s2">"J2000 19:59:28.500 +40.44.01.50"</span><span class="p">,</span>
+        <span class="n">niter</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">cycleniter</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">deconvolver</span><span class="o">=</span><span class="s1">'hogbom'</span><span class="p">,</span>
+        <span class="n">specmode</span><span class="o">=</span><span class="s1">'mfs'</span><span class="p">,</span> <span class="n">spw</span><span class="o">=</span><span class="s1">'0:0'</span> <span class="p">)</span>
+</pre></div>
+</div>
+<p>The call shows the window in your web browser and runs until you stop
+interactive clean there, then returns its result. The images are written
+as <code class="docutils literal notranslate"><span class="pre">tclean</span></code> writes them, named after <code class="docutils literal notranslate"><span class="pre">imagename</span></code>.</p>
+<p>The measurement set of this example can be
+<a class="reference external" href="https://casa.nrao.edu/download/devel/casavis/data/refim_twopoints_twochan-ms.tar.gz">downloaded</a>.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>A screenshot of the window, and a tour of its controls, will be added
+here when the layout is final.</p>
+</div>
+<div class="pydoc-box docutils container">
+<p class="pydoc-source">iclean parameters · from the Python source: <a class="reference external" href="https://github.com/casangi/cubevis/blob/docs-site/cubevis/private/casatasks/iclean.py"><code class="docutils literal notranslate"><span class="pre">_iclean</span></code></a></p>
+<dl class="pydoc-params">
+<dt id="iclean-param-vis"><code class="pydoc-name docutils literal notranslate"><span class="pre">vis</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">''</span></code></dt><dd><p>Name(s) of input visibility file(s)</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>default: none;
+example: vis='ngc5921.ms'
+         vis=['ngc5921a.ms','ngc5921b.ms']; multiple MSs
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-imagename"><code class="pydoc-name docutils literal notranslate"><span class="pre">imagename</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">''</span></code></dt><dd><p>Pre-name of output images</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>example : imagename='try'
+
+Output images will be (a subset of) :
+
+try.psf           - Point Spread Function (PSF).
+try.residual      - Residual image.
+try.image         - Restored image.
+try.model         - Model image (contains only flux components).
+try.sumwt         - Single pixel image containing sum-of-weights.
+                          (for natural weighting, sensitivity=1/sqrt(sumwt)).
+try.pb            - Primary Beam (PB) model (values depend on the gridder used).
+
+A-projection algorithms (gridder=mosaic,awproject, awp2) will
+compute the following images too.
+
+try.weight        - FT of gridded weights or the
+                          un-normalized sum of PB-square (for all pointings).
+                          Here, PB = sqrt(weight) normalized to a maximum of 1.0.
+
+For multi-term wideband imaging, all relevant images above will
+have additional .tt0,.tt1, etc suffixes to indicate Taylor terms,
+plus the following extra output images.
+try.alpha            - spectral index.
+try.alpha.error   - estimate of error on spectral index.
+try.beta              - spectral curvature (if nterms \&gt; 2).
+
+Tip : Include a directory name in 'imagename' for all
+        output images to be sent there instead of the
+        current working directory : imagename='mydir/try'.
+
+Tip : Restarting an imaging run without changing 'imagename'
+        implies continuation from the existing model image on disk.
+         - If 'startmodel' was initially specified it needs to be set to ""
+           for the restart run (or tclean will exit with an error message).
+         - By default, the residual image and psf will be recomputed
+           but if no changes were made to relevant parameters between
+           the runs, set calcres=False, calcpsf=False to resume directly from
+           the minor cycle without the (unnecessary) first major cycle.
+         To automatically change 'imagename' with a numerical
+         increment, set restart=False (see tclean docs for 'restart').
+
+ Note : All imaging runs will by default produce restored images.
+           For a niter=0 run, this will be redundant and can optionally
+           be turned off via the 'restoration=T/F' parameter.
+</pre></div>
+</div>
+</details></dd>
+</dl>
+</div>
+<section id="in-a-jupyter-notebook">
+<h3>In a Jupyter notebook<a class="headerlink" href="#in-a-jupyter-notebook" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">iclean.notebook(...)</span></code> takes the same parameters and shows the window in
+the notebook cell. It needs the <code class="docutils literal notranslate"><span class="pre">notebook</span></code> extra as well:
+<code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">&quot;cubevis[iclean,notebook]&quot;</span></code>.</p>
+</section>
+<section id="data-on-another-computer">
+<h3>Data on another computer<a class="headerlink" href="#data-on-another-computer" title="Link to this heading">¶</a></h3>
+<p>When the data is on another computer, name a kernel that was set up there
+and give <code class="docutils literal notranslate"><span class="pre">vis</span></code> and <code class="docutils literal notranslate"><span class="pre">imagename</span></code> as they are on that computer:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">iclean</span><span class="p">(</span> <span class="n">vis</span><span class="o">=</span><span class="s2">"twhya.ms"</span><span class="p">,</span> <span class="n">imagename</span><span class="o">=</span><span class="s2">"twhya"</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">kernel_name</span><span class="o">=</span><span class="s2">"cvpost106-iclean"</span> <span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">tclean</span></code> and the image access then run on that computer and only the
+window runs on yours, which needs no CASA. Setting up the kernel, and what
+to know when using one, is described in <a class="reference internal" href="remote_kernels.html"><span class="std std-doc">Setting up remote execution</span></a>.</p>
+<div class="pydoc-box docutils container">
+<p class="pydoc-source">iclean parameters · from the Python source: <a class="reference external" href="https://github.com/casangi/cubevis/blob/docs-site/cubevis/private/casatasks/iclean.py"><code class="docutils literal notranslate"><span class="pre">_iclean</span></code></a></p>
+<dl class="pydoc-params">
+<dt id="iclean-param-kernel-name"><code class="pydoc-name docutils literal notranslate"><span class="pre">kernel_name</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">None</span></code></dt><dd><p>Jupyter kernel to run tclean and the image access on</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>default: None; everything runs in this Python.
+With a kernel name, tclean runs and the images are
+read and written on the kernel's computer, and only
+the window runs here.  vis and imagename are then
+paths on that computer, relative to the kernel's
+working directory, and this computer needs no CASA.
+Kernels are set up with: python -m cubevis.setup
+example: kernel_name='cvpost106-iclean'
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-iclean-backend"><code class="pydoc-name docutils literal notranslate"><span class="pre">iclean_backend</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">'PROD'</span></code></dt><dd><p>Implementation of the clean cycle to use</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>default: 'PROD', the gclean of the installed casatasks.
+Any other value NAME selects a module _gclean_NAME:
+an alternate implementation, or a stub for testing.
+</pre></div>
+</div>
+</details></dd>
+</dl>
+</div>
+</section>
+</section>
+<section id="the-parameters-used-most">
+<h2>The parameters used most<a class="headerlink" href="#the-parameters-used-most" title="Link to this heading">¶</a></h2>
+<p>These are <code class="docutils literal notranslate"><span class="pre">tclean</span></code>’s descriptions. Each opens to the full text with
+<strong>more</strong>.</p>
+<section id="the-image">
+<h3>The image<a class="headerlink" href="#the-image" title="Link to this heading">¶</a></h3>
+<div class="pydoc-box docutils container">
+<p class="pydoc-source">iclean parameters · from the Python source: <a class="reference external" href="https://github.com/casangi/cubevis/blob/docs-site/cubevis/private/casatasks/iclean.py"><code class="docutils literal notranslate"><span class="pre">_iclean</span></code></a></p>
+<dl class="pydoc-params">
+<dt id="iclean-param-imsize"><code class="pydoc-name docutils literal notranslate"><span class="pre">imsize</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">[100]</span></code></dt><dd><p>Number of pixels</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>example:
+
+imsize = [350,250].
+imsize = 500 is equivalent to [500,500].
+
+To take proper advantage of internal optimized FFT routines, the
+number of pixels must be even and factorizable by 2,3,5 only.
+To find the nearest optimal imsize to that desired by the user, please use the following tool method:
+
+from casatools import synthesisutils
+su = synthesisutils()
+su.getOptimumSize(345)
+Output :  360
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-cell"><code class="pydoc-name docutils literal notranslate"><span class="pre">cell</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">[]</span></code></dt><dd><p>Cell size</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>example: cell=['0.5arcsec,'0.5arcsec'] or
+cell=['1arcmin', '1arcmin'].
+cell = '1arcsec' is equivalent to ['1arcsec','1arcsec'].
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-phasecenter"><code class="pydoc-name docutils literal notranslate"><span class="pre">phasecenter</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">''</span></code></dt><dd><p>Phase center of the image (string or field id); if the phasecenter is the name known major solar system object (‘MERCURY’, ‘VENUS’, ‘MARS’, ‘JUPITER’, ‘SATURN’, ‘URANUS’, ‘NEPTUNE’, ‘PLUTO’, ‘SUN’, ‘MOON’) or is an ephemerides table then that source is tracked and the background sources get smeared. There is a special case, when phasecenter=’TRACKFIELD’, which will use the ephemerides or polynomial phasecenter in the FIELD table of the MS’s as the source center to track.</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>     Note : If unspecified, tclean will use the phase-center from the first data field of the MS (or list of MSs) selected for imaging.
+
+                       example: phasecenter='6'.
+phasecenter='J2000 19h30m00 -40d00m00'.
+phasecenter='J2000 292.5deg  -40.0deg'.
+phasecenter='J2000 5.105rad  -0.698rad'.
+phasecenter='ICRS 13:05:27.2780 -049.28.04.458'.
+phasecenter='myComet_ephem.tab'.
+phasecenter='MOON'.
+phasecenter='TRACKFIELD'.
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-stokes"><code class="pydoc-name docutils literal notranslate"><span class="pre">stokes</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">'I'</span></code></dt><dd><p>Stokes Planes to make</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>default='I'; example: stokes='IQUV';
+  Options: 'I','Q','U','V','IV','QU','IQ','UV','IQUV','RR','LL','XX','YY','RRLL','XXYY','pseudoI'
+
+              Note : Due to current internal code constraints, if any correlation pair
+                         is flagged, by default, no data for that row in the MS will be used.
+                         So, in an MS with XX,YY, if only YY is flagged, neither a
+                         Stokes I image nor an XX image can be made from those data points.
+                         In such a situation, please split out only the unflagged correlation into
+                         a separate MS, or use the option 'pseudoI'.
+
+              Note : The 'pseudoI' option is a partial solution, allowing Stokes I imaging
+                     when either of the parallel-hand correlations are unflagged.
+
+              The remaining constraints shall be removed (where logical) in a future release.
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-specmode"><code class="pydoc-name docutils literal notranslate"><span class="pre">specmode</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">'mfs'</span></code></dt><dd><p>Spectral definition mode (mfs,cube,cubedata, cubesource, mvc)</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>specmode='mfs' : Continuum imaging with only one output image channel.
+                               (mode='cont' can also be used here)
+
+specmode='cube' : Spectral line imaging with one or more channels.
+                               Parameters start, width,and nchan define the spectral
+                              coordinate system and can be specified either in terms
+                              of channel numbers, frequency or velocity in whatever
+                              spectral frame is specified in 'outframe'.
+                              All internal and output images are made with outframe as the
+                              base spectral frame. However imaging code internally uses the fixed
+                              spectral frame, LSRK for automatic internal software
+                              Doppler correction, so that a spectral line observed over an
+                              extended time range will line up appropriately.
+                              Therefore the output images have additional spectral frame conversion
+                               layer in LSRK on the top the base frame.
+
+
+
+
+ specmode='cubedata' : Spectral line imaging with one or more channels.
+                                 There is no internal software Doppler correction, so
+                                 a spectral line observed over an extended time range
+                                 may be smeared out in frequency. There is strictly
+                                 no valid spectral frame with which to associate with the
+                                 output images, thus the image spectral  frame will
+                                 be labelled  "Undefined".
+
+
+ specmode='cubesource': Spectral line imaging while
+                                 tracking moving source (near field or solar system
+                                 objects). The velocity of the source is accounted
+                                 and the frequency reported is in the source frame.
+                                 As there is no "SOURCE" frame defined in CASA,
+                                 the frame in the image will be labelled "REST" (but do note the
+                                 velocity of a given line reported may be different from the rest frame
+                                 velocity if the emission region is moving w.r.t the systemic
+                                 velocity frame of the source).
+
+ specmode='mvc' : Multiterm continuum imaging with cube major cycles.
+                                 This mode requires deconvolver='mtmfs' with nterms&gt;1
+                                 and user-set choices of 'reffreq' and 'nchan'.
+
+                                 The output images and minor cycle are similar to specmode='mfs'
+                                 with deconvolver='mtmfs', but the major cycles are done in
+                                 cube mode (and require a setting of 'reffreq' and 'nchan').
+                                 By default, frequency-dependent primary beam correction is
+                                 applied to each channel, before being combined across frequency
+                                 to make the inputs to the 'mtmfs' deconvolver.  This results in
+                                 implicit wideband pb-correction, with the deconvolver seeing only
+                                 the sky spectral structure.
+
+                                 Note : There is currently no option to turn off wideband pb correction
+                                 as part of the flat-sky normalization between the major and minor cycles.
+                                 Therefore, 'mvc' with the 'standard' and 'wproject' gridders will also apply
+                                 pblimits per channel, masking all regions outside of pblimit.
+                                 An option to retain sources outside the pblimit will be added in a future release.
+
+                                 Note : Below is some guidance for choosing 'nchan' and 'reffreq' :
+
+                                 The cube produced by the major cycle is used in a linear least square fits for Taylor
+                                 polynomials per pixel. Therefore, one only needs as many channels in the cube, as
+                                 required for an accurate polynomial fit for sources that have the strongest
+                                 spectral structure.
+
+                                 In general, 'nchan' needs to be greater than or equal to 'nterms', and the
+                                 frequency range selected by the data will be evenly split into nchan channels.
+                                 For a low-order polynomial fit, only a small number (around 10)
+                                 channels are typically needed (for VLA/ALMA bandwidth ratios).
+                                 'nchan=-1' applies a heuristic that results in a default of 10 cube channels
+                                 for a 2:1 bandwidth ratio.
+
+                                 nchan = MAX( bandwidth/(0.1*startfreq) ,  nterms+1 )
+
+                                 Note: When running in parallel, the nchan selected may limit the speedup if it
+                                 is smaller than the number of processes used.
+
+                                 The 'reffreq' is the reference frequency used for the Taylor polynomial expansion.
+                                 By default, in specmode='mvc', reffreq is set to the middle of the selected
+                                 frequency range.
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-deconvolver"><code class="pydoc-name docutils literal notranslate"><span class="pre">deconvolver</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">'hogbom'</span></code></dt><dd><p>Name of minor cycle algorithm (hogbom,clark,multiscale,mtmfs,mem,clarkstokes,asp)</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>Each of the following algorithms operate on residual images and PSFs
+from the gridder and produce output model and restored images.
+Minor cycles stop and a major cycle is triggered when cyclethreshold
+or cycleniter are reached. For all methods, components are picked from
+the entire extent of the image or (if specified) within a mask.
+
+hogbom : An adapted version of Hogbom Clean [Hogbom, 1974].
+                - Find the location of the peak residual.
+                - Add this delta function component to the model image.
+                - Subtract a scaled and shifted PSF of the same size as the image
+                  from regions of the residual image where the two overlap.
+                - Repeat.
+
+clark : An adapted version of Clark Clean [Clark, 1980].
+                - Find the location of max(I^2+Q^2+U^2+V^2).
+                - Add delta functions to each stokes plane of the model image.
+                - Subtract a scaled and shifted PSF within a small patch size
+                  from regions of the residual image where the two overlap.
+                - After several iterations trigger a Clark major cycle to subtract
+                  components from the visibility domain, but without de-gridding.
+                - Repeat.
+
+               ( Note : 'clark' maps to imagermode='' in the old clean task.
+                            'clark_exp' is another implementation that maps to
+                             imagermode='mosaic' or 'csclean' in the old clean task
+                             but the behavior is not identical. For now, please
+                             use deconvolver='hogbom' if you encounter problems. )
+
+clarkstokes : Clark Clean operating separately per Stokes plane.
+
+           (Note : 'clarkstokes_exp' is an alternate version. See above.)
+
+multiscale : MultiScale Clean [Cornwell, 2008].
+                - Smooth the residual image to multiple scale sizes.
+                - Find the location and scale at which the peak occurs.
+                - Add this multiscale component to the model image.
+                - Subtract a scaled,smoothed,shifted PSF (within a small
+                  patch size per scale) from all residual images.
+                - Repeat from step 2.
+
+mtmfs : Multi-term (Multi Scale) Multi-Frequency Synthesis [Rau and Cornwell, 2011].
+                - Smooth each Taylor residual image to multiple scale sizes.
+                - Solve a NTxNT system of equations per scale size to compute
+                  Taylor coefficients for components at all locations.
+                - Compute gradient chi-square and pick the Taylor coefficients
+                   and scale size at the location with maximum reduction in
+                   chi-square.
+                - Add multi-scale components to each Taylor-coefficient
+                  model image.
+                - Subtract scaled,smoothed,shifted PSF (within a small patch size
+                  per scale) from all smoothed Taylor residual images.
+                - Repeat from step 2.
+
+
+mem : Maximum Entropy Method [Cornwell and Evans, 1985].
+                - Iteratively solve for values at all individual pixels via the
+                  MEM method. It minimizes an objective function of
+                   chi-square plus entropy (here, a measure of difference
+                  between the current model and a flat prior model).
+
+                  (Note : This MEM implementation is not very robust.
+                               Improvements will be made in the future.)
+
+asp : Adaptive Scale Pixel algorithm [Bhatnagar and Cornwell, 2004].
+                - Define a set of initial scales defined as 0, W, 2W 4W and 8W.
+                  where W is a 2D Gaussian fitting width to the PSF.
+                - Smooth the residual image by a Gaussian beam at initial scales.
+                - Search for the global peak (F) among these smoothed residual images.
+                - form an active Aspen set: amplitude(F), amplitude location(x,y).
+                - Optimize the Aspen set by minimizing the objective function RI-Aspen*PSF,
+                  where RI is the residual image and * is the convulition operation.
+                - Compute the model image and update the residual image
+                - Repeat from step 2
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-weighting"><code class="pydoc-name docutils literal notranslate"><span class="pre">weighting</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">'natural'</span></code></dt><dd><p>Weighting scheme (natural,uniform,briggs,superuniform,radial, briggsabs, briggsbwtaper).</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>        During gridding of the dirty or residual image, each visibility value is
+        multiplied by a weight before it is accumulated on the uv-grid.
+        The PSF's uv-grid is generated by gridding only the weights (weightgrid).
+
+        weighting='natural' : Gridding weights are identical to the data weights
+                                          from the MS. For visibilities with similar data weights,
+                                          the weightgrid will follow the sample density
+                                          pattern on the uv-plane. This weighting scheme
+                                          provides the maximum imaging sensitivity at the
+                                          expense of a PSF with possibly wider main lobes and high sidelobes.
+                                          It is most appropriate for detection experiments
+                                          where sensitivity is most important.
+
+        weighting='uniform' : Gridding weights per visibility data point are the
+                                           original data weights divided by the total weight of
+                                           all data points that map to the same uv grid cell :
+                                           ' data_weight / total_wt_per_cell '.
+
+                                           The weightgrid is as close to flat as possible resulting
+                                           in a PSF with a narrow main lobe and suppressed
+                                           sidelobes. However, since heavily sampled areas of
+                                           the uv-plane get down-weighted, the imaging
+                                           sensitivity is not as high as with natural weighting.
+                                           It is most appropriate for imaging experiments where
+                                           a well behaved PSF can help the reconstruction.
+
+        weighting='briggs' :  Gridding weights per visibility data point are given by
+                                          'data_weight / ( A \* total_wt_per_cell + B ) ' where
+                                          A and B vary according to the 'robust' parameter.
+
+                                          robust = -2.0 maps to A=1,B=0 or uniform weighting.
+                                          robust = +2.0 maps to natural weighting.
+                                          (robust=0.5 is equivalent to robust=0.0 in AIPS IMAGR.)
+
+                                          Robust/Briggs weighting generates a PSF that can
+                                          vary smoothly between 'natural' and 'uniform' and
+                                          allow customized trade-offs between PSF shape and
+                                          imaging sensitivity.
+         weighting='briggsabs' : Experimental option.
+                                          Same as Briggs except the formula is different A=
+                                          robust\*robust and B is dependent on the
+                                          noise per visibility estimated. Giving noise='0Jy'
+                                          is a not a reasonable option.
+                                          In this mode (or formula)  robust values
+                                          from -2.0 to 0.0 only make sense (2.0 and
+                                          -2.0 will get the same weighting)
+
+        weighting='superuniform' : This is similar to uniform weighting except that
+                                                     the total_wt_per_cell is replaced by the
+                                                     total_wt_within_NxN_cells around the uv cell of
+                                                     interest. N=7 is the default (when the
+                                                                   parameter 'npixels' is set to 0 with 'superuniform')
+
+                                                    This method tends to give a PSF with inner
+                                                    sidelobes that are suppressed as in uniform
+                                                    weighting but with far-out sidelobes closer to
+                                                    natural weighting. The peak sensitivity is also
+                                                    closer to natural weighting.
+
+        weighting='radial' : Gridding weights are given by ' data_weight \* uvdistance '
+                                       This method approximately minimizes rms sidelobes
+                                       for an east-west synthesis array.
+
+        weighting='briggsbwtaper' : A modified version of Briggs weighting for cubes where an inverse uv taper,
+                                          which is proportional to the fractional bandwidth of the entire cube,
+                                          is applied per channel. The objective is to modify cube (perchanweightdensity = True)
+                                          imaging weights to have a similar density to that of the continuum imaging weights.
+                                          This is currently an experimental weighting scheme being developed for ALMA.
+
+For more details on weighting please see Chapter3
+of Dan Briggs' thesis (http://www.aoc.nrao.edu/dissertations/dbriggs)
+</pre></div>
+</div>
+</details></dd>
+</dl>
+</div>
+</section>
+<section id="iteration-control">
+<h3>Iteration control<a class="headerlink" href="#iteration-control" title="Link to this heading">¶</a></h3>
+<p>The values given here are what the window’s controls start with; they can
+be changed between cycles.</p>
+<div class="pydoc-box docutils container">
+<p class="pydoc-source">iclean parameters · from the Python source: <a class="reference external" href="https://github.com/casangi/cubevis/blob/docs-site/cubevis/private/casatasks/iclean.py"><code class="docutils literal notranslate"><span class="pre">_iclean</span></code></a></p>
+<dl class="pydoc-params">
+<dt id="iclean-param-niter"><code class="pydoc-name docutils literal notranslate"><span class="pre">niter</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">0</span></code></dt><dd><p>Maximum number of iterations.</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>A stopping criterion based on total iteration count.
+Currently the parameter type is defined as an integer therefore the integer value
+larger than 2147483647 will not be set properly as it causes an overflow.
+
+Iterations are typically defined as the selecting one flux component
+and partially subtracting it out from the residual image.
+
+niter=0 : Do only the initial major cycle (make dirty image, psf, pb, etc).
+
+niter larger than zero : Run major and minor cycles.
+
+Note : Global stopping criteria vs major-cycle triggers.
+
+           In addition to global stopping criteria, the following rules are
+           used to determine when to terminate a set of minor cycle iterations
+           and trigger major cycles [derived from Cotton-Schwab Clean, 1984].
+
+           'cycleniter' : controls the maximum number of iterations per image
+                               plane before triggering a major cycle.
+           'cyclethreshold' : Automatically computed threshold related to the
+                                       max sidelobe level of the PSF and peak residual.
+            Divergence, detected as an increase of 10% in peak residual from the
+            minimum so far (during minor cycle iterations).
+
+            The first criterion to be satisfied takes precedence.
+
+Note :  Iteration counts for cubes or multi-field images :
+            For images with multiple planes (or image fields) on which the
+            deconvolver operates in sequence, iterations are counted across
+            all planes (or image fields). The iteration count is compared with
+            'niter' only after all channels/planes/fields have completed their
+            minor cycles and exited either due to 'cycleniter' or 'cyclethreshold'.
+            Therefore, the actual number of iterations reported in the logger
+            can sometimes be larger than the user specified value in 'niter'.
+            For example, with niter=100, cycleniter=20,nchan=10,threshold=0,
+            a total of 200 iterations will be done in the first set of minor cycles
+            before the total is compared with niter=100 and it exits.
+
+ Note : Additional global stopping criteria include:
+           - no change in peak residual across two major cycles.
+           - a 50% or more increase in peak residual across one major cycle.
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-cycleniter"><code class="pydoc-name docutils literal notranslate"><span class="pre">cycleniter</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">-1</span></code></dt><dd><p>Maximum number of minor-cycle iterations (per plane) before triggering</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>a major cycle.
+
+For example, for a single plane image, if niter=100 and cycleniter=20,
+there will be 5 major cycles after the initial one (assuming there is no
+threshold based stopping criterion). At each major cycle boundary, if
+the number of iterations left over (to reach niter) is less than cycleniter,
+it is set to the difference.
+
+Note : cycleniter applies per image plane, even if cycleniter x nplanes
+           gives a total number of iterations greater than 'niter'. This is to
+           preserve consistency across image planes within one set of minor
+           cycle iterations.
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-threshold"><code class="pydoc-name docutils literal notranslate"><span class="pre">threshold</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">0.0</span></code></dt><dd><p>Stopping threshold (number in units of Jy, or string).</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>A global stopping threshold that the peak residual (within clean mask)
+across all image planes is compared to.
+
+threshold = 0.005  : 5mJy
+threshold = '5.0mJy'
+
+Note : A 'cyclethreshold' is internally computed and used as a major cycle
+           trigger. It is related to what fraction of the PSF can be reliably
+           used during minor cycle updates of the residual image. By default
+           the minor cycle iterations terminate once the peak residual reaches
+           the first sidelobe level of the brightest source.
+
+           'cyclethreshold' is computed as follows using the settings in
+            parameters 'cyclefactor','minpsffraction','maxpsffraction','threshold' :
+
+          psf_fraction = max_psf_sidelobe_level \* 'cyclefactor'
+          psf_fraction = max(psf_fraction, 'minpsffraction');
+          psf_fraction = min(psf_fraction, 'maxpsffraction');
+          cyclethreshold = peak_residual \* psf_fraction
+          cyclethreshold = max( cyclethreshold, 'threshold' )
+
+          If nsigma is set (&gt;0.0), the N-sigma threshold is calculated (see
+          the description under nsigma), then cyclethreshold is further modified as,
+
+          cyclethreshold = max( cyclethreshold, nsgima_threshold ).
+
+
+          'cyclethreshold' is made visible and editable only in the
+          interactive GUI when tclean is run with interactive=True.
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-nsigma"><code class="pydoc-name docutils literal notranslate"><span class="pre">nsigma</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">0.0</span></code></dt><dd><p>Multiplicative factor for rms-based threshold stopping.</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>N-sigma threshold is calculated as nsigma \* rms value per image plane determined
+from a robust statistics. For nsigma &gt; 0.0, in a minor cycle, a maximum of the two values,
+the N-sigma threshold and cyclethreshold, is used to trigger a major cycle
+(see also the descreption under 'threshold').
+Set nsigma=0.0 to preserve the previous tclean behavior without this feature.
+The top level parameter, fastnoise is relevant for the rms noise calculation which is used
+to determine the threshold.
+
+                      The parameter 'nsigma' may be an int, float, or a double.
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-gain"><code class="pydoc-name docutils literal notranslate"><span class="pre">gain</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">0.1</span></code></dt><dd><p>Loop gain.</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>Fraction of the source flux to subtract out of the residual image
+for the CLEAN algorithm and its variants.
+
+A low value (0.2 or less) is recommended when the sky brightness
+distribution is not well represented by the basis functions used by
+the chosen deconvolution algorithm. A higher value can be tried when
+there is a good match between the true sky brightness structure and
+the basis function shapes.  For example, for extended emission,
+multiscale clean with an appropriate set of scale sizes will tolerate
+a higher loop gain than Clark clean.
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-nmajor"><code class="pydoc-name docutils literal notranslate"><span class="pre">nmajor</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">-1</span></code></dt><dd><p>The nmajor parameter limits the number of minor and major cycle sets</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>that tclean executes. It is defined as the number of major cycles after the
+initial set of minor cycle iterations. In other words, the count of nmajor does
+not include the initial residual calculation that occurs when calcres=True.
+
+A setting of nmajor=-1 implies no limit (default -1).
+A setting of nmajor=0 implies nothing other than the initial residual calculation
+A setting of nmajor&gt;0 imples that nmajor sets of minor and major cycles will
+be done in addition to the initial residual calculation.
+
+If the major cycle limit is reached, stopcode 9 will be returned. Other stopping
+criteria (such as threshold) could cause tclean to stop in fewer than this
+number of major cycles. If tclean reaches another stopping criteria, first
+or at the same time as nmajor, then that stopcode will be returned instead.
+
+Note however that major cycle ids in the log messages as well as in the return
+dictionary do begin with 1 for the initial residual calculation, when it exists.
+
+Example 1 : A tclean run with 'nmajor=5' and 'calcres=True' will iterate for
+5 major cycles (not counting the initial residual calculation). But, the return
+dictionary will show 'nmajordone:6'.  If 'calcres=False', then the return
+dictionary will show 'nmajordone:5'.
+
+Example 2 : For both the following cases, there will be a printout in the logs
+"Running Major Cycle 1" and the return value will include "nmajordone: 1",
+however there is a difference in the purpose of the major cycle and the
+number of minor cycles executed:
+    Case 1; nmajor=0, calcres=True:  The major cycle done is for the creation
+                of the residual, and no minor cycles are executed.
+    Case 2; nmajor=1, calcres=False: The major cycle is done as part of the
+                major/minor cycle loop, and 1 minor cycle will be executed.
+</pre></div>
+</div>
+</details></dd>
+</dl>
+</div>
+</section>
+<section id="masks">
+<h3>Masks<a class="headerlink" href="#masks" title="Link to this heading">¶</a></h3>
+<div class="pydoc-box docutils container">
+<p class="pydoc-source">iclean parameters · from the Python source: <a class="reference external" href="https://github.com/casangi/cubevis/blob/docs-site/cubevis/private/casatasks/iclean.py"><code class="docutils literal notranslate"><span class="pre">_iclean</span></code></a></p>
+<dl class="pydoc-params">
+<dt id="iclean-param-usemask"><code class="pydoc-name docutils literal notranslate"><span class="pre">usemask</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">'user'</span></code></dt><dd><p>Type of mask(s) to be used for deconvolution.</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>user: (default) mask image(s) or user specified region file(s) or string CRTF expression(s).
+  subparameters: mask, pbmask.
+pb: primary beam mask.
+  subparameter: pbmask.
+
+    Example: usemask="pb", pbmask=0.2.
+                      Construct a mask at the 0.2 pb gain level.
+                      (Currently, this option will work only with
+
+                      gridders that produce .pb (i.e. mosaic, awp2 and awproject)
+                      or if an externally produced .pb image exists on disk)
+
+
+auto-multithresh : auto-masking by multiple thresholds for deconvolution.
+   subparameters : sidelobethreshold, noisethreshold, lownoisethreshold, negativethrehsold,  smoothfactor,
+                   minbeamfrac, cutthreshold, pbmask, growiterations, dogrowprune, minpercentchange, verbose.
+   Additional top level parameter relevant to auto-multithresh: fastnoise.
+
+   if pbmask is &gt;0.0, the region outside the specified pb gain level is excluded from
+   image statistics in determination of the threshold.
+
+
+
+
+Note: By default the intermediate mask generated by automask at each deconvolution cycle
+      is over-written in the next cycle but one can save them by setting
+      the environment variable, SAVE_ALL_AUTOMASKS="true".
+      (e.g. in the CASA prompt, os.environ['SAVE_ALL_AUTOMASKS']="true" )
+      The saved CASA mask image name will be imagename.mask.autothresh#, where
+      # is the iteration cycle number.
+</pre></div>
+</div>
+</details></dd>
+<dt id="iclean-param-mask"><code class="pydoc-name docutils literal notranslate"><span class="pre">mask</span></code><code class="pydoc-default docutils literal notranslate"> <span class="pre">=</span> <span class="pre">''</span></code></dt><dd><p>Mask (a list of image name(s) or region file(s) or region string(s).</p>
+<details class="pydoc-more"><summary>more</summary><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>The name of a CASA image or region file or region string that specifies
+a 1/0 mask to be used for deconvolution. Only locations with value 1 will
+be considered for the centers of flux components in the minor cycle.
+If regions specified fall completely outside of the image, tclean will throw an error.
+
+Manual mask options/examples :
+
+mask='xxx.mask'  : Use this CASA image named xxx.mask and containing
+                                ones and zeros as the mask.
+                                If the mask is only different in spatial coordinates from what is being made
+                                it will be resampled to the target coordinate system before being used.
+                                The mask has to have the same shape in velocity and Stokes planes
+                                as the output image. Exceptions are single velocity and/or single
+                                Stokes plane masks. They will be expanded to cover all velocity and/or
+                                Stokes planes of the output cube.
+
+                                [ Note : If an error occurs during image resampling or
+                                            if the expected mask does not appear, please try
+                                            using tasks 'imregrid' or 'makemask' to resample
+                                            the mask image onto a CASA image with the target
+                                            shape and coordinates and supply it via the 'mask'
+                                            parameter. ]
+
+
+mask='xxx.crtf' : A text file with region strings and the following on the first line
+                           ( #CRTFv0 CASA Region Text Format version 0 )
+                           This is the format of a file created via the viewer's region
+                           tool when saved in CASA region file format.
+
+mask='circle[[40pix,40pix],10pix]'  : A CASA region string.
+
+mask=['xxx.mask','xxx.crtf', 'circle[[40pix,40pix],10pix]']  : a list of masks.
+
+
+
+
+
+Note : Mask images for deconvolution must contain 1 or 0 in each pixel.
+           Such a mask is different from an internal T/F mask that can be
+           held within each CASA image. These two types of masks are not
+           automatically interchangeable, so please use the makemask task
+           to copy between them if you need to construct a 1/0 based mask
+           from a T/F one.
+
+Note : Work is in progress to generate more flexible masking options and
+           enable more controls.
+</pre></div>
+</div>
+</details></dd>
+</dl>
+</div>
+<p>Every parameter is listed in <a class="reference internal" href="iclean_parameters.html"><span class="std std-doc">iclean parameters</span></a>. The task pages of
+<code class="docutils literal notranslate"><span class="pre">tclean</span></code> in <a class="reference external" href="https://casadocs.readthedocs.io">CASA Docs</a> describe the
+algorithms behind them.</p>
+</section>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="iclean_parameters.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">iclean parameters</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="capabilities/output.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Saving and describing plots</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2021-2026 Associated Universities, Inc. Washington DC, USA.
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Starting iclean</a><ul>
+<li><a class="reference internal" href="#before-you-start">Before you start</a></li>
+<li><a class="reference internal" href="#starting">Starting</a><ul>
+<li><a class="reference internal" href="#in-a-jupyter-notebook">In a Jupyter notebook</a></li>
+<li><a class="reference internal" href="#data-on-another-computer">Data on another computer</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#the-parameters-used-most">The parameters used most</a><ul>
+<li><a class="reference internal" href="#the-image">The image</a></li>
+<li><a class="reference internal" href="#iteration-control">Iteration control</a></li>
+<li><a class="reference internal" href="#masks">Masks</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script data-current="dev/docs-site/" data-site="/cubevis/" src="../_static/js/versions.js?v=56d3ce4a"></script>
+    </body>
+</html>

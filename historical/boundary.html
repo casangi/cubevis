@@ -1,0 +1,555 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Cube Mask Design" href="components/cube_mask.html"><link rel="prev" title="Interactive Clean Design" href="applications/interactive_clean.html">
+        <link rel="canonical" href="https://casangi.github.io/cubevis/historical/boundary.html">
+
+    <!-- Generated with Sphinx 9.1.1 and Furo 2025.12.19 -->
+        <title>CASA/Viz Boundary - cubevis</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/s4defs-roles.css?v=4e6db181" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/cubevis-docs.css?v=8a4cc0d1" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">cubevis</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  <span class="sidebar-brand-text">cubevis</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../applications/installing.html">Installing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../applications/remote_kernels.html">Setting up remote execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../applications/visplot_starting.html">Starting visplot</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../applications/visplot.html">The visplot window</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../applications/visplot_help.html">visplot controls, in full</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../applications/capabilities/index.html">What visplot can do</a><input aria-label="Toggle navigation of What visplot can do" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/from_plotms.html">Coming from plotms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/from_aips.html">Coming from AIPS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/data_access.html">Data formats and access</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/selection.html">Selecting data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/plot_types.html">Rasters, scatter plots and layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/standard_views.html">Standard views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/quantities.html">Plotted quantities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/phase_stability.html">Phase stability: Phase RMS and Coherence</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/vector_difference.html">Difference from the mean: Amp V Diff and Phase Diff</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/z_score.html">Z-Score</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/averaging.html">Averaging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/colormaps.html">Colormaps and color scaling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/flagging.html">Flagging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../applications/capabilities/output.html">Saving and describing plots</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../applications/iclean_starting.html">Starting iclean</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../applications/iclean_parameters.html">iclean parameters</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Slides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../slides.html">Slide decks</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Background and development</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../contributing.html">Writing this documentation</a></li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">Historical reference</a><input aria-label="Toggle navigation of Historical reference" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2 current has-children"><a class="reference internal" href="intro.html">System Design</a><input aria-label="Toggle navigation of System Design" checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="applications/interactive_clean_pathfinder.html">Interactive clean as a pathfinder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="applications/interactive_clean.html">Interactive Clean Design</a></li>
+<li class="toctree-l3 current current-page"><a class="current reference internal" href="#">CASA/Viz Boundary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="components/cube_mask.html">Cube Mask Design</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/historical/boundary.rst.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <blockquote>
+<div></div></blockquote>
+<section id="casa-viz-boundary">
+<h1>CASA/Viz Boundary<a class="headerlink" href="#casa-viz-boundary" title="Link to this heading">¶</a></h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><strong>Historical reference.</strong>  This page describes the design and
+implementation of the <code class="docutils literal notranslate"><span class="pre">casagui</span></code> package, as it stood after the
+visualization trade study.  <code class="docutils literal notranslate"><span class="pre">cubevis</span></code> grew out of that work.  The page
+is kept for reference and is not maintained; names, figures and plans in
+it may no longer match <code class="docutils literal notranslate"><span class="pre">cubevis</span></code>.  See <a class="reference internal" href="index.html"><span class="doc">Historical reference</span></a>.</p>
+</div>
+<p>This document describes the boundary between CASA-GUI and CASA (including CASA7 and future versions of
+CASA). It is necessarily a high-level view of the principles of this boundary. However,
+it is important to layout the system level view of this boundary to prevent choices being
+made in the system design of other parts of the CASA and NRAO ecosystem.</p>
+<p>For this discussion, only two execution modes will be considered. The “Usage Settings” in the introduction describe
+the user context where cubevis operates. The “Execution Modes” are less abstract than the “Usage Settings”.
+This lower level is discussed here both to explain the concepts as well as identify constraints that are
+implied by the implementaton of these modes.</p>
+<p>The assumption is that there is a GUI and that it is always
+running on the user’s device. In practice, this means that the GUI will be presented in the
+user’s browser. The execution that we are talking about is the execution process that creates
+images, provides storage for images, modifies images, or collates and organizes data. These
+processes could also be on the user’s device, but they could also be running on remote systems.</p>
+<section id="local-execution">
+<h2>Local Execution<a class="headerlink" href="#local-execution" title="Link to this heading">¶</a></h2>
+<a class="reference internal image-reference" href="../_images/local_execution.svg"><img alt="../_images/local_execution.svg" class="align-left" src="../_images/local_execution.svg" style="width: 220px;" />
+</a>
+<p>With local execution, there is a local Python process which executes all of the image and data
+processing code. Currently, this is the user’s Python session. Communication between this Python
+process and the GUI code in the browser is accomplished with <a class="reference external" href="https://en.wikipedia.org/wiki/WebSocket">WebSocket</a>. The user interacts
+with the elements of the GUI within the browser. These interactions result in <a class="reference external" href="https://en.wikipedia.org/wiki/WebSocket">WebSocket</a>
+messages sent to the local Python environment. Within the Python environment, the interfaces
+provided by CASA and other packages are used to accomplish the desired processing, and the results
+are then returned to the GUI via <a class="reference external" href="https://en.wikipedia.org/wiki/WebSocket">WebSocket</a>.</p>
+</section>
+<section id="remote-execution">
+<h2>Remote Execution<a class="headerlink" href="#remote-execution" title="Link to this heading">¶</a></h2>
+<a class="reference internal image-reference" href="../_images/remote_execution.svg"><img alt="../_images/remote_execution.svg" class="align-left" src="../_images/remote_execution.svg" style="width: 260px;" />
+</a>
+<p>Remote execution allows the user to start the GUI locally but perform the desired processing
+tasks on a remote system which the user can access with SSH. To start a remote processing
+execution, the user would first start a local Python session and then start the GUI element
+specifying the remote host that should be used. The GUI will start and run locally, but
+instead of the local Python session being used to perform the processing it will start
+a remote <a class="reference external" href="https://ipykernel.readthedocs.io/en/stable/">Jupyter Kernel</a> on the specified remote system. Messages sent to the local
+Python session from the GUI via <a class="reference external" href="https://en.wikipedia.org/wiki/WebSocket">WebSocket</a> will be converted to <a class="reference external" href="https://jupyter-protocol.readthedocs.io/en/latest/">Jupyter Protocol</a>
+messages sent to the remote kernel. These messages will then run the process using the same
+interfaces provided by CASA and other packages as was used for local execution.</p>
+<p>These two execution models are sufficient as the basis for the usage settings described
+in the cubevis system document. A variant of these execution models may also be sufficent
+for a website implementation. The GUI elements created with <a class="reference external" href="https://bokeh.org/">Bokeh</a> are compatible
+with display within a website. The remote <a class="reference external" href="https://ipykernel.readthedocs.io/en/stable/">Jupyter Kernel</a> execution is compatible
+with processing initiated from a website. The details of the execution model between a
+public website portal and the backend execution model lies outside of the CASA/cubevis
+context.</p>
+</section>
+<section id="implications">
+<h2>Implications<a class="headerlink" href="#implications" title="Link to this heading">¶</a></h2>
+<p>The varied usage and execution environments emphasize a need to clearly separate the processing
+functionality from the GUI elements. Pushing as much
+functionality down into the processing level as possible as possible, maximizes the ability to
+test functionality as part of processing level testing, independent of GUI elements.</p>
+<p>The second implication arises from supporting remote execution. Because processing results
+must be serialized and returned via <a class="reference external" href="https://en.wikipedia.org/wiki/WebSocket">WebSocket</a> and displayed within a browser, the
+processing interface must be defined in terms of basic Python types or types which can be
+converted to basic Python types. An example of the latter is <a class="reference external" href="https://numpy.org/">NumPy</a> arrays. The
+interactive clean app uses <a class="reference external" href="https://numpy.org/">NumPy</a> arrays to represent the images which are displayed
+within <a class="reference external" href="https://bokeh.org/">Bokeh</a>.</p>
+</section>
+<section id="example-interactive-clean">
+<h2>Example - Interactive Clean<a class="headerlink" href="#example-interactive-clean" title="Link to this heading">¶</a></h2>
+<p>A first version of an interactive clean application is being designed as follows.
+( This initial release
+will <strong>not</strong> include remote execution, but its design does attempt to conform to the constraints
+which remote execution requires.)</p>
+<p>A locally running GUI in a browser contains tools for image viewing, mask editing, setting/editing
+iteration control parameters, display and navigation of convergence plots. It also contains controls to trigger
+iteration blocks in the processing layer and retrieves processing results with which to update
+various elements of the display. The parameters and processing results are transferred from Python
+to a web browser for display. As a result, they are serializable.</p>
+<p>Events from the GUI connect to the processing layer via call-back methods encapsulated within <a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a>,
+a backend application that runs the building blocks of image reconstruction and maintains iteration control
+state. This allows for independent testing of the process that supports the GUI.
+For this first version of interactive clean, we will consider <a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> to be part of the
+public API from CASA.</p>
+<p>The public process API from CASA that interactive clean depend upon is <a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> and
+the <code class="code docutils literal notranslate"><span class="pre">shape</span></code>, <code class="code docutils literal notranslate"><span class="pre">maskhandler</span></code>, <code class="code docutils literal notranslate"><span class="pre">coordsys</span></code>, <code class="code docutils literal notranslate"><span class="pre">getregion</span></code>, <code class="code docutils literal notranslate"><span class="pre">fitsheader</span></code>,
+<code class="code docutils literal notranslate"><span class="pre">getchunk</span></code>, <code class="code docutils literal notranslate"><span class="pre">putchunk</span></code> and <code class="code docutils literal notranslate"><span class="pre">statistics</span></code> functions of the <a class="reference external" href="https://casadocs.readthedocs.io/en/stable/api/tt/casatools.image.html">CASA image tool</a>.</p>
+<section id="gclean">
+<h3>gclean<a class="headerlink" href="#gclean" title="Link to this heading">¶</a></h3>
+<p><a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> is a Python class which encapsulates the process layer of interactive clean. It
+allows for automated testing of all of the process interface of interactive clean as part of
+the standard (non-interactive) testing of the process layer.</p>
+<p>A <a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> object is constructed with input parameters that are
+relevant to interactive use. Once constructed,
+<a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> implements the <a class="reference external" href="https://docs.python.org/3/howto/functional.html#iterators">Python iterator protocol</a>.
+This means that it provides <code class="code docutils literal notranslate"><span class="pre">__next__</span></code> and <code class="code docutils literal notranslate"><span class="pre">__iter__</span></code> functions. The <code class="code docutils literal notranslate"><span class="pre">__next__</span></code> function
+provides the functionality required for
+<a class="reference external" href="https://casadocs.readthedocs.io/en/stable/api/tt/casatasks.imaging.tclean.html#description">iterative image reconstruction</a>
+using calls to <a class="reference external" href="https://casadocs.readthedocs.io/en/stable/api/tt/casatasks.imaging.tclean.html">tclean</a> for the residual update step, calls to <a class="reference external" href="https://casadocs.readthedocs.io/en/latest/api/tt/casatasks.imaging.deconvolve.html">deconvolve</a> for the
+model update step, and methods to manage iteration control state and checks for global stopping
+criteria.  Each time <code class="code docutils literal notranslate"><span class="pre">__next__</span></code> is (<em>indirectly</em>) called a new <a class="reference external" href="https://casadocs.readthedocs.io/en/stable/notebooks/synthesis_imaging.html#Returned-Dictionary">imaging return dictionary</a> is returned
+which contains new state from one model update and one residual update along with the state from
+previous <code class="code docutils literal notranslate"><span class="pre">__next__</span></code> calls. The <code class="code docutils literal notranslate"><span class="pre">__next__</span></code> function is not invoked directly but indirectly
+as part of a loop:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">imgdict</span> <span class="ow">in</span> <span class="n">gclean</span><span class="p">(</span><span class="o">...</span><span class="p">):</span>
+    <span class="c1"># loop body</span>
+</pre></div>
+</div>
+<p>or with an explicit iterator call via <code class="code docutils literal notranslate"><span class="pre">next(gclean_object)</span></code>. Iteration control state is
+maintained as the <a class="reference external" href="https://casadocs.readthedocs.io/en/stable/notebooks/synthesis_imaging.html#Returned-Dictionary">imaging return dictionary</a> grows with each set of iteration blocks that are executed, and summarizes
+the entire convergence history of the current imaging run. This <a class="reference external" href="https://casadocs.readthedocs.io/en/stable/notebooks/synthesis_imaging.html#Returned-Dictionary">imaging return dictionary</a> is returned to the GUI
+and used to update the contents of the convergence plots and convergence state messages.</p>
+<p><a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> deviates somewhat from the typical iterator object by also
+including an <code class="code docutils literal notranslate"><span class="pre">update</span></code> function which accepts a dictionary of parameters to change for
+the next generation step. These parameters are the modifications the user has indicated from
+the interactive clean GUI.</p>
+<p>The functions implemented within <a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> are :</p>
+<blockquote>
+<div><p><span class="green">construct gclean object</span> – <code class="code docutils literal notranslate"><span class="pre">cl</span> <span class="pre">=</span> <span class="pre">gclean(...)</span></code>
+The <a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> object is
+constructed (with a subset of <a class="reference external" href="https://casadocs.readthedocs.io/en/stable/api/tt/casatasks.imaging.tclean.html">tclean</a> parameters). Internal state is initialized,
+but no processing is done.</p>
+<p><span class="green">run one set of iterations and retrieve the next convergence dictionary</span> – <code class="code docutils literal notranslate"><span class="pre">next(cl)</span></code>
+One model update step (deconvolution) is run, followed by one residual update step (major cycle).
+For the initial call,
+only one residual update step is run.  Iteration control state is defined by user-supplied parameters
+of code:<span class="incremental">niter</span>, code:<span class="incremental">nmajor</span>, <code class="code docutils literal notranslate"><span class="pre">cycleniter</span></code> and <code class="code docutils literal notranslate"><span class="pre">threshold</span></code> and a series of ordered
+stopping criteria. The code:<span class="incremental">next(cl)</span> function exits, and a dictionary returned after one major cycle
+is complete, after an error is encountered, or after global convergence criteria have been satisfied. The
+<code class="code docutils literal notranslate"><span class="pre">mask</span></code> which is provided specifies the area of the image cube to which the
+imaging algorithm should be applied. If the <code class="code docutils literal notranslate"><span class="pre">mask</span></code> contains all false or 0 values, no processing
+is performed.</p>
+<p><span class="green">modifying iteration control setup</span> – <code class="code docutils literal notranslate"><span class="pre">cl.update(</span> <span class="pre">{...}</span> <span class="pre">)</span></code>
+The purpose of
+interactive clean is to allow for adjustments to the <code class="code docutils literal notranslate"><span class="pre">mask</span></code> and control
+parameters as processing progresses. This adjustment can be done before each
+call to code:<span class="incremental">next(cl)</span>. This update is optional and
+retrieving all dictionaries generated is expected to create the same final
+image as running <a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> in a loop with no pauses in processing. The entries which
+can be supplied in the dictionary parameter are <code class="code docutils literal notranslate"><span class="pre">niter</span></code>, <code class="code docutils literal notranslate"><span class="pre">cycleniter</span></code>,
+<code class="code docutils literal notranslate"><span class="pre">niter</span></code>, <code class="code docutils literal notranslate"><span class="pre">nmajor</span></code>, <code class="code docutils literal notranslate"><span class="pre">threshold</span></code>, and <code class="code docutils literal notranslate"><span class="pre">cyclefactor</span></code>.
+<code class="code docutils literal notranslate"><span class="pre">update</span></code> returns a tuple composed of an error code and a message.
+The first element of the tuple (error code) is zero if the update was
+successful and negative one if the update failed. If the update failed,
+the message contains an error message. In addition to updating the loop
+parameters with <code class="code docutils literal notranslate"><span class="pre">update</span></code>, the mask image on disk may be modified
+directly.</p>
+<p><span class="green">creating the restored image</span> – <code class="code docutils literal notranslate"><span class="pre">cl.restore(</span> <span class="pre">)</span></code> called after the completion
+of the <a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> processing. This creates the final, restored image and
+returns a dictionary which contains an <code class="code docutils literal notranslate"><span class="pre">image</span></code> field whose value is the
+path to the restored image.</p>
+<p><span class="green">retrieve list of executed commands</span> – <code class="code docutils literal notranslate"><span class="pre">cl.cmds(</span> <span class="pre">history=False</span> <span class="pre">)</span></code> called
+to retrieve the list of <code class="code docutils literal notranslate"><span class="pre">tclean</span></code>, <code class="code docutils literal notranslate"><span class="pre">deconvolve</span></code> etc. to display as a log
+for the user. If <code class="code docutils literal notranslate"><span class="pre">history</span></code> is set to <code class="code docutils literal notranslate"><span class="pre">True</span></code> then the entire history is
+returned. Otherwise, the commands since the last <code class="code docutils literal notranslate"><span class="pre">next(gc)</span></code> execution are
+returned.</p>
+<p><span class="green">special Python functions that create an iterator</span> – <code class="code docutils literal notranslate"><span class="pre">__next__</span></code>, <code class="code docutils literal notranslate"><span class="pre">__anext__</span></code>
+(<code class="code docutils literal notranslate"><span class="pre">__anext__</span></code> is an <em>asyncio</em> version of <code class="code docutils literal notranslate"><span class="pre">__next</span></code>) should perform one model update
+step (deconvolution) is run, followed by one residual update step (major cycle). The special
+<code class="code docutils literal notranslate"><span class="pre">__iter__</span></code> and <code class="code docutils literal notranslate"><span class="pre">__aiter__</span></code> functions should just return <code class="code docutils literal notranslate"><span class="pre">self</span></code>, and the
+<code class="code docutils literal notranslate"><span class="pre">__del__</span></code> function should run <code class="code docutils literal notranslate"><span class="pre">restore</span></code>.</p>
+</div></blockquote>
+<p>The typical interactive clean pattern of <code class="code docutils literal notranslate"><span class="pre">gclean</span></code> usage is:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cl</span> <span class="o">=</span> <span class="n">gclean</span><span class="p">(</span> <span class="p">)</span>
+<span class="n">retdict</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">cl</span><span class="p">)</span>
+<span class="k">while</span> <span class="n">user_continues</span><span class="p">(</span> <span class="p">):</span>
+    <span class="n">cl</span><span class="o">.</span><span class="n">update</span><span class="p">(</span> <span class="n">user_parameters</span><span class="p">(</span> <span class="p">)</span> <span class="p">)</span>
+    <span class="n">retdict</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">cl</span><span class="p">)</span>
+<span class="n">cl</span><span class="o">.</span><span class="n">restore</span><span class="p">(</span> <span class="p">)</span>
+</pre></div>
+</div>
+<p>where <code class="code docutils literal notranslate"><span class="pre">user_continues</span></code> enables interactive mask editing and then
+checks whether the user wishes to stop and
+<code class="code docutils literal notranslate"><span class="pre">user_parameters</span></code> fetches updates to the control parameters from the user.
+<code class="code docutils literal notranslate"><span class="pre">retdict</span></code> is used to update convergence plots on the GUI.</p>
+<p>The typical implementation of <code class="code docutils literal notranslate"><span class="pre">next(cl)</span></code> within <a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a> is as follows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>if !has_converged(global_state):
+    ret_mod = run_model_update()
+    if ret_mod['iterdone']&gt;0 :
+       ret_res = run_residual_update()
+       ret_dict = merge(ret_mod,ret_res)
+       global_state.append(ret_dict)
+return read(global_state)
+</pre></div>
+</div>
+<p>The interactive clean application currently being developed uses <a class="reference external" href="https://casadocs.readthedocs.io/en/stable/api/tt/casatasks.imaging.tclean.html">tclean</a> for
+run_residual_update() and <a class="reference external" href="https://casadocs.readthedocs.io/en/latest/api/tt/casatasks.imaging.deconvolve.html">deconvolve</a> for run_model_update(), and implements
+iteration control state and convergence checks using custom code within <a class="reference external" href="https://open-bitbucket.nrao.edu/projects/CASA/repos/casa6/browse/casatasks/src/private/imagerhelpers/_gclean.py">gclean</a>.
+These building blocks could (in the future) be replaced to implement alternate options
+for the processing layer, as long as all the return dictionaries retain their structure.</p>
+</section>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="components/cube_mask.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Cube Mask Design</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="applications/interactive_clean.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Interactive Clean Design</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2021-2026 Associated Universities, Inc. Washington DC, USA.
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">CASA/Viz Boundary</a><ul>
+<li><a class="reference internal" href="#local-execution">Local Execution</a></li>
+<li><a class="reference internal" href="#remote-execution">Remote Execution</a></li>
+<li><a class="reference internal" href="#implications">Implications</a></li>
+<li><a class="reference internal" href="#example-interactive-clean">Example - Interactive Clean</a><ul>
+<li><a class="reference internal" href="#gclean">gclean</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script data-current="" data-site="/cubevis/" src="../_static/js/versions.js?v=56d3ce4a"></script>
+    </body>
+</html>

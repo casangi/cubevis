@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+<defs><marker id="a-ws" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#1F6FB2"/></marker><marker id="a-comms" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-ccomm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-evaljs" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-bc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0F8B8D"/></marker><marker id="a-ssh" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#C0392B"/></marker><marker id="a-pipe" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2E7D5B"/></marker><marker id="a-fs" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#555555"/></marker></defs>
+<rect width="1600" height="900" fill="white"/>
+<rect x="40" y="140" width="600" height="660" rx="18" fill="#F3F5F8" stroke="#8A94A0" stroke-width="2.5" stroke-dasharray="10 6"/>
+<text x="60" y="172" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="#4A5563" text-anchor="start" >User's host</text>
+<rect x="70" y="190" width="540" height="140" rx="10" fill="white" stroke="#C9711F" stroke-width="2.5"/>
+<path d="M70 234 V200 a10 10 0 0 1 10 -10 H600 a10 10 0 0 1 10 10 V234 Z" fill="#C9711F"/>
+<text x="340.0" y="219" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Browser process</text>
+<rect x="95" y="245" width="490" height="70" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="340.0" y="277.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >cubevis GUI (BokehJS) · CommMgr / Comm (JS)</text>
+<text x="340.0" y="299.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >loaded from generated HTML page</text>
+<rect x="70" y="390" width="540" height="390" rx="10" fill="white" stroke="#3B6EA8" stroke-width="2.5"/>
+<path d="M70 434 V400 a10 10 0 0 1 10 -10 H600 a10 10 0 0 1 10 10 V434 Z" fill="#3B6EA8"/>
+<text x="340.0" y="419" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Local Python process  (P_local)</text>
+<rect x="95" y="444" width="490" height="50" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="340.0" y="475.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >User script / REPL</text>
+<rect x="95" y="499" width="490" height="50" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="340.0" y="521.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >VisibilityPlotter</text>
+<text x="340.0" y="543.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >VisibilityRaster / VisibilityScatter</text>
+<rect x="95" y="554" width="490" height="50" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="340.0" y="576.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >CommMgr  (browser leg)</text>
+<text x="340.0" y="598.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >WebSocketTransport</text>
+<rect x="95" y="609" width="490" height="50" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="340.0" y="631.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >RemoteReductionContext</text>
+<text x="340.0" y="653.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >reader + context · SyncBridge</text>
+<rect x="95" y="664" width="490" height="50" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="340.0" y="686.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >RemoteAppLink · ExecutionContext</text>
+<text x="340.0" y="708.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >CommMgr (mirror) · KernelClientTransport</text>
+<rect x="95" y="719" width="490" height="50" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="340.0" y="741.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >sshpyk</text>
+<text x="340.0" y="763.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >AsyncKernelManager · SSH provisioner</text>
+<path d="M340 330 L340 390" fill="none" stroke="#1F6FB2" stroke-width="5"  marker-start="url(#a-ws)" marker-end="url(#a-ws)"/>
+<text x="355" y="367" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1F6FB2" text-anchor="start" >WebSocket</text>
+<rect x="760" y="140" width="800" height="660" rx="18" fill="#F3F5F8" stroke="#8A94A0" stroke-width="2.5" stroke-dasharray="10 6"/>
+<text x="780" y="172" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="#4A5563" text-anchor="start" >Remote host (data host / cluster node)</text>
+<rect x="790" y="195" width="300" height="330" rx="10" fill="white" stroke="#6A4C93" stroke-width="2.5"/>
+<path d="M790 239 V205 a10 10 0 0 1 10 -10 H1080 a10 10 0 0 1 10 10 V239 Z" fill="#6A4C93"/>
+<text x="940.0" y="224" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Remote Jupyter kernel</text>
+<rect x="810" y="255" width="260" height="80" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="940.0" y="292.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >CommMgr</text>
+<text x="940.0" y="314.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >KernelCommTransport</text>
+<rect x="810" y="350" width="260" height="80" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="940.0" y="387.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >ExecutionContextPool</text>
+<text x="940.0" y="409.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >create · dispatch · shutdown</text>
+<text x="940" y="470" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >the supervisor: relays</text>
+<text x="940" y="490" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >messages to its workers</text>
+<rect x="1226" y="199" width="300" height="310" rx="10" fill="white" stroke="#2E7D5B" stroke-width="2" opacity="0.6"/>
+<rect x="1218" y="207" width="300" height="310" rx="10" fill="white" stroke="#2E7D5B" stroke-width="2" opacity="0.6"/>
+<rect x="1210" y="215" width="300" height="310" rx="10" fill="white" stroke="#2E7D5B" stroke-width="2.5"/>
+<path d="M1210 259 V225 a10 10 0 0 1 10 -10 H1500 a10 10 0 0 1 10 10 V259 Z" fill="#2E7D5B"/>
+<text x="1360.0" y="244" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Execution context(s)</text>
+<text x="1360" y="283" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="normal" fill="#5A6573" text-anchor="middle" >python -m cubevis.remote.worker_main</text>
+<rect x="1230" y="295" width="260" height="55" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1360.0" y="319.5" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >CommMgr</text>
+<text x="1360.0" y="341.5" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >WorkerCommTransport</text>
+<rect x="1230" y="360" width="260" height="55" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1360.0" y="384.5" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >VisplotRemoteBackend</text>
+<text x="1360.0" y="406.5" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >installed by configure</text>
+<rect x="1230" y="425" width="260" height="55" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1360.0" y="449.5" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >LocalVisibilityReader</text>
+<text x="1360.0" y="471.5" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >MSv2Backend / MSv4Backend</text>
+<path d="M1070 390 L1150 390 L1150 322 L1230 322" fill="none" stroke="#2E7D5B" stroke-width="5" stroke-dasharray="4 6" marker-start="url(#a-pipe)" marker-end="url(#a-pipe)"/>
+<text x="1150" y="415" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="bold" fill="#2E7D5B" text-anchor="middle" >stdin/stdout</text>
+<path d="M585 689 L955 689 L955 525" fill="none" stroke="#C0392B" stroke-width="5" stroke-dasharray="14 8" marker-start="url(#a-ssh)" marker-end="url(#a-ssh)"/>
+<text x="775" y="677" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#C0392B" text-anchor="start" >SSH tunnel</text>
+<text x="775" y="717" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="start" >one Jupyter comm per kernel</text>
+<path d="M1360 525 L1360 620" fill="none" stroke="#555555" stroke-width="5"   marker-end="url(#a-fs)"/>
+<path d="M1210.0 639 V716 A150.0 14 0 0 0 1510.0 716 V639" fill="#FFF7E0" stroke="#A88A2E" stroke-width="2"/>
+<ellipse cx="1360" cy="639" rx="150.0" ry="14" fill="#FFEFC2" stroke="#A88A2E" stroke-width="2"/>
+<text x="1360" y="687.5" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >Measurement Set</text>
+<text x="1360" y="709.5" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#5A6573" text-anchor="middle" >MSv2 / MSv4 local to data</text>
+<text x="40" y="62" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="bold" fill="#1C2733" text-anchor="start" >Remote Kernel  (sshpyk)</text>
+<text x="40" y="102" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="normal" fill="#4A5563" text-anchor="start" >GUI and Python stay local; a dedicated kernel on the data host supervises worker subprocesses that run visplot.</text>
+<line x1="40" y1="845" x2="90" y2="845" stroke="#1F6FB2" stroke-width="5" />
+<text x="100" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >WebSocket</text>
+<line x1="218.39999999999998" y1="845" x2="268.4" y2="845" stroke="#2E7D5B" stroke-width="5" stroke-dasharray="4 6"/>
+<text x="278.4" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >Subprocess stdin/stdout (length-prefixed frames)</text>
+<line x1="693.1999999999999" y1="845" x2="743.1999999999999" y2="845" stroke="#C0392B" stroke-width="5" stroke-dasharray="14 8"/>
+<text x="753.1999999999999" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >SSH tunnel (sshpyk) carrying a Jupyter comm</text>
+<line x1="1130.0" y1="845" x2="1180.0" y2="845" stroke="#555555" stroke-width="5" />
+<text x="1190.0" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >File I/O</text>
+<text x="1560" y="885" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#8A94A0" text-anchor="end" font-style="italic">Draft · v0.3 · worker stderr is relayed to the kernel's log</text>
+</svg>

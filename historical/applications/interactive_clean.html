@@ -1,0 +1,667 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="next" title="CASA/Viz Boundary" href="../boundary.html"><link rel="prev" title="Interactive clean as a pathfinder" href="interactive_clean_pathfinder.html">
+        <link rel="canonical" href="https://casangi.github.io/cubevis/historical/applications/interactive_clean.html">
+
+    <!-- Generated with Sphinx 9.1.1 and Furo 2025.12.19 -->
+        <title>Interactive Clean Design - cubevis</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/s4defs-roles.css?v=4e6db181" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/cubevis-docs.css?v=8a4cc0d1" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../../index.html"><div class="brand">cubevis</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
+  
+  <span class="sidebar-brand-text">cubevis</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/installing.html">Installing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/remote_kernels.html">Setting up remote execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/visplot_starting.html">Starting visplot</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/visplot.html">The visplot window</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/visplot_help.html">visplot controls, in full</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../applications/capabilities/index.html">What visplot can do</a><input aria-label="Toggle navigation of What visplot can do" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/from_plotms.html">Coming from plotms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/from_aips.html">Coming from AIPS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/data_access.html">Data formats and access</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/selection.html">Selecting data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/plot_types.html">Rasters, scatter plots and layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/standard_views.html">Standard views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/quantities.html">Plotted quantities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/phase_stability.html">Phase stability: Phase RMS and Coherence</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/vector_difference.html">Difference from the mean: Amp V Diff and Phase Diff</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/z_score.html">Z-Score</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/averaging.html">Averaging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/colormaps.html">Colormaps and color scaling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/flagging.html">Flagging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../applications/capabilities/output.html">Saving and describing plots</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/iclean_starting.html">Starting iclean</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../applications/iclean_parameters.html">iclean parameters</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Slides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../slides.html">Slide decks</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Background and development</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../contributing.html">Writing this documentation</a></li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">Historical reference</a><input aria-label="Toggle navigation of Historical reference" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2 current has-children"><a class="reference internal" href="../intro.html">System Design</a><input aria-label="Toggle navigation of System Design" checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="interactive_clean_pathfinder.html">Interactive clean as a pathfinder</a></li>
+<li class="toctree-l3 current current-page"><a class="current reference internal" href="#">Interactive Clean Design</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../boundary.html">CASA/Viz Boundary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../components/cube_mask.html">Cube Mask Design</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../../_sources/historical/applications/interactive_clean.rst.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <blockquote>
+<div></div></blockquote>
+<section id="interactive-clean-design">
+<h1>Interactive Clean Design<a class="headerlink" href="#interactive-clean-design" title="Link to this heading">¶</a></h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><strong>Historical reference.</strong>  This page describes the design and
+implementation of the <code class="docutils literal notranslate"><span class="pre">casagui</span></code> package, as it stood after the
+visualization trade study.  <code class="docutils literal notranslate"><span class="pre">cubevis</span></code> grew out of that work.  The page
+is kept for reference and is not maintained; names, figures and plans in
+it may no longer match <code class="docutils literal notranslate"><span class="pre">cubevis</span></code>.  See <a class="reference internal" href="../index.html"><span class="doc">Historical reference</span></a>.</p>
+</div>
+<p>The interactive clean prototype is based upon the <a class="reference external" href="https://bokeh.org/">Bokeh</a> framework. This framework
+allows for the development of sophisticated plotting applications in
+<a class="reference external" href="https://stackoverflow.com/a/52461357">pure-Python</a>. Bokeh’s Python libraries generate
+JavaScript applications which are then displayed in a web browser. The approach allows for
+the same GUIs to be used, with minor changes, in <a class="reference external" href="https://jupyter.org/">Jupyter Notebooks</a>,
+traditional web sites, and in desktop applications via <a class="reference external" href="https://www.electronjs.org/">Electron</a>.</p>
+<section id="traditional-approach">
+<h2>Traditional Approach<a class="headerlink" href="#traditional-approach" title="Link to this heading">¶</a></h2>
+<p>In the past our GUIs have been very big C++/<a class="reference external" href="https://www.qt.io/">Qt</a> applications which
+were monolithic, difficult to make script-able and complex to maintain.</p>
+<p>They were monolithic because at the time when Qt was adopted having one GUI library that
+could be built on different platforms and work with different windowing systems was a
+big advance. To accomplish this task, an entire, low-level GUI widget library was created.
+Applications built upon it needed to be built for each platform even though the Qt framework
+was portable. These applications were stand-alone processes and because of this, they were
+completely independent of the Python interpreter’s process environment.</p>
+<p>All <em>scripting</em> needed to be done by sending messages between the two, e.g.
+<code class="code docutils literal notranslate"><span class="pre">open</span> <span class="pre">file</span> <span class="pre">browser</span></code> or <code class="code docutils literal notranslate"><span class="pre">go</span> <span class="pre">to</span> <span class="pre">channel</span> <span class="pre">5</span></code>. It was difficult to integrate these
+messages at a low enough level to be useful while still having them at a high enough level
+for the Python interpreter process so that the user could do useful things without having
+to write a significant scripts based on low level messages.</p>
+<p>The maintenance complexity arises because the Qt applications are created at a very low
+level. This results in precise control, but also a very large code base to maintain. For
+example, the CASA viewer is built from 450379 lines of code that the CASA group maintains:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">github</span><span class="o">.</span><span class="n">com</span><span class="o">/</span><span class="n">AlDanial</span><span class="o">/</span><span class="n">cloc</span> <span class="n">v</span> <span class="mf">1.90</span>  <span class="n">T</span><span class="o">=</span><span class="mf">8.49</span> <span class="n">s</span> <span class="p">(</span><span class="mf">257.0</span> <span class="n">files</span><span class="o">/</span><span class="n">s</span><span class="p">,</span> <span class="mf">84496.2</span> <span class="n">lines</span><span class="o">/</span><span class="n">s</span><span class="p">)</span>
+<span class="o">-------------------------------------------------------------------------------</span>
+<span class="n">Language</span>                     <span class="n">files</span>          <span class="n">blank</span>        <span class="n">comment</span>           <span class="n">code</span>
+<span class="o">-------------------------------------------------------------------------------</span>
+<span class="n">C</span><span class="o">++</span>                           <span class="mi">1062</span>          <span class="mi">53563</span>          <span class="mi">63941</span>         <span class="mi">337561</span>
+<span class="n">C</span><span class="o">/</span><span class="n">C</span><span class="o">++</span> <span class="n">Header</span>                  <span class="mi">1004</span>          <span class="mi">36414</span>         <span class="mi">111750</span>          <span class="mi">81927</span>
+<span class="n">Qt</span>                              <span class="mi">94</span>              <span class="mi">0</span>              <span class="mi">0</span>          <span class="mi">27056</span>
+<span class="n">ProGuard</span>                         <span class="mi">1</span>             <span class="mi">25</span>             <span class="mi">24</span>           <span class="mi">1376</span>
+<span class="n">Python</span>                           <span class="mi">9</span>            <span class="mi">199</span>            <span class="mi">372</span>           <span class="mi">1060</span>
+<span class="n">Perl</span>                             <span class="mi">6</span>             <span class="mi">63</span>             <span class="mi">67</span>            <span class="mi">533</span>
+<span class="n">LLVM</span> <span class="n">IR</span>                          <span class="mi">1</span>             <span class="mi">40</span>              <span class="mi">0</span>            <span class="mi">302</span>
+<span class="n">diff</span>                             <span class="mi">1</span>             <span class="mi">38</span>            <span class="mi">431</span>            <span class="mi">301</span>
+<span class="n">XML</span>                              <span class="mi">2</span>             <span class="mi">59</span>              <span class="mi">0</span>            <span class="mi">235</span>
+<span class="n">Markdown</span>                         <span class="mi">2</span>             <span class="mi">11</span>              <span class="mi">0</span>             <span class="mi">28</span>
+<span class="o">-------------------------------------------------------------------------------</span>
+<span class="n">SUM</span><span class="p">:</span>                          <span class="mi">2182</span>          <span class="mi">90412</span>         <span class="mi">176585</span>         <span class="mi">450379</span>
+<span class="o">-------------------------------------------------------------------------------</span>
+</pre></div>
+</div>
+<p>In one respect, this is a <strong>worst case</strong> tally because it includes all of the CASA C++ code
+upon which the viewer is based (including <a class="reference external" href="https://github.com/casacore/casacore">casacore</a>).
+However, this estimate is also <strong>conservative</strong> in the sense that it does not include
+code that the viewer does not actually use (and does not include unused casacore code).</p>
+<p>The situation for casaplotms is somewhat worse:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">github</span><span class="o">.</span><span class="n">com</span><span class="o">/</span><span class="n">AlDanial</span><span class="o">/</span><span class="n">cloc</span> <span class="n">v</span> <span class="mf">1.90</span>  <span class="n">T</span><span class="o">=</span><span class="mf">6.86</span> <span class="n">s</span> <span class="p">(</span><span class="mf">315.2</span> <span class="n">files</span><span class="o">/</span><span class="n">s</span><span class="p">,</span> <span class="mf">122683.1</span> <span class="n">lines</span><span class="o">/</span><span class="n">s</span><span class="p">)</span>
+<span class="o">-------------------------------------------------------------------------------</span>
+<span class="n">Language</span>                     <span class="n">files</span>          <span class="n">blank</span>        <span class="n">comment</span>           <span class="n">code</span>
+<span class="o">-------------------------------------------------------------------------------</span>
+<span class="n">C</span><span class="o">++</span>                           <span class="mi">1082</span>          <span class="mi">69021</span>          <span class="mi">90887</span>         <span class="mi">405452</span>
+<span class="n">C</span><span class="o">/</span><span class="n">C</span><span class="o">++</span> <span class="n">Header</span>                  <span class="mi">1031</span>          <span class="mi">42771</span>         <span class="mi">121012</span>          <span class="mi">94906</span>
+<span class="n">Qt</span>                              <span class="mi">36</span>              <span class="mi">0</span>              <span class="mi">0</span>           <span class="mi">9385</span>
+<span class="n">Python</span>                           <span class="mi">5</span>            <span class="mi">352</span>            <span class="mi">668</span>           <span class="mi">2924</span>
+<span class="n">XML</span>                              <span class="mi">1</span>            <span class="mi">308</span>              <span class="mi">0</span>           <span class="mi">1555</span>
+<span class="n">ProGuard</span>                         <span class="mi">1</span>             <span class="mi">27</span>             <span class="mi">19</span>           <span class="mi">1323</span>
+<span class="n">Perl</span>                             <span class="mi">4</span>             <span class="mi">55</span>             <span class="mi">58</span>            <span class="mi">483</span>
+<span class="n">Protocol</span> <span class="n">Buffers</span>                 <span class="mi">1</span>             <span class="mi">25</span>              <span class="mi">0</span>            <span class="mi">206</span>
+<span class="n">Markdown</span>                         <span class="mi">1</span>              <span class="mi">8</span>              <span class="mi">0</span>             <span class="mi">79</span>
+<span class="o">-------------------------------------------------------------------------------</span>
+<span class="n">SUM</span><span class="p">:</span>                          <span class="mi">2162</span>         <span class="mi">112567</span>         <span class="mi">212644</span>         <span class="mi">516313</span>
+<span class="o">-------------------------------------------------------------------------------</span>
+</pre></div>
+</div>
+<p>Of these totals, the code that is specific to <strong>only</strong> the viewer is 69027 lines of
+code and that specific to <strong>only</strong> plotms is 145780 lines of code. From either
+perspective, each of these applications presents significant challenges for
+build, packaging, maintenance and continuing improvements. A new approach is
+required.</p>
+</section>
+<section id="framework-approach">
+<h2>Framework Approach<a class="headerlink" href="#framework-approach" title="Link to this heading">¶</a></h2>
+<p>To avoid the problems discussed to this point, we are attempting to take a new, modern
+approach. The previous section outlines the challenges with our existing approach which
+require a new approach. To try to chart a new course, the high-level choices we have
+made are:</p>
+<ol class="arabic simple">
+<li><p>Use a framework that is implemented in <strong>pure-Python</strong></p></li>
+<li><p>Use a development framework that provides <strong>higher level functionality</strong> instead of
+low level widgets</p></li>
+<li><p>Create <strong>reusable tools</strong> instead of specific applications</p></li>
+<li><p>Use a framework that is <strong>web-centric</strong></p></li>
+</ol>
+<p>These changes have a number of good consequences.</p>
+<p>A <em>pure-Python</em> implementation means that the applications we produce will work in a
+similar way everywhere Python is available.  Direct integration with Python also means
+that we will not experience all of the hurdles we have faced attempting to
+make our existing GUIs scriptable. It also means that a packaging and
+distribution mechanism exist to allow users to easily install our software
+<em>along with all of its dependencies</em>. Better integration with the Python
+ecosystem also means that things that are currently done in C++ code that CASA
+maintains can instead be done using Python code that is maintained by the
+Python community. This is a gradual process so over time we <em>should</em> continue
+to reap greater rewards as our integration increases.</p>
+<p>By choosing a framework that already provides <em>higher level functionality</em> that we
+require, we can avoid implementing each part of the interface at a fine level of
+detail. Because it is written in Python, the interface is also specified at a
+higher level of abstraction than the C++ equivalent. In fact, these frameworks
+are targeted at data science professionals. This means that over time it should
+be much easier for some of our users to create GUIs using the framework which
+can then be directly included into more general interfaces that can be delivered
+to all of our users.</p>
+<p>To avoid creating monolithic applications, we need to look for opportunities to
+<em>create reusable tools</em> that can be used by a variety of applications. This
+allows multiple end-user applications to share a common set of components, but
+it also should extend the development framework in ways that customize it to
+our domain. This process should then provide some framework components which
+can be used directly by users who want to create custom GUIs.</p>
+<p>By choosing a <em>web-centric</em> framework, we gain portability and generality.
+Modern web browsers are self-contained visualization environments that are
+available on all platforms. Using this instead of a large development library
+like <a class="reference external" href="https://www.qt.io/">Qt</a> frees us from the need to compile our
+application for each platform. It also increases our portability beyond
+just platform portability. By using a web-centric framework, it is much
+easier to make our GUIs available in
+<a class="reference external" href="https://jupyter.org/">Jupyter Notebooks</a> or as a part of stand-alone
+web-sites. This allows our applications to reach a wide variety of users.</p>
+<p>While the advantages of this approach to GUI development vastly outweighs
+the disadvantages, there are disadvantages. Free-standing applications are
+set apart for desktop users by their nature. Mixing the CASA GUI in with all
+of the other things that are done with web browsers causes the GUI to be
+another tree in the forest. There are also performance ramifications. Due
+in large part to all of the overhead, purpose-built, compiled applications
+are very fast compared with just-in-time, on-the-fly web-centric applications
+because much code is compiled dynamically as the application is loaded.
+Using the framework directly from a Python interpreter depends on using
+the web browser that is running on the same host. This is inconvenient
+for remote use (user logs into a system and runs Python) because the web
+browser must be displayed remotely with VNC or X11. This particular
+problem can be resolved by using <a class="reference external" href="https://www.electronjs.org/">Electron</a>
+to create an application that runs on the user’s local host with the
+application controlling a Python kernel running on the remote host in
+a model similar to Jupyter Notebooks.</p>
+</section>
+<section id="interactive-clean-app">
+<h2>Interactive Clean App<a class="headerlink" href="#interactive-clean-app" title="Link to this heading">¶</a></h2>
+<p>The <em>interactive clean app</em> is the first test of this new approach. It
+provides a simple GUI interface to
+<a class="reference external" href="https://casadocs.readthedocs.io/en/latest/api/tt/casatasks.imaging.tclean.html">tclean</a>.
+To implement this, it uses
+<a class="reference external" href="https://cubevis.readthedocs.io/en/latest/design/components/cube_mask.html">CubeMask</a>
+component to provide most of the interaction, and adds extra widgets to
+control <code class="code docutils literal notranslate"><span class="pre">tclean</span></code> and display convergence and statistics information.</p>
+<section id="overview">
+<h3>Overview<a class="headerlink" href="#overview" title="Link to this heading">¶</a></h3>
+<p>This diagram provides a view of the overall layout of the interactive clean
+application:</p>
+<a class="reference internal image-reference" href="../../_images/iclean-overview.png"><img alt="Layout Overview" src="../../_images/iclean-overview.png" width="600" />
+</a>
+</section>
+<section id="control">
+<h3>Control<a class="headerlink" href="#control" title="Link to this heading">¶</a></h3>
+<p>The <em>control section</em> of the GUI provides the control panel for the sequence
+of <code class="code docutils literal notranslate"><span class="pre">tclean</span></code> executions which will be run during an <em>interactive clean</em>
+session:</p>
+<a class="reference internal image-reference" href="../../_images/iclean-control-exit.png"><img alt="Image Control 1" src="../../_images/iclean-control-exit.png" width="300" />
+</a>
+<p>The row of text boxes make up the <em>input section</em> which provides values for
+the corresponding <code class="code docutils literal notranslate"><span class="pre">tclean</span></code> parameters:</p>
+<ul class="simple">
+<li><p><code class="code docutils literal notranslate"><span class="pre">niter</span></code> - maximum number of iterations to run</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">cycleniter</span></code> - maximum number of minor-cycle iterations</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">cyclefactor</span></code> - scaling on PSF sidelobe level to compute the minor-cycle stopping threshold</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">threshold</span></code> - stopping threshold (number in units of Jy or string)</p></li>
+</ul>
+<p>The <em>channel slider</em> is provided by the
+<a class="reference external" href="https://cubevis.readthedocs.io/en/latest/design/components/cube_mask.html">CubeMask</a>
+component. It allows for changing the the channel being displayed. Changing to a different
+channel results in all of the GUI elements being updated. The <code class="code docutils literal notranslate"><span class="pre">goto</span> <span class="pre">channel</span></code> text
+dialog provides a way to go to a specific channel by entering the channel number and
+pressing return.</p>
+<p>The buttons provide controls to run <strong>one</strong> (<em>single arrow</em>) or <strong>several</strong> (<em>double arrow</em>)
+<code class="code docutils literal notranslate"><span class="pre">tclean</span></code> runs. When the stop button is <strong>red</strong> as in this example, clicking the stop
+button will cause the interactive clean browser tab to close, interactive clean will stop
+in Python, and the <em>last set of masks</em> will be returned. But when the stop button is
+orange:</p>
+<a class="reference internal image-reference" href="../../_images/iclean-control-pause.png"><img alt="Image Control 2" src="../../_images/iclean-control-pause.png" width="300" />
+</a>
+<p>clicking the stop button when it is <strong>yellow</strong> will cause iteration to stop after the
+current <code class="code docutils literal notranslate"><span class="pre">tclean</span></code> run completes. The button color changes from <strong>red</strong> to <strong>yellow</strong>
+when the <em>run several tclean iterations</em> button (<em>double arrow</em>) is clicked.</p>
+</section>
+<section id="convergence-quality">
+<h3>Convergence Quality<a class="headerlink" href="#convergence-quality" title="Link to this heading">¶</a></h3>
+<p>Each time interactive clean completes one iteration, as defined by the <em>input section</em>,
+the convergence quality components are updated. These indicators include the
+<em>convergence plot</em>:</p>
+<a class="reference internal image-reference" href="../../_images/iclean-convergence-plot.png"><img alt="Convergence Plot" src="../../_images/iclean-convergence-plot.png" width="500" />
+</a>
+<p>This plot includes both <em>Peak Residual</em> and <em>Total Flux</em> plots. The statistics plot
+includes image statistics for the channel currently being displayed:</p>
+<a class="reference internal image-reference" href="../../_images/iclean-channel-statistics.png"><img alt="Channel Statistics" src="../../_images/iclean-channel-statistics.png" width="300" />
+</a>
+<p>Both of these are updated with the completion of each iteration and when the user
+changes the displayed channel.</p>
+</section>
+<section id="spectrum-display">
+<h3>Spectrum Display<a class="headerlink" href="#spectrum-display" title="Link to this heading">¶</a></h3>
+<p>Like the <em>channel slider</em>, the <em>spectrum display</em> is provided by the
+<a class="reference external" href="https://cubevis.readthedocs.io/en/latest/design/components/cube_mask.html">CubeMask</a>
+component:</p>
+<a class="reference internal image-reference" href="../../_images/iclean-spectrum-display.png"><img alt="Spectrum Display" src="../../_images/iclean-spectrum-display.png" width="400" />
+</a>
+<p>This plot is updated as the cursor moves around in the channel display. Clicking in
+the channel display freezes spectrum updates and then the <em>spectrum display</em> can be
+used to go to a specific channel as indicated by the vertical cursor tracking line.
+Clicking in the <em>spectrum display</em> will cause the channel display to go to the
+channel indicated by the vertical cursor tracking line.</p>
+</section>
+<section id="implementation-details">
+<h3>Implementation Details<a class="headerlink" href="#implementation-details" title="Link to this heading">¶</a></h3>
+<p>Like the new <code class="code docutils literal notranslate"><span class="pre">MakeMask</span></code> app, the <code class="code docutils literal notranslate"><span class="pre">InteractiveClean</span></code> app uses the
+<code class="code docutils literal notranslate"><span class="pre">CubeMask</span></code> component to implement the display and interaction with the
+<em>dirty image cube</em> created by <code class="code docutils literal notranslate"><span class="pre">tclean</span></code>. The
+<a class="reference internal" href="../components/cube_mask.html"><span class="doc">CubeMask component</span></a> provides a collection of widgets
+centered around image cubes. These widgets can be mixed into different
+applications.</p>
+<p>The <code class="code docutils literal notranslate"><span class="pre">InteractiveClean</span></code> application is available as part of the <code class="code docutils literal notranslate"><span class="pre">cubevis</span></code>
+Python package. This package is
+<a class="reference external" href="https://pypi.org/project/cubevis/">available from PyPI</a>.
+It can be installed like:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>bash$ pip install cubevis
+</pre></div>
+</div>
+<p>To run <code class="code docutils literal notranslate"><span class="pre">InteractiveClean</span></code> the <code class="code docutils literal notranslate"><span class="pre">casatasks</span></code> package must also be installed.</p>
+<p>Once installed, the <code class="code docutils literal notranslate"><span class="pre">InteractiveClean</span></code> application can be imported and run from
+the user’s Python session like:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">cubevis.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">InteractiveClean</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">InteractiveClean</span><span class="p">(</span> <span class="n">vis</span><span class="o">=</span><span class="n">ms_path</span><span class="p">,</span> <span class="n">imagename</span><span class="o">=</span><span class="n">img</span><span class="p">,</span> <span class="n">imsize</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span> <span class="n">cell</span><span class="o">=</span><span class="s1">'12.0arcsec'</span><span class="p">,</span>
+<span class="go">                      specmode='cube', interpolation='nearest', nchan=5, start='1.0GHz',</span>
+<span class="go">                      width='0.2GHz', pblimit=-1e-05, deconvolver='hogbom', threshold='0.001Jy',</span>
+<span class="go">                      niter=50, cycleniter=10, cyclefactor=3, scales=[0,3,10] )( )</span>
+</pre></div>
+</div>
+<p>In general, the <code class="code docutils literal notranslate"><span class="pre">InteractiveClean</span></code> constructor takes a subset of parameters accepted
+by <a class="reference external" href="https://casadocs.readthedocs.io/en/latest/api/tt/casatasks.imaging.tclean.html">tclean</a>.
+All of the masks used in running interactive clean are available from the
+<code class="code docutils literal notranslate"><span class="pre">InteractiveClean</span></code> object. To get access to the list of masks, you would create
+the object as a separate statement:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">ic</span> <span class="o">=</span> <span class="n">InteractiveClean</span><span class="p">(</span> <span class="n">vis</span><span class="o">=</span><span class="n">ms_path</span><span class="p">,</span> <span class="n">imagename</span><span class="o">=</span><span class="n">img</span><span class="p">,</span> <span class="n">imsize</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span> <span class="n">cell</span><span class="o">=</span><span class="s1">'12.0arcsec'</span><span class="p">,</span>
+<span class="go">                  specmode='cube', interpolation='nearest', nchan=5, start='1.0GHz',</span>
+<span class="go">                  width='0.2GHz', pblimit=-1e-05, deconvolver='hogbom', threshold='0.001Jy',</span>
+<span class="go">                  niter=50, cycleniter=10, cyclefactor=3, scales=[0,3,10] )( )</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">ic</span><span class="p">(</span> <span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">ic</span><span class="o">.</span><span class="n">masks</span><span class="p">(</span> <span class="p">))</span>
+</pre></div>
+</div>
+<p>In these examples, the <code class="code docutils literal notranslate"><span class="pre">InteractiveClean</span></code> function call (e.g. <code class="code docutils literal notranslate"><span class="pre">ic(</span> <span class="pre">)</span></code>) displays
+the GUI that was specified in the <code class="code docutils literal notranslate"><span class="pre">InteractiveClean</span></code> object constructor. It is at this
+point that the <a class="reference external" href="https://docs.python.org/3/library/asyncio.html">asyncio</a> eventloop is
+started. This eventloop processes the events that are used to update the GUI, control the
+<code class="code docutils literal notranslate"><span class="pre">tclean</span></code> invocations and finally stop and return control to the user.</p>
+<p>When the <a class="reference external" href="https://bokeh.org/">Bokeh</a> framework is used for scripting from the Python prompt
+it creates a GUI with all of the interactions that can be predefined at build time, but updates
+from Python that cannot be predetermined (without, for example, loading in the whole image cube)
+must be handled outside of Bokeh. Interactions that fall into this category are things like
+updating the channel plot in response to user input or updating the convergence plot with
+convergence information returned by <code class="code docutils literal notranslate"><span class="pre">tclean</span></code>. The communication for these updates is
+handled with <a class="reference external" href="https://websockets.readthedocs.io/en/stable/">websockets</a>. This is true for the
+<em>cube display</em> functionality in <code class="code docutils literal notranslate"><span class="pre">CubeMask</span></code> as well as the additional functionality
+that the interactive clean implementation adds. The communication for this added functionality
+happens via two websockets:</p>
+<ul class="simple">
+<li><p>_control_ - pause or stop further calls to <code class="code docutils literal notranslate"><span class="pre">tclean</span></code></p></li>
+<li><p>_convergence_ - update convergence quality plot</p></li>
+</ul>
+<p>These are two separate websockets to ensure that _control_ messages are not delayed due
+to convergence information updates from <code class="code docutils literal notranslate"><span class="pre">tclean</span></code> executions. More information about
+<code class="code docutils literal notranslate"><span class="pre">CubeMask</span></code> is available in the <a class="reference internal" href="../components/cube_mask.html"><span class="doc">its design document</span></a>.</p>
+<p>In response to control commands from the interactive clean GUI, <code class="code docutils literal notranslate"><span class="pre">tclean</span></code> is called
+in Python when the websocket events are received. The results are then transferred to the
+browser to update the GUI and the process repeats.</p>
+</section>
+<section id="future-work">
+<h3>Future Work<a class="headerlink" href="#future-work" title="Link to this heading">¶</a></h3>
+<p>The fundamental work that remains for the <em>interactive clean</em> application involves using
+the <a class="reference external" href="https://ipython.readthedocs.io/en/stable/install/kernel_install.html">IPython Jupyter Kernel</a>
+as the process which runs <code class="code docutils literal notranslate"><span class="pre">tclean</span></code>. This seems like it should be possible with no
+significant, known problems. Early in our abbreviated trade study, we tested this with
+a simpler example (<code class="code docutils literal notranslate"><span class="pre">plotants</span></code>) without significant issues. Making this functionality
+available means that interactive clean could be used from a Jupyter Notebook and it could
+be integrated into a stand-alone, desktop app based on <a class="reference external" href="https://www.electronjs.org/">Electron</a>.
+Both of these were tested in the trade study. The final step that was not tested in the
+trade study is <code class="code docutils literal notranslate"><span class="pre">tclean</span></code> executing in a <strong>remote</strong> IPython Kernel. The documentation
+indicates that this should be possible. Once this is available, it will be possible to
+start a desktop application which then runs CASA tasks in a remote kernel executing on
+an NRAO cluster (or other compute resource).</p>
+</section>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="../boundary.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">CASA/Viz Boundary</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="interactive_clean_pathfinder.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Interactive clean as a pathfinder</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2021-2026 Associated Universities, Inc. Washington DC, USA.
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Interactive Clean Design</a><ul>
+<li><a class="reference internal" href="#traditional-approach">Traditional Approach</a></li>
+<li><a class="reference internal" href="#framework-approach">Framework Approach</a></li>
+<li><a class="reference internal" href="#interactive-clean-app">Interactive Clean App</a><ul>
+<li><a class="reference internal" href="#overview">Overview</a></li>
+<li><a class="reference internal" href="#control">Control</a></li>
+<li><a class="reference internal" href="#convergence-quality">Convergence Quality</a></li>
+<li><a class="reference internal" href="#spectrum-display">Spectrum Display</a></li>
+<li><a class="reference internal" href="#implementation-details">Implementation Details</a></li>
+<li><a class="reference internal" href="#future-work">Future Work</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script data-current="" data-site="/cubevis/" src="../../_static/js/versions.js?v=56d3ce4a"></script>
+    </body>
+</html>

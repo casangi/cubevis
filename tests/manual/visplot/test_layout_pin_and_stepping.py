@@ -274,7 +274,13 @@ class TestRedrawsAfterPlot:
         out = sc._handle_rerender(dict(x0=x0, x1=x1, y0=y0, y1=y1, w=w * 2, h=h // 2,
                                        size_only=True))
         assert calls == []                       # Level-1: no backend query
-        assert sc._canvas_width == round(cw * 2) and abs(sc._canvas_height - ch * (h // 2) / h) <= 1
+        # Twice as wide, but on X = Time / Frequency / Channel no more
+        # columns than samples in view (#36's cap, kept through a resize
+        # since 2026-11-23: VisibilityScatter._pixel_size_changed).
+        want_w = round(cw * 2)
+        if sc._x_step:
+            want_w = min(want_w, max(1, int((x1 - x0) / sc._x_step)))
+        assert sc._canvas_width == want_w and abs(sc._canvas_height - ch * (h // 2) / h) <= 1
         assert out["image"].shape == (sc._canvas_height, sc._canvas_width)
 
     def test_status_line_follows_the_layout(self, plotter):
@@ -284,4 +290,5 @@ class TestRedrawsAfterPlot:
             "field": FIELD, "layout": "over",
             "panels": {sid: {"kind": "scatter", "x": "CHANNEL", "y": "AMPLITUDE"}}}))
         assert "Layout: Over / Under" in resp["status_text"]
-        assert "layout:      ['one', 'side', 'over'][layout_rbg.active]," in vp._do_plot_js
+        # 'grid' since gridplot (layout_rbg's fourth button)
+        assert "layout:      ['one', 'side', 'over', 'grid'][layout_rbg.active]," in vp._do_plot_js

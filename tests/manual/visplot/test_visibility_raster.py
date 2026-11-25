@@ -1099,8 +1099,13 @@ class TestStateSource:
         what agg_n_x / agg_n_y report.  Equal to the number of cells on
         an axis without gaps; larger on one with gaps (time between
         scans), where range / number-of-cells is not a cell's size."""
+        # Same inputs as VisibilityRaster._panel_spec: the true cell widths
+        # (#38) and the runs of a closed axis (#36).  Until 2026-11-23 this
+        # took the widths from the coordinate spacing, which on a short
+        # slice with uneven spacing came out one cell off (22 vs 23).
         from cubevis.toolbox.visplot import raster_grid as rg
-        lo, hi = rg.cell_edges(vr.agg.coords[dim].values, vr._axis_half(dim))
+        lo, hi = rg.cell_edges(vr.agg.coords[dim].values, vr._axis_half(dim),
+                               vr._axis_width(vr.agg, dim), vr._axis_runs(dim))
         return max(1, int(round((rng[1] - rng[0]) / np.median(hi - lo))))
 
     def test_state_source_agg_shape_matches(self):

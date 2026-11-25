@@ -273,4 +273,16 @@ class TestPresetColorizeModeSnippets:
             _SRC)
 
     def test_snippet_runs_before_doplot_is_called(self):
-        assert "code=self._do_plot_js + colorize_mode_js + f" in _SRC
+        # The preset's script is _do_plot_js (defines doPlot), then the
+        # Grid branch (gridplot G3: sets only the grid's own panel, calls
+        # doPlot() and returns -- Panels A and B, whose scatter layers
+        # these handles belong to, keep theirs), then the colorize
+        # snippet, then the rest of the preset ending in doPlot().  Until
+        # 2026-11-23 this looked for the text "_do_plot_js +
+        # colorize_mode_js", which the Grid branch (dd4e51b8) split.
+        m = re.search(r'code=self\._do_plot_js \+ f"""(.*?)"""\s*\+ colorize_mode_js \+ f"""(.*?)"""',
+                      _SRC, flags=re.S)
+        assert m, "the preset script is no longer _do_plot_js + grid branch + colorize snippet + rest"
+        grid_branch, rest = m.groups()
+        assert "layout_rbg.active === 3" in grid_branch and "return;" in grid_branch
+        assert "doPlot()" in rest

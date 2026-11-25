@@ -3,6 +3,13 @@
 **Status: first pass complete for the four legs; second checkpoint. See "Coverage" and §8 for what has
 not been read or confirmed.**
 
+> **Status at the end of issue #35 (`35-transport-bugs`, 2026-11-25).** Fixed: WS-1…WS-7 (WS-5's
+> remaining bullets are notes), RP-1, JS-1…JS-3, PY-1, PY-2, JC-1…JC-4, CO-3, RK-1; the decided design
+> in §1 (re-ask instead of wall-clock deadlines); HB-1 (1) and (2) (busy-tolerant heartbeat, loop-lag
+> monitor). Moved to new issues: the rest of HB-1 (long handlers off the event loop, after measuring
+> with TW Hya); Colab CO-1, CO-2, CO-4…CO-8; remote RK-2…RK-9 and the OPT items; GUI state
+> after a reload; visplot in notebooks. §7 and §8 below are from the first pass.
+
 Base: `casangi/cubevis` `main` @ `91affeaf` (2026-11-10, "Merge pull request #8 from casangi/network-change").
 
 Purpose: a working list for future sessions that fix problems or inefficiencies in the
@@ -49,7 +56,7 @@ File shorthand:
 | ID | Sev | One line |
 |---|---|---|
 | WS-1 ✅ | S1 | Any failure during the handshake of *any* incoming WebSocket connection shuts the whole application down |
-| WS-2 (part) | S1 | A new connection retires the live transport *before* the newcomer has proved itself (handshake) — a stray or second-tab connection kills the working one |
+| WS-2 ✅ | S1 | A new connection retires the live transport *before* the newcomer has proved itself (handshake) — a stray or second-tab connection kills the working one |
 | WS-3 ✅ | S1 | Retiring a half-open socket can take `close_timeout` (10 s default) while the JS handshake deadline is 5 s → guaranteed first-attempt failure, which then hits WS-1 |
 | RP-1 | S1 | In-flight requests are replayed after reconnect with no de-duplication; a handler can run twice (JS reuses the request id, so a Python-side fix is cheap) |
 | HB-1 | S1/S2 | A synchronous handler longer than 10 s makes the browser declare a healthy socket dead → reconnect + replay (RP-1) → the long handler runs a second time |
@@ -70,6 +77,30 @@ inside a cell); RK-9 `[?]` (blocking `conn.call` on a loop thread). The common r
 "pending forever" cases: **no per-request timeout exists in either `CommMgr`**, so any lost message is
 permanent. A default per-request deadline that clears `pending` and calls the callback with an error
 would turn each of these from a hang into a visible failure.
+
+> **Design decided 2026-11-23 (issue #35): no wall-clock deadline.** A Plot, a flag commit or an
+> iclean "finish" can legitimately run for minutes or hours, and a planned use is starting iclean on
+> site, unplugging the laptop, going home and resuming -- a request must never fail because no
+> browser is connected. Instead: (1) one primitive in both `CommMgr`s, `forget(request_id)` (clear
+> pending, move the comm's queue on, call the callback with an error); (2) a *re-ask*: a request that
+> has gone quiet *while a transport is connected* is sent again with the same `request_id`, and RP-1's
+> per-comm record on the other side drops the copy (still running) or resends the stored reply; only
+> an unanswered re-ask is forgotten. Re-asking happens only on a live transport, so a disconnect of
+> any length just waits. JC-1's reopen hook and RK-1 use the same primitive.
+>
+> **Implemented on `35-transport-bugs` (2026-11-23), WebSocket leg.** Both `CommMgr`s:
+> `forget(request_id | callback, error=)` removes a request in flight *or still queued* and moves the
+> comm's queue on. A request with no reply for `REASK_AFTER` (30 s) is sent again with `reask: true`;
+> the receiver answers a still-running one with `__running__` (restarts the wait), a finished one with
+> the stored reply, an unknown one by running it. A re-ask is forgotten (callback gets
+> `{'error': 'no reply: the request was lost'}`) only if it is unanswered for another 30 s *and* the peer
+> sent `REASK_LIVENESS_TICKS` (2) frames meanwhile (`WebSocketTransport.liveness`, pings/pongs count): a
+> blocked or absent peer is waited for. `__running__` is sent only in answer to `reask`, so reconnect
+> replays and older peers behave as before. **Order:** the receiver runs one request per comm at a time
+> (its comm lock), so a forgotten request that does run there finishes before the next on that comm;
+> its late reply is ignored. Tests: `tests/manual/visplot/test_reask.py` (incl.
+> `test_after_a_forget_the_next_request_runs_after_the_forgotten_one`). Not yet on the Jupyter / Colab
+> transports (no liveness count): JC-1.
 
 ---
 
@@ -100,6 +131,18 @@ connection, return. Only escalate to fatal for errors that are about the applica
 Remove the `abort` call from `connect()` (or make `transport_abort` non-fatal for connect-phase errors).
 
 ### WS-2 [C] S1 — the old transport is retired before the new one is validated
+
+> **Remainder fixed on `35-transport-bugs` (2026-11-23):** a page for another session is refused, not
+> warned about. `connect()` compares the page's `comm_mgr_id` with its own (each server serves one
+> CommMgr; the id is a uuid per CommMgr), and its `backend_id` with the app context's when the page
+> sends one -- pages send `null` today, as `find.context()` does not reach the context from the CommMgr.
+> A missing value is accepted (older pages). The refused page gets `__refused__` and close code
+> `REFUSED_CLOSE_CODE` (4002); `cm.ts` `onRefused` stops reconnecting for good and shows a "Session
+> ended" notice (the superseded notice, generalised: `showNotice`, no button). The case it covers: a
+> tab left from an earlier run wakes and reconnects to a port a newer process was given; accepted,
+> it took the session from the live page (newest page wins) and replayed its requests there.
+> Tests: `test_page_for_another_session_is_refused[comm_mgr_id|backend_id]`,
+> `test_page_without_ids_is_still_accepted`.
 
 > **Fixed in `debug-0003` (2026-11-20), except the `backend_id` mismatch, which still only warns.**
 > The handshake runs first, on the attempt's own transport, with a 10 s timeout
@@ -150,6 +193,43 @@ trigger is the event loop being busy (HB-1) while the close handshake is pending
 abrupt), and fix WS-1. Consider passing an explicit small `close_timeout` to `websockets.serve`.
 
 ### WS-4 [C] S2 — `__goodbye__` latches for the life of the transport
+
+> **Fixed on `35-transport-bugs` (2026-11-23).** `llt.ts` sends goodbye from `pagehide` only (not
+> cancellable, and after `beforeunload`, so it is the last frame a departing page sends); the
+> `goodbyeSent` latch is gone. `llt.py` forgets a goodbye when any later frame arrives (a ping
+> within 15 s at most), which also covers bundles that still send it from `beforeunload`. Besides
+> "Leave site?" -> Stay, a `beforeunload` that does not end the page includes a click on a link that
+> turns out to be a download. Tests: `test_goodbye_followed_by_traffic_is_forgotten`,
+> `test_goodbye_then_silence_still_ends_the_session`.
+> **Same pattern outside the transport:** iclean (`iclean/_ui.py`, the `initialize` script) sent
+> `stop` from `beforeunload`. **Changed 2026-11-25:** only in a browser tab (`stop_on_unload`, the
+> CommMgr's transport is the WebSocket), and from `pagehide`. In a notebook leaving the page no longer
+> stops the session: a reload stopped iclean before the restored page could reconnect (seen by Darrell
+> in JupyterLab; reproduced and checked with `devel/tools/jupyterlab_headless`: after the change the
+> restored page carries on the same kernel-side session, both directions answered). Closing a browser
+> tab still ends iclean (the call returned its result ~4 s after the tab closed).
+> `_createmask.py` / `_createregion.py` still call `cube_done` from `beforeunload`: not changed, and
+> not needed (2026-11-25). They are the older CubeMask-websocket apps -- no `CommMgr`, `asyncio.run`,
+> no notebook resume -- so a tab closing or reloading ends them either way, and `cube_done` is what
+> sends their result.
+>
+> **Reload of an unsaved notebook (2026-11-25, Darrell):** JupyterLab rebuilds the page from the file,
+> so if the notebook was not saved since the GUI was shown there is no output to restore: a blank
+> cell, while the session runs on in the kernel. The kernel cannot tell (no comm closes, none opens;
+> it cannot ask the page while a cell runs), so it is explicit: `ic.show(redisplay=True)` /
+> `vp.show(redisplay=True)` loads BokehJS again, displays the bridge again (a new comm) and renders the
+> GUI afresh from the current document; its CommMgr completes the handshake and takes the session,
+> and anything held for the gone page is replayed. A plain second `show()` (the "GUI active above"
+> placeholder) now says to use it. Checked in JupyterLab for iclean and visplot
+> (`devel/tools/jupyterlab_headless/examples/reload_unsaved.py`). Not in Colab.
+>
+> **GUI state is not restored (2026-11-25), saved or not:** a saved reload restores the output as it was
+> first rendered, and `redisplay=True` renders the kernel-side models, which the browser's changes never
+> reach; either way the GUI starts from its state at `show()` while the kernel carries on. After one
+> iclean cycle (niter 40, 5 left) both came back with niter 50, the first status line and a one-point
+> convergence plot -- so Continue would then send niter=50. Images and masks come from the cubes and are
+> current (`examples/reload_state.py`). Needs the page to ask the kernel for the session's state when it
+> connects: application work, moved to a new issue.
 `llt.py:370-375` sets `_goodbye_received = True` and it is never cleared. `llt.ts:328-329` sends it on
 `pagehide` **and** `beforeunload`. `beforeunload` can be cancelled (another handler prompts "Leave site?"
 and the user stays). After that, a later *abrupt* drop (sleep/network) is classified clean
@@ -158,6 +238,10 @@ JS `goodbyeSent` is also never reset.
 **Fix:** send goodbye on `pagehide` only, and/or clear `_goodbye_received` on any subsequent inbound frame.
 
 ### WS-5 [C] S3 — per-message details in `run()`
+
+> **First two bullets fixed on `35-transport-bugs` (2026-11-23):** the failure log names
+> `comm_id.message_id (request_id)` only; the goodbye and ping comments are each above their own
+> branch. The last two bullets are notes, not changes.
 - `llt.py:436`: the failure log interpolates the whole message (`{_msg}`), which can be megabytes. Log
   `comm_id`/`message_id`/`request_id` only.
 - `llt.py:359-382`: the keepalive and goodbye comment blocks are interleaved (the ping comment sits above
@@ -169,6 +253,28 @@ JS `goodbyeSent` is also never reset.
   `async with lock` in `_handle_request`/`_route_message` would silently break per-comm ordering.
 
 ### WS-6 [C] S3 — `ws://` is hard-coded (`llt.ts:133`); a page served over https cannot connect (mixed content). Fine for `file://`/localhost; note for any hosted deployment.
+
+> **Fixed on `35-transport-bugs` (2026-11-25):** `llt.ts` opens `wss://` when the page is `https:`, else
+> `ws://` as before. The Python side still serves plain ws, so an https page needs a proxy that
+> terminates TLS in front of the port; nothing changes for `file://` and `http://` pages. Not run against
+> an https page.
+
+### WS-7 [C] S1 — a GUI shown in a browser tab from a notebook kernel uses Jupyter comms (found 2026-11-25)
+
+Not in the first pass. `CommMgr` chose its transport by where Python runs ('auto' → `jupyter` in a
+kernel), but `visplot(...)` and `iclean(...)` run in a notebook cell show the GUI in a browser tab
+(`BokehAppContext.show` → `webbrowser.open('file://...')`). A `file://` tab cannot reach the kernel's
+comms: it shows its first view (the data is embedded) and its first request -- stepping to the first
+Antenna, seen by Darrell with TW Hya -- never returns; the page's CommMgr ends in `error`.
+
+> **Fixed on `35-transport-bugs` (2026-11-25):** where the GUI is shown decides the transport. The visplot
+> task layers pass `transport='websocket'` (a `VisibilityPlotter` layer argument, `project_layers.yaml`);
+> `InteractiveClean` (the iclean task) asks for 'websocket' and `InteractiveCleanNotebook` keeps 'auto'
+> (`_TRANSPORT`, `_app.mustache`); `InteractiveCleanUI` takes `transport`. `BokehAppContext.show` refuses
+> a comms `CommMgr` with a message instead of hanging. Checked in JupyterLab
+> (`devel/tools/jupyterlab_headless/examples/visplot_task_tab.py`): before, the tab's CommMgr was in
+> `error` and the step did nothing; after, it runs over WebSocket and the step selects ANTENNA-0 in ~3 s.
+> `iclean(...)` from a cell: the tab ran a cycle. `tests/manual/visplot/test_tab_transport.py`.
 
 ---
 
@@ -202,6 +308,17 @@ Supporting fact [C]: replies are sent on `self._transport` at reply time (`cm.py
 why the replayed copy is redundant.
 
 ### HB-1 [C] S1/S2 — the browser heartbeat cannot tell "busy" from "dead"
+
+> **Partly fixed on `35-transport-bugs` (2026-11-23).** (1) `llt.ts`: while a request awaits its reply,
+> a missed pong is not fatal; the socket is declared dead after 3 misses in a row (about 23 s after a
+> wake probe instead of 3 s); with nothing in flight, after one, as before. Checked live with the
+> harness's new `BLOCK_PLOT=20` (holds the loop): the old bundle reconnected 4 s into the Plot, the new
+> one does not. (2) An event-loop lag monitor in `CommMgr` logs `event loop blocked for N s (running:
+> <handler> (<comm>.<message>))`: DEBUG from 1 s, INFO from 8 s. **Still to do:** move what it shows
+> to be long off the loop. The static audit: every image-cube handler (`_image_pipe` channel fetch with
+> statistics and histogram, spectrum, `edit_mask` -- cube scope can be long -- and the colormap
+> histogram) runs on the loop; moving them needs one lock per cube, as casacore is not thread-safe and
+> loop-side code touches the same cube. Decided 2026-11-23: measure first (TW Hya), then move.
 `llt.ts:112-114`: ping every 15 s, 10 s pong deadline (3 s after wake/focus). Python answers pings in the
 socket read loop (`llt.py:377-382`), which needs the event loop. Any handler that holds the loop
 synchronously for longer than the deadline (the comment at `llt.py:384-417` says so itself) gets the
@@ -218,6 +335,11 @@ already-received pong and the *server* closes the connection (1011). Same cure: 
 `asyncio.to_thread` is used in visplot's scatter/raster handlers; `grep` finds none in `iclean/` or
 `_cube.py`, so those handlers are synchronous on the loop [C by grep; individual handler durations not
 assessed].
+
+> **Correction (2026-11-23):** iclean's expensive handler, `clean_handler`, awaits
+> `session.arun_cycle()`, which runs the imager in a thread (`gclean.__anext__`); the grep missed it.
+> What remains to audit is the smaller handlers in `_cube.py` (mask edits, statistics, spectrum,
+> palette, colormap) and the synchronous `session.update()` / `log()` around the cycle.
 
 **Fix directions:** (a) RP-1 de-dup removes the double execution; (b) move remaining long handlers to
 threads; (c) make the deadline tolerant: in `llt.ts` do not `declareDead` on a missed pong while the
@@ -250,21 +372,37 @@ hold the transport in a local variable through `setupTransport` and bail out if 
 after each await — the same pattern as `cm.py:841-863`.
 
 ### JS-2 [C] S2 — `sendImmediate` marks a comm pending even when nothing was sent
+
+> **Fixed on `35-transport-bugs` (2026-11-23):** with no connected transport, `sendImmediate` puts the
+> message back at the head of its comm's queue, unsent and not pending, and schedules a reconnect;
+> `flushAllQueues` sends it after the handshake.
 `cm.ts:676-691` (pending set, then "Transport not ready, cannot send" and return) and
 `llt.ts:515-521` (`WebSocketTransport.send` drops with a warning if not OPEN). Recovery depends on a later
 `resetConnectionState()`. Prefer: do not mark pending unless the write happened; queue instead (as
 `cm.py:696-706` does).
 
 ### JS-3 [C] S3 — JS handlers cannot be async
+
+> **Fixed on `35-transport-bugs` (2026-11-23):** a thenable result is awaited and its value (or error)
+> sent; meanwhile the comm's RP-1 record says "running", so a replay of it is dropped, as in Python.
 `cm.ts:805-817` sends the handler's return value as the reply immediately; a handler returning a Promise
 would send `{}`. Fine today if all JS handlers are synchronous; worth a guard (`await` if thenable).
 
 ### PY-1 [C] S2 — `abandon_inflight` / `_reset_for_reconnect` and late replies
+
+> **Fixed on `35-transport-bugs` (2026-11-23):** DEBUG once `connection_generation > 0`, WARNING before
+> (`tests/manual/remote/test_bug_reproduction.py` relies on the warning at generation 0).
 After either, a late reply for a forgotten request logs `Received response for unknown request` at WARNING
 (`cm.py:1356-1358`) — expected and harmless, but noisy; downgrade to DEBUG when
 `_connection_generation > 0`.
 
 ### PY-2 [C] S3 — leftovers in `CommMgr`
+
+> **Fixed on `35-transport-bugs` (2026-11-23), all bullets:** no-loop branch removed; `Comm.__init__`
+> no longer touches `kwargs['description']` and tests `comm_mgr is not None`; Bokeh's `List` / `Tuple`
+> imported as `PList` / `PTuple`; `# REMOVED` comments dropped and `_errors` is a `deque(maxlen=100)`;
+> the 2-parameter handler wrapper chains `from e`; handler arity cached per handler
+> (`_takes_context`); response callbacks go by `inspect.isawaitable(result)`.
 - `cm.py:1531`: `self._shutdown_event.set` is missing `()` (the no-running-loop branch; unreachable from a
   coroutine, so harmless — delete the branch).
 - `cm.py:123`: `kwargs['description']` is a bare expression → `KeyError` if `Comm(...)` is constructed
@@ -288,6 +426,46 @@ After either, a late reply for a forgotten request logs `Received response for u
 ## 4. Jupyter comm leg (notebook ↔ kernel)
 
 ### JC-1 [C/L] S1 — no close detection, no reset, no replay
+
+> **Checked and fixed on `35-transport-bugs` (2026-11-24), JupyterLab 4.6 in headless Chromium**
+> (`devel/tools/jupyterlab_headless/`). What happens is not what was assumed below:
+> - **Reload:** the visplot output does *not* come back (`Bokeh is not defined` when the restored
+>   output runs), but the bridge does and opens a new comm. Python sent on the newest comm, i.e. to a
+>   page with no app: requests vanished and the comm stayed pending.
+> - **Second view of the output** (Create New View for Output): a new comm; replies to the *first*
+>   view's requests went to the newest comm, so the first view waited for ever.
+> - **Kernel connection lost** (browser offline 5 s, 60 s): nothing lost; jupyter_server replays.
+>
+> Fix (`CommsTransport`, JupyterLab only; Colab unchanged): Python's own messages go on the comm of the
+> page whose CommMgr last sent `comm_opened` (`_active_comm`); with none, `is_connected()` is False and
+> the CommMgr holds them. A new comm opening makes the active one unconfirmed and its requests in flight
+> go back to the head of their queues (`on_frontend('lost')` -> `CommMgr._on_comms_frontend`), replayed
+> with their request_ids when a page completes the handshake (`'ready'`). A reply goes back on the comm
+> its request came on (`_reply_comm`). `on_close` is registered. Older views are **not** told they lost
+> the session: the WebSocket's full-window notice covered all of JupyterLab, the active view included;
+> they keep working for their own requests. Tests: `tests/manual/visplot/test_comms_transport.py`.
+>
+> **Found on the way, fixed:** after in-flight requests are put back at the head of a queue (here, and
+> on a WebSocket reconnect), a new `send()` on that comm went ahead of them (held at the head itself,
+> or sent straight away). `CommMgr.send` now queues behind held messages; squash mode never drops a
+> held replay. Test: `test_reask.py::test_a_send_while_the_page_is_away_goes_after_the_replay`.
+>
+> **Found, not fixed (outside JC-1, before this branch; an edge case):** when the visplot cell output and
+> an **Output View** of it render at the same moment -- JupyterLab restoring a workspace that had the
+> view open -- both copies take the page's one bridge entry (`window["cubevis_"+id]`), so one kernel
+> comm; `comm.onMsg` holds one handler, and the other copy gets no replies (its Plot never completes).
+> A view opened while the notebook is open gets its own comm and works. (Corrected 2026-11-24: first
+> reported as happening in every notebook; that was the harness re-opening an Output View JupyterLab had
+> restored. `drive.py` now opens with `?reset`.)
+>
+> **Reload now resumes the session (2026-11-24).** The restored output stayed empty because
+> `components()`'s script runs before the restored loader has loaded BokehJS. `Showable` now wraps it
+> (`_wait_for_bokehjs`): it waits for `Bokeh.embed` and for the Showable model (cubevisjs), then embeds.
+> After a reload the output comes back, its CommMgr completes the handshake, the held requests go out
+> and Plot works -- the kernel-side session carries on. A notebook reopened after its kernel has gone
+> shows the saved output greyed with the existing "No active session — re-run the cell to restart"
+> (it was blank). Tests: `test_showable_notebook_script.py`; harness: `examples/visplot_flow.py`
+> (Plot, flag tool, layouts, iteration all answered in a notebook, as in a browser tab).
 `CommsTransport._on_comm_open` (`llt.py:625-835`) appends each newly opened comm and wires `_recv`, but
 never registers `comm.on_close`. `_connected` is set True once and only cleared in `close()`; the
 docstring of `run()` (`llt.py:1480-1486`) says a reload "briefly clears `_connected`" — nothing does.
@@ -305,6 +483,10 @@ reload actually re-creates a working frontend — confirm in JupyterLab 4.]
 `_comm_objs` and close superseded comms.
 
 ### JC-2 [C] S2 — send failures are swallowed, wedging the comm
+
+> **Fixed on `35-transport-bugs` (2026-11-24) for JupyterLab:** no page with an app, or a comm whose
+> `send` raises, now raises `TransportNotConnectedError`, so the CommMgr holds and re-sends. The Colab
+> branch is unchanged (it queues before it can fail; see CO-*).
 - `llt.py:1472-1474`: if no comm accepts the message, a warning is logged and `send_message` returns
   normally → `_send_immediate` has already marked the comm pending → wedged.
 - `llt.py:1450`: raises plain `RuntimeError`, not `TransportNotConnectedError`, so CommMgr treats it as a
@@ -313,6 +495,10 @@ reload actually re-creates a working frontend — confirm in JupyterLab 4.]
 **Fix:** raise `TransportNotConnectedError` in all three places.
 
 ### JC-3 [L] S2 — frontend looks for the bridge comm exactly once
+
+> **Fixed on `35-transport-bugs` (2026-11-24):** `retrieveComm` waits up to 5 s for the window entry
+> (not in Colab, which has its own path). Not exercised by the JupyterLab runs, where the bridge was
+> always first.
 `llt.ts:651-666`: `retrieveComm()` reads `window["cubevis_"+id]` once. The anywidget bridge sets it from an
 ESM that is imported asynchronously; if BokehJS initialises the `CommMgr` model first, the result is
 "Could not create Jupyter comm" and the Showable is disabled with "No active session — re-run the cell"
@@ -320,6 +506,11 @@ ESM that is imported asynchronously; if BokehJS initialises the `CommMgr` model 
 window entry for a few seconds before giving up.
 
 ### JC-4 [C] S3
+
+> **Fixed on `35-transport-bugs` (2026-11-24), all bullets:** callback tasks kept in a set until done;
+> the comm target is unregistered on `close()`; `run()` waits on an event (Python) / a promise (JS);
+> the `console.group` and the window-keys log are gone (`console.debug` now); `_bridge_started` is a
+> boolean. The design-constraint bullet stands as written.
 - Callback tasks are created with `asyncio.ensure_future` inside an IOLoop callback and not retained
   (`llt.py:648-650`) — the GC hazard the WebSocket path guards against with `_pending_message_tasks`.
 - The comm target is never unregistered on `close()`; each session leaves a closure holding the transport
@@ -377,6 +568,9 @@ timeout exists on either side). Partial buffers are also never expired.
 buffers after a timeout and log.
 
 ### CO-3 [C] S3 (cheap win) — dead `js_code` build in `send_message`
+
+> **Fixed on `35-transport-bugs` (2026-11-23):** `env_json`, `js_code`, `cb_name`, `bc_name` and
+> `_parent_header` removed. Not run in Colab: the code removed was never read.
 `llt.py:1396-1407` builds `env_json = json.dumps(envelope)` and a `js_code` string that is never used
 (delivery happens later in `_deliver_in_thread`). For an image-sized reply this is a full extra
 serialisation plus a string copy per message. Delete it, with `_parent_header` (`llt.py:1409`).
@@ -448,6 +642,11 @@ Chain: P_local `CommMgr(mirror)` ⇄ `KernelClientTransport` ⇄ (jupyter_client
 `WorkerProcessTransport` ⇄ (stdin/stdout frames) ⇄ `WorkerCommTransport` ⇄ worker `CommMgr(default)`.
 
 ### RK-1 [C] S1 — a request that times out leaves its comm pending; the link has one comm
+
+> **Fixed on `35-transport-bugs` (2026-11-23):** `_bridge.request()` calls `CommMgr.forget(callback=…)`
+> when its own timeout fires or it is cancelled (an outer `wait_for`), unless a reply came. The request
+> is removed whether it was in flight or still queued; the comm's queue moves on. Test:
+> `test_reask.py::test_rk1_a_timed_out_request_does_not_wedge_the_comm` (fails on the old bridge).
 `request()` (`_bridge.py`) and every `asyncio.wait_for(request(...))` in `link.py` only abandon the
 *Future*. `CommMgr._pending[comm_id]` stays set until a reply arrives. `RemoteAppLink` sends everything on
 one comm, `"worker"` (`link.py:246`), so if a reply is lost, every later call queues behind it and times

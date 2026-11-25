@@ -97,6 +97,10 @@ export interface TransportBase {
 // WebSocket close code Python uses for a page another page has taken the
 // session from: SUPERSEDED_CLOSE_CODE in cubevis/bokeh/transport/_comm_mgr.py.
 export const SUPERSEDED_CLOSE_CODE = 4001
+// WebSocket close code for a page that belongs to a different session:
+// REFUSED_CLOSE_CODE in cubevis/bokeh/transport/_low_level_transport.py.
+// Python sends `__refused__` first; either one stops this page reconnecting.
+export const REFUSED_CLOSE_CODE = 4002
 
 export class WebSocketTransport implements TransportBase {
     private websocket?: WebSocket
@@ -120,6 +124,16 @@ export class WebSocketTransport implements TransportBase {
     private heartbeatTimer?: number
     private pongTimer?: number
     private heartbeatSeq: number = 0
+    // Missed pongs in a row (HB-1): while a request awaits its reply, Python
+    // may be busy in a handler that holds its event loop, which also holds
+    // its pongs.  Then the socket is declared dead only after
+    // MISSED_PONGS_WHILE_BUSY misses in a row (about 23 s after a wake probe,
+    // instead of 3 s); with nothing in flight, after one, as before.
+    private missedPongs: number = 0
+    private static readonly MISSED_PONGS_WHILE_BUSY = 3
+    // Frames received from Python, of any kind (pongs included): the CommMgr
+    // re-ask's evidence that Python is alive (REASK_LIVENESS_TICKS).
+    liveness: number = 0
     private runResolve?: () => void
     private wakeListenersAttached: boolean = false
 
@@ -138,7 +152,12 @@ export class WebSocketTransport implements TransportBase {
     
     async connect(): Promise<void> {
         const [host, port] = this.address
-        const ws_address = `ws://${host}:${port}`
+        // WS-6: a page served over https may only open wss:// (a ws:// socket
+        // is blocked as mixed content).  The Python side serves plain ws, so
+        // an https page needs a proxy that terminates TLS in front of it;
+        // file:// and http:// pages keep ws://.
+        const scheme = (typeof window !== 'undefined' && window.location?.protocol === 'https:') ? 'wss' : 'ws'
+        const ws_address = `${scheme}://${host}:${port}`
         
         return new Promise((resolve, reject) => {
             if (this.websocket !== undefined) {
@@ -207,6 +226,7 @@ export class WebSocketTransport implements TransportBase {
             this.heartbeatTimer = undefined
         }
         this.clearPongTimer()
+        this.missedPongs = 0
     }
 
     private clearPongTimer(): void {
@@ -234,14 +254,29 @@ export class WebSocketTransport implements TransportBase {
 
         this.clearPongTimer()
         this.pongTimer = window.setTimeout(
-            () => this.declareDead(`no __pong__ within ${timeoutMs}ms`),
+            () => this.missedPong(timeoutMs),
             timeoutMs
         )
+    }
+
+    private missedPong(timeoutMs: number): void {
+        this.pongTimer = undefined
+        this.missedPongs += 1
+        const busy = this.comm_mgr.awaitingReply() > 0
+        if (busy && this.missedPongs < WebSocketTransport.MISSED_PONGS_WHILE_BUSY) {
+            console.debug(`No __pong__ within ${timeoutMs}ms while a request is in flight ` +
+                          `(${this.missedPongs} in a row); Python may be busy, pinging again`)
+            this.sendPing(this.heartbeatTimeoutMs)
+            return
+        }
+        this.declareDead(`no __pong__ within ${timeoutMs}ms` +
+                         (this.missedPongs > 1 ? ` (${this.missedPongs} in a row)` : ''))
     }
 
     /** Any inbound traffic proves the socket is alive. */
     private notePong(): void {
         this.clearPongTimer()
+        this.missedPongs = 0
     }
 
     /**
@@ -333,20 +368,22 @@ export class WebSocketTransport implements TransportBase {
         // can land as 1006 and be misread as a suspend, which means waiting
         // indefinitely instead of shutting down. An explicit goodbye sent
         // ahead of the close frame removes that failure mode.
+        //
+        // pagehide only (transport review WS-4).  Until 2026-11-23 it was
+        // also sent from beforeunload, which can be cancelled ("Leave
+        // site?" -> Stay, or a link that turns out to be a download): Python
+        // then took a later abrupt drop (sleep, network) for a deliberate
+        // close and ended the session after its 3 s grace.  pagehide is not
+        // cancellable, and comes after beforeunload, so the goodbye is the
+        // last thing a departing page sends.  Python also forgets a goodbye
+        // when anything follows it, which covers older pages.
         window.addEventListener("pagehide", this.sendGoodbye)
-        window.addEventListener("beforeunload", this.sendGoodbye)
     }
 
-    private goodbyeSent: boolean = false
-
     private sendGoodbye = (): void => {
-        if (this.goodbyeSent) {
-            return   // pagehide and beforeunload both fire; only send once
-        }
         if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
             return
         }
-        this.goodbyeSent = true
         try {
             // Must be synchronous -- the page is being torn down and there is
             // no opportunity to await anything.
@@ -366,7 +403,6 @@ export class WebSocketTransport implements TransportBase {
         window.removeEventListener("pageshow", this.probeConnection)
         document.removeEventListener("visibilitychange", this.onVisibilityChange)
         window.removeEventListener("pagehide", this.sendGoodbye)
-        window.removeEventListener("beforeunload", this.sendGoodbye)
     }
     
     /**
@@ -404,6 +440,15 @@ export class WebSocketTransport implements TransportBase {
                             
                             settled = true
                             resolve()
+                        } else if (data.type === '__refused__') {
+                            // This page belongs to another session (WS-2):
+                            // a newer process has this port.  Stop for good.
+                            if (this.websocket) {
+                                this.websocket.removeEventListener('message', initHandler)
+                            }
+                            settled = true
+                            this.comm_mgr.onRefused(String(data.reason ?? ''))
+                            reject(new Error('WebSocket handshake refused: ' + (data.reason ?? '')))
                         } else if (data.type === 'warning') {
                             console.warn('Backend warning:', data.message)
                             // Don't resolve yet — wait for 'initialized'
@@ -472,6 +517,7 @@ export class WebSocketTransport implements TransportBase {
                 if (typeof event.data === 'string' || event.data instanceof String) {
                     try {
                         const data = deserialize(event.data as string)
+                        this.liveness += 1
 
                         // Transport-level keepalive reply. Handled here and
                         // never surfaced to the application callback.
@@ -513,6 +559,8 @@ export class WebSocketTransport implements TransportBase {
                 this.initialized = false
                 if (event.code === SUPERSEDED_CLOSE_CODE) {
                     this.comm_mgr.onSuperseded()
+                } else if (event.code === REFUSED_CLOSE_CODE) {
+                    this.comm_mgr.onRefused(event.reason)
                 }
                 this.finishRun()
             }
@@ -575,19 +623,34 @@ export class CommsTransport implements TransportBase {
     private isOpen: boolean = false
     private onMessageCallback?: (msg: any) => void
     private shouldRun: boolean = true
+    // Resolves run() (JC-4: was a 100 ms poll).
+    private stopRun?: () => void
     
     constructor(private comm_mgr: CommMgr) {
         this.targetName = `comm_${comm_mgr.comm_mgr_id}`
+    }
+
+    /**
+     * Tell Python this page's CommMgr is ready on its comm.  Python sends its
+     * own requests on the comm of the page that last did so, and replies on
+     * the comm the request came on (transport review JC-1).
+     */
+    private sendHandshake(): void {
+        this.comm.send({
+            type: 'cubevis_message',
+            comm_mgr_id: this.comm_mgr.comm_mgr_id,
+            data: serialize({
+                type: 'comm_opened',
+                comm_mgr_id: this.comm_mgr.comm_mgr_id,
+                frontend_ready: true
+            })
+        })
     }
     
     setMessageCallback(callback: (msg: any) => void): void {
         this.onMessageCallback = callback
     }
     
-    private getAppContext(): any {
-        return find.context(this.comm_mgr)
-    }
-
     async connect(): Promise<void> {
 
         try {
@@ -623,20 +686,7 @@ export class CommsTransport implements TransportBase {
             this.isOpen = true
 
             // Send explicit handshake so the backend knows we're ready
-            const envelope = {
-                type: 'cubevis_message',
-                comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                data: serialize({
-                    type: 'comm_opened',
-                    comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                    frontend_ready: true
-                })
-            }
-
-            console.group( '------------------------------connect------------------------------' )
-            console.log( this.getAppContext( ) )
-            console.groupEnd( )
-            this.comm.send(envelope)
+            this.sendHandshake()
 
         } catch (e) {
             console.error("Error initializing Comms:", e)
@@ -647,9 +697,8 @@ export class CommsTransport implements TransportBase {
     async run(): Promise<void> {
 
         // Keep alive until shutdown
-        while (this.shouldRun && this.isOpen) {
-            await new Promise(resolve => setTimeout(resolve, 100))
-        }
+        if (!this.shouldRun || !this.isOpen) return
+        await new Promise<void>(resolve => { this.stopRun = resolve })
 
     }
     
@@ -670,12 +719,20 @@ export class CommsTransport implements TransportBase {
      */
     private async retrieveComm(): Promise<any> {
         const target_id = this.comm_mgr.comm_mgr_id
-        const cachedComm = window["cubevis_" + target_id]?.comm
-        console.log(`retrieveComm: target_id=${target_id} window keys=`,
-          Object.keys(window).filter(k => k.startsWith('cubevis_')))
+        let cachedComm = window["cubevis_" + target_id]?.comm
+        // The bridge sets window["cubevis_"+id] from an ESM imported
+        // asynchronously; this model can initialise first.  Wait for it a
+        // while before giving up (JC-3) -- until 2026-11-24 it was looked for
+        // once, and a lost race read as "No active session -- re-run the cell".
+        const colabHere = typeof google !== "undefined" && google?.colab?.kernel?.comms
+        for (let waited = 0; !cachedComm && !colabHere && waited < 5000; waited += 100) {
+            await new Promise(resolve => setTimeout(resolve, 100))
+            cachedComm = window["cubevis_" + target_id]?.comm
+        }
+        console.debug(`retrieveComm: target_id=${target_id} found=${!!cachedComm}`)
 
         if ( cachedComm ) {
-            console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, cachedComm)
+            console.debug(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`)
             const el = window["cubevis_" + target_id].dbg_el
             if ( el ) {
                 el.insertAdjacentHTML( 'beforeend',
@@ -867,6 +924,7 @@ export class CommsTransport implements TransportBase {
         console.debug(`Jupyter comm closed for ${this.targetName}`)
         this.isOpen = false
         this.shouldRun = false
+        this.stopRun?.()
     }
 
     // --------------------------------------------------------------------------
@@ -892,6 +950,7 @@ export class CommsTransport implements TransportBase {
 
     close(): void {
         this.shouldRun = false
+        this.stopRun?.()
 
         if (this.comm && this.isOpen) {
             try {

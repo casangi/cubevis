@@ -3475,6 +3475,12 @@ class VisibilityPlotter:
         raster_cmap:      Optional[str]  = None,
         scatter_cmap:     Optional[str]  = None,
         headless:         bool           = False,
+        # Layer argument (sync_layers): the CommMgr transport.  Where the GUI
+        # is shown decides it, not where Python runs: the visplot task opens a
+        # browser tab, which reaches Python only over a websocket -- even from
+        # a notebook kernel, where "auto" would pick Jupyter comms that the tab
+        # cannot reach (2026-11-25).  show() in a notebook cell keeps "auto".
+        transport:        str            = "auto",
         plotfile:         Optional[str]  = None,
         flag_filters:     Optional[dict] = None,
         flag_preview:     bool           = False,
@@ -3501,6 +3507,10 @@ class VisibilityPlotter:
         # the GUI -- what the visplot task's plotfile= means.
         self._plotfile = plotfile or None
         self._headless = bool(headless) or self._plotfile is not None
+        if transport not in ("auto", "websocket", "jupyter", "colab"):
+            raise ValueError(
+                f"transport must be 'auto', 'websocket', 'jupyter' or 'colab', not {transport!r}")
+        self._transport = transport
         # The Grid layout (gridplot G2): what it iterates over, its page
         # shape, and which pages plotfile= writes.  Validated now.
         from .vis_grid_source import normalize_iterate_by
@@ -4296,7 +4306,8 @@ class VisibilityPlotter:
             )
 
         self._app_context = BokehAppContext(
-            comm_mgr  = CommMgr(on_shutdown=_shutdown_handler),
+            comm_mgr  = CommMgr(on_shutdown=_shutdown_handler,
+                                transport_type=self._transport),
             app_state = {
                 "name":        "VisibilityPlotter",
                 "initialized": True,
@@ -5246,9 +5257,20 @@ for (const dt of other.tools) {
     # Public entry point                                                       #
     # ====================================================================== #
 
-    def show(self) -> "Showable":
-        """Display the plotter in a Jupyter notebook cell."""
+    def show(self, redisplay: bool = False) -> "Showable":
+        """Display the plotter in a Jupyter notebook cell.
+
+        ``redisplay=True``: show the session this plotter is already running
+        again, in this cell -- for a page reloaded when the notebook had not
+        been saved since the first ``show()``, which leaves no GUI on the page
+        while the session runs on in the kernel (``Showable.show``)."""
         from bokeh.io.state import curstate
+        if redisplay:
+            showable = getattr(self, "_showable", None)
+            if showable is None:
+                raise RuntimeError("show(redisplay=True): nothing shown yet; use show()")
+            showable.show(redisplay=True)
+            return None
         if not curstate().notebook:
             from bokeh.io import output_notebook
             output_notebook()
@@ -5267,10 +5289,11 @@ for (const dt of other.tools) {
                 raise RuntimeError("VisibilityPlotter has not been launched yet")
             return future_holder[0]
 
-        return Showable(
+        self._showable = Showable(
             app_context, startup, get_future,
             name="visibility-plotter-jpy",
         )
+        return self._showable
 
     # ====================================================================== #
     # cubevis application protocol                                             #
@@ -7030,7 +7053,11 @@ window.__cvPlotPending(true);
         sel.js_on_change("value", js)
         inp.js_on_change("value", js)
         inp.js_on_event(ValueSubmit, js)
-        return column(self._hover(sel, name), inp, sizing_mode="fixed", width=sel.width)
+        # No sizing_mode="fixed": that needs a height as well (Bokeh W-1005,
+        # FIXED_SIZING_MODE, test_info_block_integration), and this column's
+        # height changes as the box shows and hides.  width= alone keeps the
+        # width fixed (width_policy "auto" with a width).  2026-11-23.
+        return column(self._hover(sel, name), inp, width=sel.width)
 
     def _hover(self, widget, name: str):
         """Wrap *widget* so the status-area help ``self._hint_<name>``

@@ -70,22 +70,40 @@ async def request(comm, message_id: str, payload: dict, timeout: Optional[float]
     loop = asyncio.get_running_loop()
     fut: "asyncio.Future" = loop.create_future()
 
+    replied = False
+
     def _on_reply(msg):
+        nonlocal replied
+        replied = True
         if not fut.done():
             fut.set_result(msg)
 
     await comm.send(message_id, payload, callback=_on_reply)
 
-    if timeout is None:
-        return await fut
     try:
-        return await asyncio.wait_for(fut, timeout=timeout)
-    except asyncio.TimeoutError:
-        logger.warning(
-            f"request(): timed out after {timeout}s waiting for a reply to "
-            f"{comm.comm_id}.{message_id}"
-        )
-        raise
+        if timeout is None:
+            return await fut
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"request(): timed out after {timeout}s waiting for a reply to "
+                f"{comm.comm_id}.{message_id}"
+            )
+            raise
+    finally:
+        # Timed out or cancelled (an outer wait_for): stop the CommMgr waiting
+        # too, or the comm stays pending and every later call on it -- the
+        # link sends everything on one comm -- queues behind a reply that
+        # may never come (iopub is lossy).  Transport review RK-1, 2026-11-23.
+        # The peer still runs its comm's requests one at a time, so a
+        # forgotten one that does run there finishes before the next starts;
+        # its late reply is ignored.
+        # (Not fut.done(): wait_for cancels fut on its timeout.)
+        if not replied:
+            mgr = getattr(comm, "_mgr", None)
+            if mgr is not None and hasattr(mgr, "forget"):
+                mgr.forget(callback=_on_reply, comm_id=comm.comm_id)
 
 
 class SyncBridge:

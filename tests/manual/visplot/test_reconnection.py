@@ -169,6 +169,14 @@ class Frontend:
         except (asyncio.CancelledError, websockets.exceptions.ConnectionClosed):
             pass
 
+    async def goodbye(self):
+        """What the page's pagehide (and, before 2026-11-23, beforeunload)
+        handler sends."""
+        await self.ws.send(serialize({"type": "__goodbye__"}))
+
+    async def ping(self, seq=1):
+        await self.ws.send(serialize({"type": "__ping__", "seq": seq}))
+
     async def suspend(self):
         """Kill the TCP connection outright -- no close frame, as on sleep."""
         if self._pump:
@@ -695,7 +703,7 @@ async def test_cancelled_handler_is_not_mistaken_for_a_running_one():
            "direction": "j2p", "message": {}}
     task = asyncio.ensure_future(mgr._handle_request(msg))
     await asyncio.sleep(0.1)
-    assert mgr._last_request["data"] == ["r1", None]
+    assert mgr._last_request["data"][:2] == ["r1", None]
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -857,6 +865,201 @@ async def test_clean_close_does_not_warn():
     # period ends the session shortly, so there is nothing to explain.
     msgs = await _drop_and_watch("clean", reconnect_grace_period=30.0)
     assert not [m for m in msgs if "without a close message" in m], msgs
+
+
+# ======================================================================
+# A goodbye does not outlive a page that stayed (review WS-4)
+# ======================================================================
+#
+# The page sent __goodbye__ from beforeunload (bundles before 2026-11-23),
+# which can be cancelled ("Leave site?" -> Stay).  The flag latched, so a
+# later abrupt drop (sleep, network) was taken as a deliberate close and the
+# session ended after the grace period instead of waiting.
+
+async def _goodbye_then_drop(*, then_ping):
+    port = _port()
+    shutdowns = []
+    mgr = _new_mgr(port, reconnect_grace_period=0.3,
+                   on_shutdown=lambda reason=None, description="": shutdowns.append(reason))
+    mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        await fe.goodbye()
+        if then_ping:
+            await fe.ping()                    # the page is still there
+        await asyncio.sleep(0.2)
+        await fe.suspend()                     # then the laptop sleeps
+        await asyncio.sleep(1.2)               # well past the grace period
+        return shutdowns, mgr
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_goodbye_followed_by_traffic_is_forgotten():
+    shutdowns, mgr = await _goodbye_then_drop(then_ping=True)
+    assert shutdowns == [], "a cancelled departure ended the session on a later drop"
+    assert mgr.state not in (AppState.ERROR, AppState.STOPPED)
+
+
+@pytest.mark.asyncio
+async def test_goodbye_then_silence_still_ends_the_session():
+    # The real departure: goodbye is the last thing the page sends.
+    shutdowns, _mgr = await _goodbye_then_drop(then_ping=False)
+    assert len(shutdowns) == 1, f"a deliberate departure did not end the session: {shutdowns}"
+
+
+# ======================================================================
+# A page for another session is refused (review WS-2, the backend_id part)
+# ======================================================================
+
+async def _handshake(port, **fields):
+    """A raw handshake; returns (first reply, close code)."""
+    init = {"id": "initialize", "direction": "j2p", "frontend_id": "other-page",
+            "claim": False, "backend_id": None, "comm_mgr_id": None}
+    init.update(fields)
+    ws = await websockets.connect(f"ws://{HOST}:{port}")
+    await ws.send(serialize(init))
+    reply = deserialize(await asyncio.wait_for(ws.recv(), 3))
+    try:
+        await asyncio.wait_for(ws.recv(), 3)
+    except websockets.exceptions.ConnectionClosed:
+        pass
+    return reply, ws.close_code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["comm_mgr_id", "backend_id"])
+async def test_page_for_another_session_is_refused(field):
+    from cubevis.bokeh.transport._low_level_transport import REFUSED_CLOSE_CODE
+    port = _port()
+    shutdowns = []
+    mgr = _new_mgr(port, on_shutdown=lambda reason=None, description="": shutdowns.append(reason))
+    comm = mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        live = mgr._transport
+
+        fields = {"comm_mgr_id": mgr.comm_mgr_id}
+        fields[field] = "some-other-session"
+        reply, code = await _handshake(port, **fields)
+        assert reply.get("type") == "__refused__", reply
+        assert code == REFUSED_CLOSE_CODE
+        await asyncio.sleep(0.2)
+
+        assert shutdowns == []
+        assert mgr._transport is live, "a page for another session took the live transport"
+        assert fe.notices == [], "the live page was told it was superseded"
+        await comm.send("update", {"hello": 1}, callback=lambda reply: None)
+        await asyncio.wait_for(fe.got_request.wait(), 3)
+        await fe.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_page_without_ids_is_still_accepted():
+    # Older pages, and pages that cannot find their app context, send null.
+    port = _port()
+    mgr = _new_mgr(port)
+    mgr.open("data")
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        ws = await websockets.connect(f"ws://{HOST}:{port}")
+        await ws.send(serialize({"id": "initialize", "direction": "j2p", "frontend_id": "p",
+                                 "claim": False, "backend_id": None, "comm_mgr_id": None}))
+        reply = deserialize(await asyncio.wait_for(ws.recv(), 3))
+        assert reply.get("type") == "initialized", reply
+        await ws.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+# ======================================================================
+# Small CommMgr items (review PY-1, PY-2)
+# ======================================================================
+
+@pytest.mark.asyncio
+async def test_late_reply_after_a_reconnect_is_not_a_warning():
+    port = _port()
+    mgr = _new_mgr(port)
+    mgr.open("data")
+    cap = _WarnCapture()
+    _comm_mgr_module.logger.addHandler(cap)
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        await fe.suspend()
+        await asyncio.sleep(0.3)
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        assert mgr.connection_generation > 0
+        await fe.ws.send(serialize({"comm_id": "x", "message_id": "y", "request_id": "forgotten",
+                                    "direction": "p2j", "message": {}}))
+        await asyncio.sleep(0.2)
+        assert not [m for m in cap.messages if "unknown request" in m], cap.messages
+        await fe.close()
+    finally:
+        _comm_mgr_module.logger.removeHandler(cap)
+        server.close()
+        await server.wait_closed()
+
+
+def test_comm_without_description_constructs():
+    from cubevis.bokeh.transport import Comm
+    mgr = CommMgr(transport_type="websocket")
+    comm = Comm(comm_id="c1", comm_mgr=mgr)          # raised KeyError before
+    assert comm.description == "" and comm.comm_mgr_id == mgr.comm_mgr_id
+
+
+@pytest.mark.asyncio
+async def test_awaitable_returning_callback_is_awaited():
+    # A callable object whose __call__ returns a coroutine: what
+    # inspect.iscoroutinefunction(callback) did not recognise (it does see
+    # through functools.partial since Python 3.8).
+    port = _port()
+    mgr = _new_mgr(port)
+    comm = mgr.open("data")
+    got = []
+
+    class OnReply:
+        def __init__(self, tag):
+            self.tag = tag
+
+        def __call__(self, reply):
+            async def record():
+                got.append((self.tag, reply))
+            return record()
+
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        await comm.send("update", {"n": 1}, callback=OnReply("p"))
+        for _ in range(30):
+            if got:
+                break
+            await asyncio.sleep(0.1)
+        assert got == [("p", {"ok": True})]
+        await fe.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+def test_reported_errors_are_bounded():
+    mgr = CommMgr(transport_type="websocket")
+    for i in range(_comm_mgr_module._MAX_ERRORS_KEPT + 50):
+        mgr._errors.append(ValueError(i))
+    assert len(mgr._errors) == _comm_mgr_module._MAX_ERRORS_KEPT
 
 
 # ----------------------------------------------------------------------

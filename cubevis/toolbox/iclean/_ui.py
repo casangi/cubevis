@@ -126,10 +126,12 @@ class InteractiveCleanUI:
         self.__result_from_gui = None
         self.__history = None                   ### the imager's history, kept at the end (_finish_session)
 
-    def __init__( self, session, user_args ):
+    def __init__( self, session, user_args, transport='auto' ):
         '''``session`` is the imaging layer (``cubevis.imaging.ImagingSession``):
         the imager and the images of each field.  A gclean-like object is
-        accepted too and wrapped in a ``LocalImagingSession``.'''
+        accepted too and wrapped in a ``LocalImagingSession``.  ``transport`` is
+        the ``CommMgr`` transport: 'websocket' for a browser tab, 'auto' for a
+        notebook cell (where the GUI is shown decides, not where Python runs).'''
 
         ###
         ### With Bokeh 3.2.2, the spectrum and convergence plots extend beyond the edge of the
@@ -236,7 +238,8 @@ class InteractiveCleanUI:
                           f"frontend reconnected (generation={generation})" )
 
         self._app_context = BokehAppContext( comm_mgr=CommMgr( on_shutdown=shutdown_handler,
-                                                               on_error=error_handler ),
+                                                               on_error=error_handler,
+                                                               transport_type=transport ),
                                              app_state={                              ### while the state dictionary itself
                                                          'name': 'interactive clean', ### is used, these particular element
                                                          'initialized': True          ### are not currently used for anything
@@ -973,7 +976,9 @@ class InteractiveCleanUI:
                                                           ids=self._clean_ids,
                                                           logbutton=self._log_button,
                                                           log=initial_log,
-                                                          initial_image=list(self._clean_targets.items( ))[0][0]
+                                                          initial_image=list(self._clean_targets.items( ))[0][0],
+                                                          # a browser tab (websocket), not a notebook
+                                                          stop_on_unload=self._comm_mgr.transport_type == 'websocket'
                                                          ),
                                                code=self._js['initialize'] +
                                                     '''if ( ! logbutton._log ) {
@@ -1362,15 +1367,23 @@ class InteractiveCleanUI:
                                                appstate.image_name = initial_image
                                                appstate.ic_initialized = true
                                                appstate.window_closed = false
-                                               window.addEventListener( 'beforeunload',
-                                                                        function (e) {
-                                                                            // if the window is already closed this message is never
-                                                                            // delivered (unless interactive clean is called again then
-                                                                            // the event shows up in the newly created control pipe)
-                                                                            if ( appstate.window_closed == false ) {
-                                                                                ctrl_pipe.send( ids['stop'],
-                                                                                                { action: 'stop', value: { } },
-                                                                                                  undefined ) } } )
+                                               // Leaving the page ends the session in a browser tab only
+                                               // (2026-11-25).  In a notebook the session lives in the kernel:
+                                               // a reload or a reopened notebook carries it on, so leaving the
+                                               // page must not stop it.  And 'pagehide', not 'beforeunload',
+                                               // which can be cancelled ("Leave site?" -> Stay, a link that is
+                                               // a download) after this had already stopped the session.
+                                               if ( stop_on_unload ) {
+                                                   window.addEventListener( 'pagehide',
+                                                                            function (e) {
+                                                                                // if the window is already closed this message is never
+                                                                                // delivered (unless interactive clean is called again then
+                                                                                // the event shows up in the newly created control pipe)
+                                                                                if ( appstate.window_closed == false ) {
+                                                                                    ctrl_pipe.send( ids['stop'],
+                                                                                                    { action: 'stop', value: { } },
+                                                                                                      undefined ) } } )
+                                               }
                                            }''',
 
                      ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---

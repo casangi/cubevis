@@ -288,13 +288,15 @@ class TestSpanComputationVminAlone:
         high_highlighted = int((result_high.image == highlight_color).sum())
         assert low_highlighted > high_highlighted > 0
 
-    def test_ordinary_scalings_still_require_both_vmin_and_vmax(self):
-        """Regression guard: the threshold-specific branch must not
-        accidentally let vmin alone override span for any OTHER
-        scaling -- confirmed by checking that an eq_hist layer with only
-        scaling_vmin set behaves identically to one with neither set
-        (i.e. the override is correctly skipped, exactly as before this
-        feature existed)."""
+    def test_ordinary_scalings_take_vmin_on_its_own(self):
+        """Since 2026-11-18 (``_scatter_render._manual_span``) each manual
+        bound applies on its own for every scaling, as the raster's always
+        has: a log layer with only scaling_vmin set is shaded over
+        [vmin, auto max], so it renders differently from one with neither
+        set.  Until then this test asserted the opposite (vmin alone was
+        ignored unless the scaling was threshold).  The span rule itself is
+        tested in test_colormap_sync.py; this checks it reaches
+        render_layer."""
         df = _synthetic_scatter_df()
         layer_no_override = ScatterLayerSpec(
             y_axis=Axis.Z_SCORE, polarization="XX",
@@ -312,4 +314,4 @@ class TestSpanComputationVminAlone:
             df, layer_vmin_only, x0=0, x1=100, y0=0, y1=100,
             canvas_w=200, canvas_h=200, color_mode="global", full_y_range=(0.0, 20.0),
         )
-        assert np.array_equal(r1.image, r2.image)
+        assert not np.array_equal(r1.image, r2.image)

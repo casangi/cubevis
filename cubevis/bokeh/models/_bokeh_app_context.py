@@ -229,6 +229,19 @@ class BokehAppContext(LayoutDOM):
         """
         logger.debug(f"\tBokehAppContext::show( ): {id(self)}")
 
+        # A browser tab reaches Python only over a websocket.  A CommMgr that
+        # chose Jupyter comms (it was made in a notebook kernel with transport
+        # 'auto') would leave the tab showing its first view and waiting
+        # forever on its first request (2026-11-25): say so instead.  The app
+        # asks for 'websocket' when it is shown in a tab (the visplot and
+        # iclean tasks do).
+        if self.comm_mgr is not None and self.comm_mgr.transport_type in ('jupyter', 'colab'):
+            raise RuntimeError(
+                f"this application's CommMgr uses the '{self.comm_mgr.transport_type}' "
+                "transport, which a browser tab cannot reach; construct it with "
+                "transport='websocket' to show it in a tab, or use its notebook "
+                "entry point (e.g. .show()) to show it in a cell")
+
         from bokeh.plotting import save
 
         # Save the plot

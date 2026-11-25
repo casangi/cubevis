@@ -9,6 +9,8 @@ The steps file is exec()'d with these names in scope:
           flag-tool figures with their screen boxes
     os, json, time
 Environment: POPUPS=block turns Chromium's pop-up blocker on.
+CHROME the browser executable, when Playwright's own build is not the one
+installed (e.g. a sandbox with an older chrome-headless-shell).
 VW / VH viewport width / height (default 1700 / 1100),
 LOGLEN console line length (300), SHOWLOG substring of console lines to
 print in addition to errors and warnings.
@@ -24,6 +26,7 @@ with sync_playwright() as p:
     # (Playwright turns it off by default), to check that tabs the page
     # opens are opened inside a user gesture.
     b = p.chromium.launch(
+        executable_path=os.environ.get("CHROME") or None,
         ignore_default_args=(["--disable-popup-blocking"]
                              if os.environ.get("POPUPS") == "block" else None))
     pg = b.new_page(viewport={"width": int(os.environ.get("VW", "1700")),

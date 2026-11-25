@@ -362,8 +362,12 @@ class TestDisplay:
             vp.close()
 
     def test_redraw_message_carries_the_size(self, sim_ms):
+        # X = UV distance: an axis without issue #36's one-column-per-sample
+        # cap (Time, Frequency, Channel have it; see the next test), so the
+        # canvas keeps the figure's shape.  Until 2026-11-23 this used
+        # X = Channel and failed once the cap came in (debug-0004).
         from cubevis.toolbox.visplot import VisibilityPlotter
-        vp = VisibilityPlotter(ms=sim_ms, kind="scatter", scatter_x="CHANNEL",
+        vp = VisibilityPlotter(ms=sim_ms, kind="scatter", scatter_x="UVDIST",
                                correlation="XX")
         try:
             sc = vp._slots[0].scatter
@@ -378,6 +382,29 @@ class TestDisplay:
             # the canvas has the figure's shape (sparse data shrink it, by
             # the same factor in both directions)
             assert img.shape[1] / img.shape[0] == pytest.approx(1000 / 250, rel=0.15)
+        finally:
+            vp.close()
+
+    def test_redraw_on_a_sampled_axis_has_one_column_per_sample(self, sim_ms):
+        # X = Channel: the new size reaches the canvas, but no more columns
+        # than there are samples in view (issue #36): rows follow the
+        # figure, columns stop at (x1 - x0) / x_step.
+        from cubevis.toolbox.visplot import VisibilityPlotter
+        vp = VisibilityPlotter(ms=sim_ms, kind="scatter", scatter_x="CHANNEL",
+                               correlation="XX")
+        try:
+            sc = vp._slots[0].scatter
+            x0, x1 = sc._x_range
+            y0, y1 = sc._y_range
+            out = sc._handle_rerender(dict(x0=x0, x1=x1, y0=y0, y1=y1,
+                                           w=1000, h=250, size_only=True))
+            assert (sc._width, sc._height) == (1000, 250)
+            img = np.asarray(out["image"])
+            from cubevis.toolbox.visplot.data.reader import Axis
+            x_step = vp._reader._backend.scatter_x_step(xaxis=Axis.CHANNEL)
+            assert x_step and x_step > 0
+            assert img.shape[1] <= max(1, int((x1 - x0) / x_step)), "the Channel canvas was not capped"
+            assert 0 < img.shape[0] <= 250
         finally:
             vp.close()
 

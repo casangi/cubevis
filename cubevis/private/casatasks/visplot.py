@@ -427,6 +427,7 @@ def _visplot_t(
         remote_endpoint = None,
         enable_flagging = True,
         headless = False,
+        transport = 'websocket',
     )
 
     # plotfile= (visplot, 2026-10-11): a headless export, no GUI.

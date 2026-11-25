@@ -5,7 +5,8 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import TYPE_CHECKING
-from typing import Optional, Callable, Dict, Any, List, Tuple
+from typing import Optional, Callable, Dict, Any, List, Tuple, Deque
+from collections import deque
 import asyncio
 import inspect
 import traceback
@@ -16,8 +17,10 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from bokeh.model import Model
 from bokeh.models import CustomJS
-from bokeh.core.properties import List
-from bokeh.core.properties import String, Bool, Tuple, Int, Nullable, Instance
+### Bokeh's property types under their own names: imported as List / Tuple they
+### replaced typing's, which the annotations below mean (review PY-2).
+from bokeh.core.properties import List as PList, Tuple as PTuple
+from bokeh.core.properties import String, Bool, Int, Nullable, Instance
 from ...utils import find_ws_address
 from .. import BokehInit
 if TYPE_CHECKING:
@@ -45,6 +48,45 @@ class AppState(Enum):
 # (4000-4999 are for applications).  The browser stops reconnecting on it;
 # the same value is in cubevisjs low_level_transport.ts.
 SUPERSEDED_CLOSE_CODE = 4001
+
+# How many reported errors CommMgr keeps (_errors).
+_MAX_ERRORS_KEPT = 100
+
+
+def _handler_label(comm_id: str, message_id: str, handler) -> str:
+    """What the loop-lag monitor calls a handler: the function's name first
+    (comm and message ids are often uuids), then where it is registered."""
+    name = getattr(handler, "__qualname__", None) or getattr(handler, "__name__", None) \
+        or type(handler).__name__
+    return f"{name} ({comm_id}.{message_id})"
+
+# Re-ask (transport review section 1, "Deadlock / wedge conditions"; issue
+# #35, 2026-11-23).  There is deliberately no deadline on a request: a Plot,
+# a flag commit or an iclean "finish" can run for minutes or hours, and a
+# session may sit with no browser at all (iclean started on site, laptop
+# unplugged, resumed from home).  A request is never failed for being slow
+# or for there being no connection.  What is caught is a request that was
+# LOST while the connection works:
+#   * no reply for REASK_AFTER s -> sent again, same request_id, reask=True;
+#   * the peer answers from its RP-1 record: the stored reply (finished),
+#     __running__ (still running; restarts the wait), or by running it
+#     (it never had it);
+#   * a re-ask with no answer while the peer has shown it is alive
+#     (REASK_LIVENESS_TICKS frames of any kind from it, e.g. pings, since
+#     the re-ask was sent) -> forgotten, callback called with an error.
+# A blocked peer (no frames) or no connection: nothing is forgotten.  Only on
+# transports that report liveness (WebSocketTransport.liveness).
+REASK_AFTER = 30.0
+REASK_LIVENESS_TICKS = 2
+REASK_CHECK_INTERVAL = 5.0
+# The notice a re-ask of a still-running request is answered with.
+RUNNING_NOTICE = '__running__'
+
+# Event-loop lag monitor (HB-1): logged at DEBUG when the loop was blocked
+# this long, at INFO from LOOP_LAG_INFO (the browser's pong deadline is 10 s).
+LOOP_LAG_DEBUG = 1.0
+LOOP_LAG_INFO = 8.0
+LOOP_LAG_SAMPLE = 0.5
 
 
 def _other_page(old, new) -> bool:
@@ -134,9 +176,10 @@ class Comm( Model ):
     def __init__( self, *args, comm_mgr: Optional[CommMgr] = None, **kwargs ):
         if 'comm_id' not in kwargs:
             kwargs['comm_id'] = str(uuid4( ))
-        if 'description' not in kwargs:
-            kwargs['description']
-        if 'comm_mgr' and 'comm_mgr_id' not in kwargs:
+        ### (Until 2026-11-23 a bare `kwargs['description']` here raised KeyError
+        ### when no description was given -- the property has a default -- and
+        ### `if 'comm_mgr' and ...` tested a constant string; review PY-2.)
+        if 'comm_mgr_id' not in kwargs and comm_mgr is not None:
             kwargs['comm_mgr_id'] = comm_mgr.comm_mgr_id
         super( ).__init__(*args, **kwargs)
 
@@ -224,11 +267,11 @@ class CommMgr( Model, BokehInit ):
 
     transport_type = String( default='auto',
                              help="which type of low level transport to use" )
-    address = Nullable( Tuple(String, Int), default=None,
+    address = Nullable( PTuple(String, Int), default=None,
                         help="the address (IP,port) when websockets low level transport is used" )
     comm_mgr_id = String( help="unique identifier for this communications manager" )
-    init_scripts = List(
-        Tuple(Instance(CustomJS), String, String),
+    init_scripts = PList(
+        PTuple(Instance(CustomJS), String, String),
         default=[],
         help="initialization scripts with associated metadata set from Comm object"
     )
@@ -262,6 +305,9 @@ class CommMgr( Model, BokehInit ):
         self._transport: Optional['TransportBase'] = None
         self._comms: Dict[str, Comm] = {}                                                       # comm_id => Comm
         self._handlers: Dict[str, Dict[str, Callable]] = {}                                     # comm_id => {message_id => handler}
+        # handler => whether it takes (message, context); worked out once per
+        # handler rather than by inspect.signature on every request (PY-2).
+        self._takes_context: Dict[Callable, bool] = {}
         self._pending: Dict[str, str] = {}                                                      # comm_id => request_id (currently pending)
         self._pending_tasks: Dict[str, asyncio.Task] = {}                                       # comm_id => Task (for cancellation)
         # request_id => (comm_id, message_id, message, callback)
@@ -307,21 +353,39 @@ class CommMgr( Model, BokehInit ):
         # see process_messages.  A handful at most: one per tab opened.
         self._superseded_pages: set = set()
 
+        # Re-ask bookkeeping (see REASK_AFTER), request_id => {'msg', 'heard'
+        # (loop time the request was sent, or last heard of), 'reasked'
+        # (loop time of the re-ask, or None), 'liveness' (the transport's
+        # liveness then)}.  Entries without a _pending_requests entry are
+        # stale and dropped by the watchdog.
+        self._request_meta: Dict[str, Dict[str, Any]] = {}
+        self._reask_after: float = REASK_AFTER
+        self._reask_liveness_ticks: int = REASK_LIVENESS_TICKS
+        self._reask_check_interval: float = REASK_CHECK_INTERVAL
+        self._reask_task: Optional[asyncio.Task] = None
+        self._loop_lag_task: Optional[asyncio.Task] = None
+        # (loop time, "comm_id.message_id") of the latest handler starts, for
+        # the loop-lag monitor: a synchronous handler that blocked the loop
+        # has finished by the time the monitor runs again.
+        self._recent_starts: Deque[Tuple[float, str]] = deque(maxlen=32)
+
         # State management
         self._state = AppState.CONSTRUCTED
-        self._state_lock = asyncio.Lock()                 # REMOVED
+        self._state_lock = asyncio.Lock()
         self._shutdown_requested = False
         self._pending_user_shutdown_reason = ''
         self._pending_user_shutdown = False               # Mark that shutdown is underway
                                                           # but not yet complete.
-        self._shutdown_reason: Optional[str] = None       # REMOVED
+        self._shutdown_reason: Optional[str] = None
         self._shutdown_callback_called = False            # Track if callback was called
-        self._errors: List[Exception] = []                # REMOVED
+        # The most recent errors reported (report_error); bounded, as a
+        # long session's non-fatal errors would otherwise pile up (PY-2).
+        self._errors: Deque[Exception] = deque(maxlen=_MAX_ERRORS_KEPT)
         self._shared_state: Dict[str, Any] = {}
 
         # Lifecycle callbacks
-        self._on_shutdown = on_shutdown                   # REMOVED
-        self._on_error = on_error                         # REMOVED
+        self._on_shutdown = on_shutdown
+        self._on_error = on_error
         self._shutdown_event = asyncio.Event()
         self._on_connection_closed = None
         self._on_reconnect = None
@@ -679,7 +743,7 @@ class CommMgr( Model, BokehInit ):
         comm_id = comm.comm_id
 
         if comm_id in self._handlers and message_id in self._handlers[comm_id]:
-            del self._handlers[comm_id][message_id]
+            self._takes_context.pop(self._handlers[comm_id].pop(message_id), None)
             logger.debug(f"Unregistered handler: {comm_id}.{message_id}")
 
     async def send(self, comm: Comm, message_id: str, message: Dict[str, Any],
@@ -703,26 +767,38 @@ class CommMgr( Model, BokehInit ):
             'request_id': request_id
         }
 
+        kick = False
         async with self._lock:
-            # Check if this comm has a pending request
-            if comm_id in self._pending:
-                # This comm is waiting for a response - queue this message
+            # Queue behind a request waiting for its reply, and also behind
+            # messages already held for this comm: after a reconnect (or a
+            # lost Jupyter page) the requests that were in flight wait at the
+            # head of the queue, and a new message sent straight away -- or
+            # held at the head itself -- would overtake them (found
+            # 2026-11-24, test_comms_transport.py).
+            if comm_id in self._pending or self._send_queue.get(comm_id):
                 if comm.squash_queue:
-                    # Squash mode: replace any queued message with same message_id
+                    # Squash mode: replace any queued message with same message_id.
+                    # Not a held replay (it has a request_id): it may already
+                    # have run, and its caller waits for the reply.
                     self._send_queue[comm_id] = [
                         item for item in self._send_queue[comm_id]
-                        if item[0] != message_id
+                        if item[0] != message_id or item[3] is not None
                     ]
 
                 # Add to queue
-                self._send_queue[comm_id].append((message_id, message, callback, None))
+                self._send_queue.setdefault(comm_id, []).append((message_id, message, callback, None))
                 logger.debug(
                     f"Queued message for {comm_id}.{message_id} "
                     f"(queue size: {len(self._send_queue[comm_id])})"
                 )
+                kick = comm_id not in self._pending
             else:
                 # No pending request for this comm - send immediately
                 await self._send_immediate(comm_id, message_id, message, request_id, callback)
+        if kick and self._transport and self._transport.is_connected():
+            # Held messages and nothing in flight, but connected (the flush has
+            # not run yet): send the head now.
+            await self._process_next_queued(comm_id)
 
     async def _send_immediate(self, comm_id: str, message_id: str, message: Dict[str, Any],
                               request_id: str, callback: Optional[Callable]):
@@ -751,6 +827,9 @@ class CommMgr( Model, BokehInit ):
         # Mark this comm as having a pending request
         self._pending[comm_id] = request_id
         self._pending_requests[request_id] = (comm_id, message_id, message, callback)
+        self._request_meta[request_id] = {'msg': msg, 'heard': self._now(),
+                                          'reasked': None, 'liveness': None}
+        self._ensure_reask_watchdog()
 
         # Send through transport
         try:
@@ -766,6 +845,7 @@ class CommMgr( Model, BokehInit ):
             logger.debug(f"Connection closed while sending {comm_id}.{message_id}: {e}")
             self._pending.pop(comm_id, None)
             self._pending_requests.pop(request_id, None)
+            self._request_meta.pop(request_id, None)
             self._send_queue.setdefault(comm_id, []).insert(0, (message_id, message, callback, request_id))
 
     async def abandon_inflight(self) -> int:
@@ -785,11 +865,182 @@ class CommMgr( Model, BokehInit ):
             comms = list(self._pending)
             self._pending.clear()
             self._pending_requests.clear()
+            self._request_meta.clear()
         for comm_id in comms:
             await self._process_next_queued(comm_id)
         if n:
             logger.debug(f"CommMgr: forgot {n} request(s) waiting for a reply")
         return n
+
+    def forget(self, request_id: Optional[str] = None, *, callback: Optional[Callable] = None,
+               comm_id: Optional[str] = None, error: Optional[str] = None) -> int:
+        """Stop waiting for one request, in flight or still queued.
+
+        Named by *request_id*, or by the *callback* it was sent with (all a
+        caller of ``Comm.send`` has; a request still queued behind another has
+        no request_id yet), optionally limited to *comm_id*.  The comm's queue
+        then moves on.  With *error*, the callback is called once with
+        ``{'error': error}``; without, it is not (the caller has given up on
+        it already, e.g. ``remote._bridge.request`` after its timeout).  A reply
+        that arrives later is ignored.  Returns how many were forgotten (0
+        or 1 for an in-flight one; a callback queued twice counts twice).
+
+        Order is kept: the peer runs one request per comm at a time (its
+        comm lock), so a forgotten request that does still reach or run on
+        the peer finishes there before the next one on that comm starts.
+        Synchronous, so it can be called from a cancelled task's cleanup; the
+        queue is moved on in a scheduled task."""
+        gone: list = []          # (comm_id, callback)
+        for rid, (cid, _mid, _m, cb) in list(self._pending_requests.items()):
+            if comm_id is not None and cid != comm_id:
+                continue
+            if (request_id is not None and rid == request_id) or \
+               (request_id is None and callback is not None and cb is callback):
+                del self._pending_requests[rid]
+                self._request_meta.pop(rid, None)
+                if self._pending.get(cid) == rid:
+                    del self._pending[cid]
+                gone.append((cid, cb, True))
+        for cid, queue in self._send_queue.items():
+            if comm_id is not None and cid != comm_id:
+                continue
+            keep = []
+            for item in queue:
+                _mid, _m, cb, rid = item
+                if (request_id is not None and rid == request_id) or \
+                   (request_id is None and callback is not None and cb is callback):
+                    gone.append((cid, cb, False))
+                else:
+                    keep.append(item)
+            queue[:] = keep
+        for cid, cb, was_pending in gone:
+            if error is not None and cb is not None:
+                try:
+                    result = cb({'error': error})
+                    if inspect.isawaitable(result):
+                        asyncio.ensure_future(result)
+                except Exception:                        # noqa: BLE001
+                    logger.exception(f"Error notifying a forgotten request on {cid}")
+            if was_pending and cid not in self._pending:
+                try:
+                    asyncio.get_running_loop()
+                    asyncio.ensure_future(self._process_next_queued(cid))
+                except RuntimeError:
+                    pass                                 # no loop: nothing to move on yet
+        if gone:
+            logger.debug(f"CommMgr: forgot {len(gone)} request(s)"
+                         + (f" ({error})" if error else ""))
+        return len(gone)
+
+    @staticmethod
+    def _now() -> float:
+        try:
+            return asyncio.get_running_loop().time()
+        except RuntimeError:
+            import time
+            return time.monotonic()
+
+    def _ensure_reask_watchdog(self) -> None:
+        """Start the re-ask watchdog if it is not running (it ends when
+        nothing is pending, and is started again by the next send)."""
+        if self._reask_task is not None and not self._reask_task.done():
+            return
+        try:
+            self._reask_task = asyncio.get_running_loop().create_task(self._reask_watchdog())
+        except RuntimeError:
+            self._reask_task = None
+
+    async def _reask_watchdog(self) -> None:
+        """See REASK_AFTER."""
+        from ._low_level_transport import TransportNotConnectedError
+        while self._pending_requests:
+            await asyncio.sleep(self._reask_check_interval)
+            for rid in [r for r in self._request_meta if r not in self._pending_requests]:
+                del self._request_meta[rid]
+            transport = self._transport
+            liveness = getattr(transport, 'liveness', None) if transport else None
+            if liveness is None or not transport.is_connected():
+                continue          # no connection, or no way to tell: just wait
+            now = self._now()
+            for rid, meta in list(self._request_meta.items()):
+                if rid not in self._pending_requests:
+                    continue
+                if meta['reasked'] is None:
+                    if now - meta['heard'] < self._reask_after:
+                        continue
+                    meta['reasked'], meta['liveness'] = now, liveness
+                    logger.debug(f"CommMgr: no reply to {rid} for {now - meta['heard']:.0f} s; asking again")
+                    try:
+                        await transport.send_message({**meta['msg'], 'reask': True})
+                    except (ConnectionClosedError, ConnectionClosedOK, TransportNotConnectedError) as e:
+                        logger.debug(f"Connection closed while re-asking {rid}: {e}")
+                        meta['reasked'] = None
+                elif (liveness - meta['liveness'] >= self._reask_liveness_ticks
+                      and now - meta['reasked'] >= self._reask_after):
+                    comm_id = self._pending_requests[rid][0]
+                    logger.warning(
+                        f"CommMgr: a request on {comm_id} got no answer, though the "
+                        f"other side is responding; giving up on it ({rid})")
+                    self.forget(rid, error='no reply: the request was lost')
+
+    def _on_comms_frontend(self, event: str) -> None:
+        """The Jupyter comm transport's page changed (transport review JC-1).
+
+        'lost': the page that had the session may be gone (a new comm opened,
+        e.g. a reload or a second view of the output, or its comm closed).
+        Requests waiting for a reply from it go back to the head of their
+        queues, as on a WebSocket reconnect (RP-1: the request_id is kept, so
+        a page that already ran one sends its reply again), and wait.
+        'ready': a page completed the handshake; what is queued is sent."""
+        if event == 'lost':
+            self._connection_generation += 1
+            n = 0
+            for request_id, (comm_id, message_id, message, callback) in list(self._pending_requests.items()):
+                self._send_queue.setdefault(comm_id, []).insert(0, (message_id, message, callback, request_id))
+                n += 1
+            self._pending.clear()
+            self._pending_requests.clear()
+            self._request_meta.clear()
+            logger.debug(f"CommMgr: the page may have gone; {n} request(s) wait for the next one")
+        elif event == 'ready':
+            asyncio.ensure_future(self._flush_all_queues())
+
+    def _note_running(self, msg: Dict[str, Any]) -> None:
+        """The peer is still running one of our requests (RUNNING_NOTICE):
+        wait again from now."""
+        meta = self._request_meta.get(msg.get('request_id'))
+        if meta is not None:
+            meta['heard'], meta['reasked'], meta['liveness'] = self._now(), None, None
+            logger.debug(f"CommMgr: {msg.get('request_id')} is still running on the other side")
+
+    def ensure_loop_lag_monitor(self) -> None:
+        """Start the event-loop lag monitor (HB-1) if it is not running."""
+        if self._loop_lag_task is not None and not self._loop_lag_task.done():
+            return
+        try:
+            self._loop_lag_task = asyncio.get_running_loop().create_task(self._loop_lag_monitor())
+        except RuntimeError:
+            self._loop_lag_task = None
+
+    async def _loop_lag_monitor(self) -> None:
+        """Log when the event loop was blocked (HB-1): a handler that holds
+        it past the browser's pong deadline (10 s, 3 s after focus) makes
+        the page declare the socket dead.  Names the requests whose handlers
+        were running: what to move off the loop."""
+        loop = asyncio.get_running_loop()
+        while self.state not in (AppState.STOPPED, AppState.ERROR):
+            t0 = loop.time()
+            await asyncio.sleep(LOOP_LAG_SAMPLE)
+            lag = loop.time() - t0 - LOOP_LAG_SAMPLE
+            if lag < LOOP_LAG_DEBUG:
+                continue
+            # Started while the loop was held, or still running now.
+            running = sorted({label for t, label in self._recent_starts if t >= t0} |
+                             {v[2] if len(v) > 2 else f"{cid}.?"
+                              for cid, v in self._last_request.items() if v[1] is None})
+            (logger.info if lag >= LOOP_LAG_INFO else logger.debug)(
+                f"CommMgr: event loop blocked for {lag:.1f} s"
+                + (f" (running: {', '.join(running)})" if running else ""))
 
     async def _process_next_queued(self, comm_id: str):
         """
@@ -856,6 +1107,8 @@ class CommMgr( Model, BokehInit ):
             if not self._transport:
                 raise RuntimeError(f"transport should be set earlier for {self.transport_type}")
             self._transport.set_message_callback(self._route_message)
+            if hasattr(self._transport, 'on_frontend'):
+                self._transport.on_frontend = self._on_comms_frontend
             await self._transport.connect()
             self._initialized = True
             self.state = AppState.RUNNING
@@ -876,6 +1129,7 @@ class CommMgr( Model, BokehInit ):
         Only shuts down CommMgr for user request or fatal errors.
         """
         logger.debug(f"CommMgr.process_messages starting ({self.comm_mgr_id})")
+        self.ensure_loop_lag_monitor()
 
         # Determine why we stopped
         shutdown_reason = None
@@ -949,8 +1203,9 @@ class CommMgr( Model, BokehInit ):
                     await asyncio.wait_for(candidate.connect(), timeout=self._handshake_timeout)
                 except Exception as e:                       # noqa: BLE001
                     handshake_failed = True
+                    from ._low_level_transport import HandshakeRefused
                     quiet = isinstance(e, (ConnectionClosedError, ConnectionClosedOK,
-                                           asyncio.TimeoutError))
+                                           asyncio.TimeoutError, HandshakeRefused))
                     (logger.info if quiet else logger.warning)(
                         f"A WebSocket connection attempt failed during the handshake "
                         f"({type(e).__name__}: {e}); the session continues"
@@ -1298,6 +1553,7 @@ class CommMgr( Model, BokehInit ):
 
         self._pending.clear()
         self._pending_requests.clear()
+        self._request_meta.clear()
 
         logger.debug(
             f"CommMgr reset for reconnect (generation={self._connection_generation}, "
@@ -1441,6 +1697,7 @@ class CommMgr( Model, BokehInit ):
         self._handlers.clear()
         self._pending.clear()
         self._pending_requests.clear()
+        self._request_meta.clear()
         self._last_request.clear()
         self._send_queue.clear()
         self._comms.clear()
@@ -1460,6 +1717,10 @@ class CommMgr( Model, BokehInit ):
         side to use 'mirror' instead.
         """
         direction = msg.get('direction')
+
+        if msg.get('type') == RUNNING_NOTICE:
+            self._note_running(msg)
+            return
 
         if direction == self._self_direction:
             # Response to a request we made ourselves.
@@ -1481,12 +1742,17 @@ class CommMgr( Model, BokehInit ):
         request_id = msg.get('request_id')
 
         if not request_id or request_id not in self._pending_requests:
-            logger.warning(f"Received response for unknown request: {request_id}")
+            ### After a reconnect or abandon_inflight() a late reply for a
+            ### request this side has forgotten is expected (review PY-1).
+            (logger.debug if self._connection_generation > 0 else logger.warning)(
+                f"Received response for unknown request: {request_id}"
+            )
             return
 
         # Get request info. The message body is retained only so the request can
         # be replayed after a reconnect; it is not needed once a reply arrives.
         comm_id, message_id, _message, callback = self._pending_requests.pop(request_id)
+        self._request_meta.pop(request_id, None)
 
         # Clear pending state for this comm
         if comm_id in self._pending and self._pending[comm_id] == request_id:
@@ -1495,10 +1761,12 @@ class CommMgr( Model, BokehInit ):
         # Call the callback
         try:
             if callback:
-                if inspect.iscoroutinefunction(callback):
-                    await callback(msg['message'])
-                else:
-                    callback(msg['message'])
+                ### isawaitable on the result, not iscoroutinefunction on the
+                ### callback: partials and callable objects returning
+                ### awaitables count too (review PY-2).
+                result = callback(msg['message'])
+                if inspect.isawaitable(result):
+                    await result
         except Exception as e:
             logger.error(f"Error in response callback for {comm_id}.{message_id}: {e}")
             self.report_error(e, fatal=False)
@@ -1541,6 +1809,16 @@ class CommMgr( Model, BokehInit ):
                     f"Dropping replayed {comm_id}.{message_id} ({request_id}): "
                     f"the original is still running"
                 )
+                # A re-ask (not a reconnect replay) is told so, or the peer
+                # would take the silence for a lost request (REASK_AFTER).
+                if msg.get('reask') and self._transport:
+                    try:
+                        await self._transport.send_message({
+                            'type': RUNNING_NOTICE, 'comm_id': comm_id,
+                            'message_id': message_id, 'request_id': request_id,
+                            'direction': self._peer_direction})
+                    except (ConnectionClosedError, ConnectionClosedOK, TransportNotConnectedError) as e:
+                        logger.debug(f"Connection closed while answering a re-ask: {e}")
                 return
             logger.debug(
                 f"Replayed {comm_id}.{message_id} ({request_id}) already "
@@ -1553,10 +1831,14 @@ class CommMgr( Model, BokehInit ):
                     logger.debug(f"Connection closed while resending a reply: {e}")
             return
         if request_id:
-            self._last_request[comm_id] = [request_id, None]
+            # The third item is for the loop-lag monitor's report only.
+            self._last_request[comm_id] = [
+                request_id, None,
+                _handler_label(comm_id, message_id, self._handlers[comm_id][message_id])]
 
         # Call handler
         handler = self._handlers[comm_id][message_id]
+        self._recent_starts.append((self._now(), _handler_label(comm_id, message_id, handler)))
 
         ### Held from just before calling the handler through the reply
         ### (or error reply) actually being sent -- this comm_id's own
@@ -1576,15 +1858,21 @@ class CommMgr( Model, BokehInit ):
             async with lock:
                 try:
                     # Check if handler expects context parameter
-                    sig = inspect.signature(handler)
-                    if len(sig.parameters) >= 2:
+                    takes_context = self._takes_context.get(handler)
+                    if takes_context is None:
+                        takes_context = len(inspect.signature(handler).parameters) >= 2
+                        self._takes_context[handler] = takes_context
+                    if takes_context:
                         try:
                             # Handler accepts (message, context)
                             result = handler(msg['message'], context=self._context)
                         except Exception as e:
+                            ### `from e`, not `from None`: the handler's own
+                            ### traceback is the useful part (review PY-2).
                             raise RuntimeError(
-                                f"Handler {handler.__name__!r} failed with {type(e).__name__}: {e}"
-                            ) from None
+                                f"Handler {getattr(handler, '__name__', handler)!r} failed with "
+                                f"{type(e).__name__}: {e}"
+                            ) from e
                     else:
                         # Handler only accepts message
                         result = handler(msg['message'])
@@ -1686,15 +1974,11 @@ class CommMgr( Model, BokehInit ):
 
             self._pending_user_shutdown = False
 
-            # Signal the shutdown event
-            try:
-                loop = asyncio.get_running_loop()
-                logger.debug(f"CommMgr._handle_request effectuate shutdown")
-                loop.call_soon_threadsafe(self._shutdown_event.set)
-            except RuntimeError:
-                # No event loop running
-                logger.debug(f"CommMgr._handle_request effectuate shutdown without loop")
-                self._shutdown_event.set
+            # Signal the shutdown event.  (A branch for "no running loop" was
+            # removed 2026-11-23: this is a coroutine, so there always is one;
+            # the branch also lacked the call parentheses.  Review PY-2.)
+            logger.debug(f"CommMgr._handle_request effectuate shutdown")
+            asyncio.get_running_loop().call_soon_threadsafe(self._shutdown_event.set)
 
     def _remember_reply(self, comm_id: str, request_id: str, reply: Dict[str, Any]) -> None:
         """Record the reply to the comm's last request (see _last_request),

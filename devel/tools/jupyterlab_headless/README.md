@@ -40,6 +40,15 @@ script run in the page before anything else, for tracing).
   `ic.show(redisplay=True)` shows it again and it carries on; a plain second
   `show()` says so (`examples/reload_unsaved.py`; iclean checked the same way,
   with CASA 6.7.6 and a simulated VLA MS).
+- After a reload, saved or not, the iclean GUI starts from its state when
+  `ic.show()` ran, while the kernel carries on from where it was
+  (`examples/reload_state.py`, 2026-11-25).  After one cycle with niter=40
+  (5 left) and an unsent cycleniter edit, both paths came back with
+  niter 50, cycleniter 10, status "initial residual image" and a one-point
+  convergence plot.  A saved notebook keeps the output as it was first
+  rendered; `redisplay=True` renders the kernel-side Bokeh models, which the
+  browser's changes never reach.  The image and the mask come from the cubes,
+  so they are current.  Continue after such a reload sends niter=50, not 5.
 - A reload did not bring the visplot output back (`Bokeh is not defined`: the
   restored embed script ran before BokehJS loaded); the bridge did, opening a
   new comm.  Fixed the same day (`_showable._wait_for_bokehjs`): the output

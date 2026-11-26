@@ -29,6 +29,9 @@ iteration position, layout).
 Related: the earlier question of clean vs resumed state, restoring a saved-as-active notebook (a new
 kernel has no session: the GUI is shuttered, which is correct).
 
+Design agreed 2026-11-25: `devel/notes/drs/review/notebook_state_design.md` (reattach, snapshot on
+open, checked restore on run).
+
 ---
 
 ## 2. visplot in notebooks
@@ -48,6 +51,9 @@ Found in the 2026-11-24/25 notebook checks (`devel/tools/jupyterlab_headless`):
   (`_showable._wait_for_bokehjs` fixed the common case).
 - In a kernel, a long synchronous render holds the kernel: TW Hya's initial scatter (102 M samples,
   ~10.5 GB with 4.7 GB free) took 10.7 s. See issue 3.
+
+Direction agreed 2026-11-25 (`notebook_state_design.md`): a single configured panel as the notebook
+idiom, the full app still supported.
 
 Fixed on `35-transport-bugs` (for reference): `visplot(...)` run in a cell opened a tab that could not
 reach the kernel (review WS-7).
@@ -92,6 +98,24 @@ RK-5 (`KernelClientTransport.run` error handling), RK-6 (kernel-side transport n
 RK-7 (`JobRegistry` keeps every job), RK-8 (read loops awaiting callbacks inline), RK-9 (small items),
 and the remote data-path optimisations (OPT-*). Order from the review: RK-3/RK-4 first, then RK-2, RK-5,
 RK-6, RK-7; measure OPT-1 with `tests/manual/visplot/bench_remote_overhead.py`.
+
+---
+
+## 6. User preferences: save and restore
+
+**Labels:** iclean, visplot, notebook
+
+Save and restore data-independent preferences: gear tab shown / pinned (`gear_pin`), `pin_layout`,
+initial layout or preset, sidebar collapsed, theme, `time_labels`, colormap defaults. Wanted inside
+notebooks (issue 1's notebook state) and outside them alike.
+
+Agreed 2026-11-25 (design in `devel/notes/drs/review/notebook_state_design.md`): a `prefs` scope in
+`view_state.py`; layers built-in defaults < `~/.config/cubevis/prefs.json` < override file (`prefs=` on
+`VisibilityPlotter` and the tasks, or `CUBEVIS_PREFS`; partial, merged over the user file) < the
+notebook output's saved state < explicit arguments. Saving is explicit ("Save as my default"). One
+preference set, read where the GUI is built; no kernel-specific preferences for remote kernels.
+Preference-backed constructor arguments need a sentinel default, as `sync_layers` copies defaults
+verbatim into the task layers.
 
 ---
 

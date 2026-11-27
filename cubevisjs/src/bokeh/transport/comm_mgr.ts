@@ -140,6 +140,13 @@ export class CommMgr extends Model {
     // it mid-handshake and starting another (each abandoned attempt was a
     // failed handshake on the Python side).
     private connecting?: Promise<void>
+    // The transport chosen when the page loaded ('websocket', 'jupyter' or
+    // 'colab'; 'auto' resolved).  A reconnect makes one of the same kind:
+    // until 2026-11-25 every reconnect was a WebSocket, so a notebook page
+    // whose comm was not ready yet when it first sent (a reload: the bridge
+    // can take a while, JC-3) closed its comm and retried a WebSocket it
+    // has no address for, for ever.
+    private activeTransportType?: string
     // Another page took the session (see onSuperseded()).
     private superseded: boolean = false
     // Identifies this page load to Python in the handshake (`frontend_id`)
@@ -241,6 +248,7 @@ export class CommMgr extends Model {
             if (transportType === 'auto') {
                 transportType = this.detectTransport()
             }
+            this.activeTransportType = transportType
             
             // Create appropriate transport
             if (transportType === 'websocket') {
@@ -256,8 +264,16 @@ export class CommMgr extends Model {
                     if (this.connecting === attempt) this.connecting = undefined
                 }
             } else if (transportType === 'colab' || transportType === 'jupyter') {
-                this.transport = new CommsTransport(this)
-                await this.setupTransport()
+                // Recorded as the attempt under way, as for a WebSocket: a
+                // send() while the comm is looked for (up to 5 s, JC-3) is
+                // queued for flushAllQueues() and does not start a reconnect.
+                const attempt = this.connectComms()
+                this.connecting = attempt
+                try {
+                    await attempt
+                } finally {
+                    if (this.connecting === attempt) this.connecting = undefined
+                }
             } else {
                 throw new Error(`Unknown transport type: ${transportType}`)
             }
@@ -375,6 +391,18 @@ export class CommMgr extends Model {
             console.error("WebSocket connection failed:", e)
             throw e
         }
+    }
+
+    /**
+     * Connect a Jupyter / Colab comms transport (the comm the bridge made in
+     * the kernel's output, see CommsTransport.retrieveComm()).
+     */
+    private async connectComms(): Promise<void> {
+        const transport = new CommsTransport(this)
+        this.transport = transport
+        await this.setupTransport(transport)
+        this.reconnectAttempts = 0
+        this.reconnectDelay = 1000
     }
 
     /**
@@ -585,8 +613,12 @@ export class CommMgr extends Model {
                 }
                 this.transport = undefined
             }
-            // Attempt to reconnect
-            await this.connectWebSocket(claim)
+            // Attempt to reconnect, with a transport of the kind chosen at load
+            if (this.activeTransportType === 'jupyter' || this.activeTransportType === 'colab') {
+                await this.connectComms()
+            } else {
+                await this.connectWebSocket(claim)
+            }
         })()
         this.connecting = attempt
         attempt.then(

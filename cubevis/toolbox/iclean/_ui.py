@@ -567,6 +567,29 @@ class InteractiveCleanUI:
                 ### msg['value']['mask'], deleted '<imagename>.mask' and converted drawn regions;
                 ### the browser never sends 'mask' -- it sends 'masks' -- so it never ran.)
                 ###
+                ### What a page that connects later is told (session_state( ), issue 1 of
+                ### issue35_spinoffs.md): set here, cleared when the cycle has its result.
+                ###
+                self._clean['running'] = True
+                try:
+                    result = await run_cycle( msg )
+                finally:
+                    self._clean['running'] = False
+                self._clean['last-result'] = result
+                if result.get( 'cmd' ):
+                    self._clean['log'].extend( result['cmd'] )
+                return result
+
+            elif msg['action'] == 'stop':
+                logger.debug(f"InteractiveCleanUI...clean_handler received shutdown message")
+                context.request_shutdown( "user requested stop" )
+                return dict( result='stopped', update=dict( ) )
+            elif msg['action'] == 'status':
+                return dict( result="ok", update=dict( ) )
+            else:
+                print( "got something else: '%s'" % msg['action'] )
+
+        async def run_cycle( msg, self=self ):
                 convergence_state={ 'convergence': {}, 'cyclethreshold': {} }
                 ###
                 ### A failure -- the imager raising, a value it refuses, or with a remote session the
@@ -581,6 +604,9 @@ class InteractiveCleanUI:
                                                                      **msg['value']['automask'] ) )
                     if err != 0:
                         return self._cycle_error( errmsg or f'the imager refused the new values (code {err})' )
+                    ### the imager has these now: a page connecting later shows them
+                    self._clean['controls'] = { 'iteration': dict( msg['value']['iteration'] ),
+                                                'automask': dict( msg['value']['automask'] ) }
 
                     iteration_limit = int(msg['value']['iteration']['niter'])
                     reporter = asyncio.ensure_future( self._report_progress(
@@ -613,16 +639,18 @@ class InteractiveCleanUI:
                                                    convergence=convergence_state['convergence'],
                                                    iterdone=iteration_limit - iterleft, iterleft=iterleft,
                                                    majordone=majordone, majorleft=majorleft, cyclethreshold=convergence_state['cyclethreshold'], stopdesc=stopdesc )
+                ### what the iteration controls show after this result (the browser's refresh( ))
+                self._clean['controls']['iteration']['niter'] = str( iterleft )
+                self._clean['controls']['iteration']['nmajor'] = str( majorleft )
                 return self._clean['last-success']
 
-            elif msg['action'] == 'stop':
-                logger.debug(f"InteractiveCleanUI...clean_handler received shutdown message")
-                context.request_shutdown( "user requested stop" )
-                return dict( result='stopped', update=dict( ) )
-            elif msg['action'] == 'status':
-                return dict( result="ok", update=dict( ) )
-            else:
-                print( "got something else: '%s'" % msg['action'] )
+        def session_handler( msg, context=None ):
+            '''A page connecting to this session -- a reload, a reopened notebook,
+            ``show(redisplay=True)`` -- asks for its state (issue 1).'''
+            state = self.session_state( )
+            logger.debug( f"InteractiveCleanUI...session_handler: running={state['running']} "
+                          f"cycled={state['controls'] is not None}" )
+            return state
 
         ###
         ### set up websockets which will be used for control and convergence updates
@@ -637,6 +665,14 @@ class InteractiveCleanUI:
             self._clean_ids[btn] = str(uuid4( ))
             #print("%s: %s" % ( btn, self._clean_ids[btn] ) )
             self._pipe['control'].register( self._clean_ids[btn], clean_handler )
+        ###
+        ### The session's state for a page that connects (issue 1). On the control pipe a
+        ### request waits behind a running cycle (the comm's lock), so its reply is the state
+        ### after that cycle; on the convergence pipe it is answered at once (see the
+        ### 'session-restore' script in _initialize_javascript).
+        ###
+        self._clean_ids['session'] = str(uuid4( ))
+        self._pipe['control'].register( self._clean_ids['session'], session_handler )
 
         ###
         ### The single SHARED help button will be supplied by the first CubeMask...
@@ -667,6 +703,8 @@ class InteractiveCleanUI:
             def convergence_handler( msg, self=self, imid=imid, context=None ):
                 if msg['action'] == 'retrieve':
                     return { 'result': self._clean['last-success'] }
+                elif msg['action'] == 'session':
+                    return self.session_state( )
                 else:
                     return { 'result': None, 'error': 'unrecognized action' }
 
@@ -821,7 +859,7 @@ class InteractiveCleanUI:
                                       stylesheets=[ InlineStyleSheet( css='''.bk-btn { border: 0px solid #ccc;  padding: 0 var(--padding-vertical) var(--padding-horizontal); margin-top: 3px; }''' ) ] )
 
 
-        self._control['iteration']['cb'] = CustomJS( args=dict( images_state={ k: { 'status': v['gui']['stopcode'],
+        cb_args = dict( images_state={ k: { 'status': v['gui']['stopcode'],
                                                                                     'automask': v['gui']['params']['automask'],
                                                                                     'iteration': v['gui']['params']['iteration'],
                                                                                     'img': v['gui']['image']['fig'],
@@ -851,7 +889,8 @@ class InteractiveCleanUI:
                                                                 ids=self._clean_ids,
                                                                 logbutton=self._log_button,
                                                                 stopdescmap=self._stop_descriptions
-                                                              ),
+                                                              )
+        self._control['iteration']['cb'] = CustomJS( args=cb_args,
                                                  code="const appstate = Bokeh.find.appState(cb_obj.origin);" +
                                                       self._js['update-converge'] + self._js['clean-refresh'] + self._js['clean-disable'] +
                                                       self._js['clean-enable'] + self._js['clean-status-update'] +
@@ -986,6 +1025,19 @@ class InteractiveCleanUI:
                                                            logbutton._log = log
                                                        }''',
                                                description="interactive clean control pipe" )
+
+        ###
+        ### Bring the controls up to date with the session (issue 1): after the script above,
+        ### so a page that loads (a reload, a reopened notebook, show(redisplay=True)) shows
+        ### what the kernel has rather than the GUI as it was at show().
+        ###
+        self._pipe['control'].add_init_script( args=cb_args,
+                                               code="const appstate = Bokeh.find.appState(logbutton);" +
+                                                    self._js['update-converge'] + self._js['clean-refresh'] +
+                                                    self._js['clean-disable'] + self._js['clean-enable'] +
+                                                    self._js['clean-status-update'] + self._js['clean-progress'] +
+                                                    self._js['session-restore'],
+                                               description="interactive clean session restore" )
 
         tab_panels = list( map( self._create_image_panel, self._clean_targets.items( ) ) )
 
@@ -1295,8 +1347,37 @@ class InteractiveCleanUI:
                                             cyclethreshold=self._init_values["convergence_state"]['cyclethreshold'],
                                             stopdesc=stopdesc )
 
+        ###
+        ### The session's state for a page that connects later (session_state( )): no cycle
+        ### run yet, so the GUI as built is right.
+        ###
+        self._clean['controls'] = None
+        self._clean['last-result'] = None
+        self._clean['running'] = False
+        self._clean['log'] = list( self._clean['cmds'] )
+
         ### Must occur AFTER initial "next" call to gclean(s)
         self._init_pipes()
+
+    def session_state( self ):
+        '''What a page connecting to this session needs to bring its controls up to
+        date (issue 1 of ``devel/notes/drs/review/issue35_spinoffs.md``): the GUI it
+        loads is the one built at ``show()`` -- a saved notebook's output as first
+        rendered, or the kernel-side models for ``show(redisplay=True)`` -- because
+        the browser's changes never reach those models.  The kernel is the source
+        of truth (``notebook_state_design.md``): what was never sent (a cycleniter
+        typed but not used) is lost.
+
+        ``controls``: the iteration and automask values the imager has, with niter
+        and nmajor as left after the last cycle, or None before the first cycle;
+        ``result``: the last cycle's reply (as the clean buttons get it, without
+        its log lines); ``running``: a cycle is running; ``log``: the whole log.'''
+        result = self._clean.get( 'last-result' )
+        if result is not None:
+            result = { k: v for k, v in result.items( ) if k != 'cmd' }
+        return dict( controls=self._clean.get( 'controls' ), result=result,
+                     running=bool( self._clean.get( 'running' ) ),
+                     log=list( self._clean.get( 'log' ) or [ ] ) )
 
     def __retrieve_result( self ):
         '''If InteractiveCleanUI had a return value, it would be filled in as part of the
@@ -1725,6 +1806,54 @@ class InteractiveCleanUI:
                                                state.awaiting_stop = false
                                                update_status( 'user requested stop' )
                                            }''',
+
+                       ### a page connecting to a running session (issue 1 of issue35_spinoffs.md): the
+                       ### kernel's state replaces the GUI as built at show( ).  Asked on the convergence
+                       ### pipe, answered at once; if a cycle is running (started from a page since
+                       ### gone), the controls stay disabled and the same question goes on the control
+                       ### pipe, where it waits behind the cycle (the comm's lock) and so is answered
+                       ### with the state after it.  A Finish that was running stops after that cycle:
+                       ### its loop ran in the page that went away.
+                       'session-restore': '''function apply_controls( s ) {
+                                               const itobj = Object.entries(images_state)[0][1].iteration
+                                               const amobj = Object.entries(images_state)[0][1].automask
+                                               if ( s.controls ) {
+                                                   Object.entries( s.controls.iteration || { } ).forEach( ([k,v]) => {
+                                                       if ( itobj[k] && hasprop(itobj[k],'value') ) itobj[k].value = '' + v } )
+                                                   Object.entries( s.controls.automask || { } ).forEach( ([k,v]) => {
+                                                       const w = amobj[k]
+                                                       if ( ! w ) return
+                                                       if ( typeof v === 'boolean' ) { if ( hasprop(w,'active') ) w.active = v }
+                                                       else if ( hasprop(w,'value') ) w.value = '' + v } )
+                                               }
+                                           }
+                                           function apply_session( s ) {
+                                               apply_controls( s )
+                                               if ( s.log && s.log.length ) logbutton._log = s.log
+                                               const r = s.result
+                                               if ( r ) {
+                                                   if ( r.result === 'error' ) {
+                                                       update_status( r.stopdesc ? r.stopdesc : 'An internal error has occurred' )
+                                                   } else {
+                                                       update_status( r.stopdesc ? r.stopdesc : 'stopcode' in r ? r.stopcode[0] : -1 )
+                                                       refresh( r )
+                                                   }
+                                               }
+                                           }
+                                           ctrl.converge.pipe.send( ctrl.converge.id, { action: 'session' }, ( s ) => {
+                                               if ( ! s || typeof s !== 'object' || ! ( 'running' in s ) ) return
+                                               if ( s.running ) {
+                                                   apply_controls( s )     // the running cycle's settings
+                                                   disable( true )
+                                                   update_status( 'a cycle started before this page was loaded is running' )
+                                                   progress_watch( )
+                                                   ctrl_pipe.send( ids['session'], { action: 'session' }, ( s2 ) => {
+                                                       state.cycle_running = false
+                                                       if ( s2 && typeof s2 === 'object' ) apply_session( s2 )
+                                                       enable( false )
+                                                   } )
+                                               } else apply_session( s )
+                                           } )''',
 
                        ### progress of a running cycle (design step 4b): Python pushes the status line
                        ### about once a second while a cycle runs (_report_progress); shown only while

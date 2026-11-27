@@ -29,6 +29,12 @@ iteration position, layout).
 Related: the earlier question of clean vs resumed state, restoring a saved-as-active notebook (a new
 kernel has no session: the GUI is shuttered, which is correct).
 
+**iclean done on `44-visplot-in-notebooks` (2026-11-25):** a page that loads asks the kernel for the
+session's state (`InteractiveCleanUI.session_state`: the iteration and automask values the imager has,
+niter and nmajor as left, the last result, the whole log, whether a cycle runs) and applies it; a page
+loaded while a cycle runs waits for it with the buttons disabled. `reload_state.py` (saved and
+`redisplay=True`) and `reload_running.py` check it. visplot still to do.
+
 Design agreed 2026-11-25: `devel/notes/drs/review/notebook_state_design.md` (reattach, snapshot on
 open, checked restore on run).
 
@@ -54,6 +60,9 @@ Found in the 2026-11-24/25 notebook checks (`devel/tools/jupyterlab_headless`):
 
 Direction agreed 2026-11-25 (`notebook_state_design.md`): a single configured panel as the notebook
 idiom, the full app still supported.
+
+Fixed on `44-visplot-in-notebooks` (2026-11-25): a reloaded page that sent before its comm was found
+closed the comm and retried a WebSocket for ever (`comm_mgr.ts`; see the `jupyterlab_headless` README).
 
 Fixed on `35-transport-bugs` (for reference): `visplot(...)` run in a cell opened a tab that could not
 reach the kernel (review WS-7).

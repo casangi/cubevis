@@ -138,7 +138,7 @@ Output View sharing the comm, stray "Bokeh is not defined").
 
 ## Order
 
-1. iclean reattach: niter etc. on reconnect (case A, iclean).
+1. iclean reattach: niter etc. on reconnect (case A, iclean). **Done 2026-11-25.**
 2. `prefs` scope and units, user file, override file, sentinel defaults.
 3. Companion-output prototype in the headless harness (verify items).
 4. visplot reattach and checked restore (cases A and C); snapshot (case B).

@@ -49,6 +49,24 @@ script run in the page before anything else, for tracing).
   rendered; `redisplay=True` renders the kernel-side Bokeh models, which the
   browser's changes never reach.  The image and the mask come from the cubes,
   so they are current.  Continue after such a reload sends niter=50, not 5.
+  **Fixed on `44-visplot-in-notebooks` (2026-11-25, spin-off issue 1):** the
+  page asks the kernel for the session's state when it loads
+  (`InteractiveCleanUI.session_state`).  With niter=400 and cycleniter=15
+  sent, then cycleniter=7 typed: both paths come back with niter 345,
+  cycleniter 15 (7 was never sent), the cycle's status and a two-point plot,
+  and Continue carries on from 345.  `examples/reload_running.py` reloads
+  while a cycle runs (a notebook that slows `arun_cycle`): the page shows the
+  cycle's settings and progress with the buttons disabled, and its result
+  when it ends.
+- A reloaded notebook page that sent before its comm was found (the bridge
+  can take a while, JC-3) took that for a lost connection: the CommMgr closed
+  the comm and retried a **WebSocket**, which a notebook page has no address
+  for (`object null is not iterable`, for ever).  The page then never heard
+  from the kernel again.  Seen first through the iclean state request above,
+  which is sent from an init script; any early send could do it.  Fixed in
+  `comm_mgr.ts` (2026-11-25): the comms setup counts as the attempt under way
+  (early sends wait for it) and a reconnect makes a transport of the kind
+  chosen at load.  Needs rebuilt bundles.
 - `visplot(...)` / `iclean(...)` run in a cell open a browser tab, which
   could not reach the kernel: its CommMgr had chosen Jupyter comms, so the
   first request (stepping to the first Antenna) never returned (2026-11-25,

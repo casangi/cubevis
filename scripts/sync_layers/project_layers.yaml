@@ -43,6 +43,10 @@ templates:
     vars:
       task_name:  visplot
       app_module: cubevis.toolbox.visplot.visibility_plotter
+      # inp() shows a preference-backed argument left at None as the value
+      # it comes to (layer_defaults() there, issue 6); None is still what
+      # is passed and saved in visplot.last
+      prefs_module: cubevis.toolbox.visplot.prefs
       info_group: visualization, information,editing, manipulation
       info_desc:  A plotter/interactive flagger for visibility data
 

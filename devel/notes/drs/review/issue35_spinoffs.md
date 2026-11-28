@@ -118,8 +118,15 @@ Save and restore data-independent preferences: gear tab shown / pinned (`gear_pi
 initial layout or preset, sidebar collapsed, theme, `time_labels`, colormap defaults. Wanted inside
 notebooks (issue 1's notebook state) and outside them alike.
 
+**Loading done on `44-visplot-in-notebooks` (2026-11-27):** `cubevis/toolbox/visplot/prefs.py`; the
+preference-backed `VisibilityPlotter` arguments default to `None`; `prefs=` / `$CUBEVIS_PREFS`
+(`none`: built-in only); `inp()` shows the value a `None` comes to (`None` is still passed and
+saved in `visplot.last`); `test_prefs.py`. Saving (a "Save as default"
+in each gear tab and in the sidebar) still to do. Revised design (two groups, `app` and `panel`; not a
+`view_state.py` scope) in `notebook_state_design.md`.
+
 Agreed 2026-11-25 (design in `devel/notes/drs/review/notebook_state_design.md`): a `prefs` scope in
-`view_state.py`; layers built-in defaults < `~/.config/cubevis/prefs.json` < override file (`prefs=` on
+`view_state.py` (revised 2026-11-27: a module of its own); layers built-in defaults < `~/.config/cubevis/prefs.json` < override file (`prefs=` on
 `VisibilityPlotter` and the tasks, or `CUBEVIS_PREFS`; partial, merged over the user file) < the
 notebook output's saved state < explicit arguments. Saving is explicit ("Save as my default"). One
 preference set, read where the GUI is built; no kernel-specific preferences for remote kernels.

@@ -3160,21 +3160,23 @@ class VisibilityPlotter:
         number of channels, or ``"all"`` (one point per spectral window).
         For a time series (with X Time).  Same rules as
         ``scatter_avg_time``.
-    time_gaps : str
+    time_gaps : str | None
         How a Time axis treats the gaps between scans and other breaks in
         the data: ``"shown"`` (default; time to scale) or ``"closed"``
         (the stretches of data side by side, every gap removed; the
         ticks still read the real times).  A raster's Time axis, or a
         scatter's with X Time.  Initial value for every panel; each
         panel's "Time gaps" control changes it afterwards.
-    freq_gaps : str
+        Preference (``None``, the default: see ``prefs``).
+    freq_gaps : str | None
         The same for a frequency axis and the gaps between spectral
         windows: ``"shown"`` (default) or ``"closed"``.  A raster's
         Channel axis when the selected windows differ (it is then drawn
         in frequency), or a scatter's with X Frequency.  Initial value
         for every panel; each panel's "Frequency gaps" control changes
         it afterwards.
-    layout : str
+        Preference (``None``, the default: see ``prefs``).
+    layout : str | None
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), ``"over"`` (both panels, one above
         the other), or ``"grid"`` (the first panel repeated once per
@@ -3184,6 +3186,7 @@ class VisibilityPlotter:
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
         an explicit, conflicting ``kind=`` raises ``ValueError``.
+        Preference (``None``, the default: see ``prefs``).
     row_height : int, str or list
         Height of each row of plots, in pixels: the plot with its axes,
         not the readout and color bars below it.  ``None`` (default):
@@ -3217,10 +3220,11 @@ class VisibilityPlotter:
         averaged) or Time (all channels averaged); they set ``layout``
         to ``"over"`` and supply ``scatter_avg_time`` /
         ``scatter_avg_chan`` where those are left at ``"off"``.
-    pin_layout : bool
+    pin_layout : bool | None
         Start with "Pin layout" ticked: presets (this ``preset`` and the
         toolbar buttons) keep the current layout -- ``layout`` -- instead
         of switching to their own.  Default ``False``.
+        Preference (``None``, the default: see ``prefs``).
     iterate_by : str
         What the Grid layout makes one plot of each: ``"baseline"``
         (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
@@ -3229,17 +3233,20 @@ class VisibilityPlotter:
         make one plot of each pair: ``"antenna,spw"`` is each antenna's
         SPWs in turn (not both baseline and antenna).  Every plot is drawn
         as the grid's own panel is (``grid_panel``).
-    gridrows : int
+    gridrows : int | None
         Rows of plots on a page of the Grid layout (1-8, default 3).
-    gridcols : int
+        Preference (``None``, the default: see ``prefs``).
+    gridcols : int | None
         Columns of plots on a page of the Grid layout (1-8, default 3).
-    gridcolor : str
+        Preference (``None``, the default: see ``prefs``).
+    gridcolor : str | None
         The Grid layout's color range: ``"page"`` (default), one range
         for the plots on a page; ``"grid"``, one for every plot in the
         grid, so that pages compare (found cell by cell in the
         background; until then a page is colored by its own range);
         ``"cell"``, each plot its own.  With ``eq_hist`` the plots that
         share a range share its curve too.
+        Preference (``None``, the default: see ``prefs``).
     exprange : str
         Which pages of the Grid layout ``plotfile=`` writes: ``"current"``
         (default: the first page, as plotms), ``"all"``, or page numbers
@@ -3290,12 +3297,13 @@ class VisibilityPlotter:
         flatten every plot of all baselines.  A baseline named in
         ``antenna`` (``"BR&BR"``) is plotted whatever this says.  Also the
         "Autocorrelations" switch in the Data section.
-    time_labels : str
+    time_labels : str | None
         How time axes and the cursor readout give time: ``"utc"``
         (default; time of day, the date in the axis label, AIPS-style
         ``d/hh:mm:ss`` when the data cross a UTC midnight) or
         ``"elapsed"`` (minutes and seconds from the first sample).
         Also the "Time labels" switch in the configuration panel.
+        Preference (``None``, the default: see ``prefs``).
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"ANTENNA1"`` / ``"ANTENNA2"`` (together). Takes precedence over
@@ -3325,9 +3333,21 @@ class VisibilityPlotter:
         ``(min, max)`` UV distance in metres, the programmatic form of
         ``uvrange``; shown in the UV range box as text.  Give one or the
         other.
-    compact_toolbar : bool
+    compact_toolbar : bool | None
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
+        Preference (``None``, the default: see ``prefs``).
+    theme : str | None
+        ``"dark"`` (default) or ``"light"``: the chrome and the
+        palettes; also the Light/Dark switch.
+        Preference (``None``, the default: see ``prefs``).
+    raster_cmap : str | None
+        The raster colormap, by name.  Unset (in the preferences too), it
+        follows the theme; set, it stays as chosen when the theme changes.
+        Preference (``None``, the default: see ``prefs``).
+    scatter_cmap : str | None
+        The scatter palette, by name; as ``raster_cmap``.
+        Preference (``None``, the default: see ``prefs``).
     flag_filters : dict | None
         Extra flag filters, ``{name: callable | FlagFilter}``; each callable
         is ``func(ds, **params) -> bool mask`` (see ``flag_filters.py``).
@@ -3336,11 +3356,13 @@ class VisibilityPlotter:
     flag_preview : bool
         Review each flag proposal (counts, breakdown, highlighted samples)
         before it is added to the pending flags.  Defaults to ``False``.
-    flag_display : str
+    flag_display : str | None
         How pending flags are shown: ``"hide"`` (flagged points disappear,
         the default) or ``"color"`` (drawn in ``flag_color``).
-    flag_color : str
+        Preference (``None``, the default: see ``prefs``).
+    flag_color : str | None
         Color for pending flags when ``flag_display="color"``.
+        Preference (``None``, the default: see ``prefs``).
     flag_reach : str
         How far a flag box reaches beyond what is drawn, as the "Flag
         reaches" controls start: a comma-separated list of
@@ -3354,12 +3376,14 @@ class VisibilityPlotter:
         Text stored with each flag made from now on (why it was
         flagged); shown in the report, saved in the JSON, written as
         ``reason=`` in exported flagdata commands.
-    flag_show_flagged : bool
+    flag_show_flagged : bool | None
         Also draw data that are currently flagged (on disk or pending) in
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
         default; toggled in the Flagging controls.
-    flag_flagged_color : str
+        Preference (``None``, the default: see ``prefs``).
+    flag_flagged_color : str | None
         Color for flagged data when ``flag_show_flagged`` is on.
+        Preference (``None``, the default: see ``prefs``).
     frame_cache_mb : float | None
         Budget (MiB) of the cache of scatter frames -- the decoded samples a
         scatter panel draws, flags and probes.  When a selection's frames do
@@ -3377,6 +3401,30 @@ class VisibilityPlotter:
         (2 x 31 M samples, ~1.5 GiB per frame) needs about 3-4 GiB; on a 24
         GB Mac the old 2.4 GiB default evicted frames and a flag box took
         3.6 s instead of 0.5 s.
+    prefs : str | dict | bool | None
+        Where the arguments marked "Preference" take their values when
+        left at ``None``.  Layers, lowest first: the built-in defaults
+        (given with each argument), the user file
+        ``~/.config/cubevis/prefs.json`` (``$XDG_CONFIG_HOME/cubevis``
+        if set), then ``prefs``: a path to a JSON file of the same form
+        that sets only some of them (``$CUBEVIS_PREFS`` when ``prefs`` is
+        not given), or a dict of that form.  ``False`` (or
+        ``CUBEVIS_PREFS=none``): built-in defaults only, for tests and
+        reproducible runs.  An argument given explicitly always wins.  A
+        value in a file that is not valid is logged and ignored.  The
+        file::
+
+            {"format": "cubevis.visplot.prefs", "schema": 1,
+             "app":   {"theme": "light", "layout": "over"},
+             "panel": {"time_labels": "elapsed"}}
+
+        ``app``: ``theme``, ``layout``, ``pin_layout``, ``gridrows``,
+        ``gridcols``, ``gridcolor``, ``compact_toolbar``,
+        ``sidebar_open``; ``panel`` (every panel's starting values):
+        ``time_labels``, ``time_gaps``, ``freq_gaps``, ``raster_cmap``,
+        ``scatter_cmap``, ``flag_display``, ``flag_color``,
+        ``flag_show_flagged``, ``flag_flagged_color``, ``gear_pin``.
+        See ``cubevis/toolbox/visplot/prefs.py``.
     plotfile : str | None
         Write a PNG of the plot to this path instead of opening the GUI
         (the ``visplot`` task then returns the path).  Implies
@@ -3444,18 +3492,18 @@ class VisibilityPlotter:
         stat_chan_window                = "off",
         scatter_avg_time                = "off",
         scatter_avg_chan                = "off",
-        time_gaps:        str           = "shown",
-        freq_gaps:        str           = "shown",
-        layout:           str           = "side",
+        time_gaps:        Optional[str] = None,
+        freq_gaps:        Optional[str] = None,
+        layout:           Optional[str] = None,
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
-        pin_layout:       bool          = False,
+        pin_layout:       Optional[bool] = None,
         iterate_by:       str           = "baseline",
-        gridrows:         int           = 3,
-        gridcols:         int           = 3,
-        gridcolor:       str           = "page",
+        gridrows:         Optional[int] = None,
+        gridcols:         Optional[int] = None,
+        gridcolor:        Optional[str] = None,
         exprange:         str           = "current",
-        time_labels:      str           = "utc",
+        time_labels:      Optional[str] = None,
         autocorr:         str           = "exclude",
         panels:           Optional[list] = None,
         grid_panel:       Optional[dict] = None,
@@ -3468,10 +3516,10 @@ class VisibilityPlotter:
         freq_range:       tuple[float, float] | list[float] | None = None,
         uvdist_range:     tuple[float, float] | list[float] | None = None,
         enable_flagging:  bool           = True,
-        compact_toolbar:  bool           = True,
+        compact_toolbar:  Optional[bool] = None,
         row_height:       int | float | str | list | None = None,
         column_width:     int | float | str | list | None = None,
-        theme:            str            = "dark",
+        theme:            Optional[str]  = None,
         raster_cmap:      Optional[str]  = None,
         scatter_cmap:     Optional[str]  = None,
         headless:         bool           = False,
@@ -3484,13 +3532,16 @@ class VisibilityPlotter:
         plotfile:         Optional[str]  = None,
         flag_filters:     Optional[dict] = None,
         flag_preview:     bool           = False,
-        flag_display:     str            = "hide",
-        flag_color:       str            = "#ff00ff",
-        flag_show_flagged: bool          = False,
-        flag_flagged_color: str          = "#7f849c",
+        flag_display:     Optional[str]  = None,
+        flag_color:       Optional[str]  = None,
+        flag_show_flagged: Optional[bool] = None,
+        flag_flagged_color: Optional[str] = None,
         flag_reach:       str            = "",
         flag_reason:      str            = "",
         frame_cache_mb:   Optional[float] = None,
+        # Preferences (prefs.py, issue 6): the arguments above whose default
+        # is None take a preference, else the built-in default.
+        prefs:            bool | str | dict | None = None,
     ) -> None:
         """Construct the plotter.
 
@@ -3502,6 +3553,31 @@ class VisibilityPlotter:
 
         See ``_resolve_config``, ``_build_panels`` and ``_build_gui``.
         """
+        # Preferences first (prefs.py, issue 6 of issue35_spinoffs.md): an
+        # argument left at None takes the preference, else the built-in
+        # default, before anything below validates or uses it.  The task
+        # layers pass every argument explicitly, which is why these default
+        # to None rather than to their values.
+        from .prefs import load_prefs
+        self._prefs = load_prefs(prefs)
+        _pref = self._prefs.resolve
+        theme              = _pref("app", "theme", theme)
+        layout             = _pref("app", "layout", layout)
+        pin_layout         = _pref("app", "pin_layout", pin_layout)
+        gridrows           = _pref("app", "gridrows", gridrows)
+        gridcols           = _pref("app", "gridcols", gridcols)
+        gridcolor          = _pref("app", "gridcolor", gridcolor)
+        compact_toolbar    = _pref("app", "compact_toolbar", compact_toolbar)
+        time_labels        = _pref("panel", "time_labels", time_labels)
+        time_gaps          = _pref("panel", "time_gaps", time_gaps)
+        freq_gaps          = _pref("panel", "freq_gaps", freq_gaps)
+        raster_cmap        = _pref("panel", "raster_cmap", raster_cmap)
+        scatter_cmap       = _pref("panel", "scatter_cmap", scatter_cmap)
+        flag_display       = _pref("panel", "flag_display", flag_display)
+        flag_color         = _pref("panel", "flag_color", flag_color)
+        flag_show_flagged  = _pref("panel", "flag_show_flagged", flag_show_flagged)
+        flag_flagged_color = _pref("panel", "flag_flagged_color", flag_flagged_color)
+
         self._frame_cache_mb = frame_cache_mb
         # plotfile= (HRS B1, 2026-10-11): write a PNG instead of opening
         # the GUI -- what the visplot task's plotfile= means.
@@ -9327,6 +9403,11 @@ btn.label        = collapsing ? '⟩' : '⟨';
 """,
         )
         toggle_btn.js_on_click(self._sidebar_toggle_js)
+        # Whether the sidebar starts open: the app preference sidebar_open
+        # (issue 6).  Closed, it is as the toggle leaves it.
+        if not self._prefs.get("app", "sidebar_open"):
+            self._sidebar_col.visible = False
+            toggle_btn.label = "⟩"
 
         # ---- Stage 1c increment 1 (continued): gear/Tabs/Cancel ------------
         #
@@ -9910,7 +9991,9 @@ if (window.__cvApplySizes) { window.__cvApplySizes(); }
             # Pin (2026-10-11, on request): ticked, a successful Plot
             # leaves this tab open, so a panel can be re-plotted over and
             # over (the Ant×Ant quantities, say) without reopening it.
-            pin_cb = CheckboxGroup(labels=["Pin"], active=[],
+            # Its starting state is the panel preference gear_pin (issue 6).
+            pin_cb = CheckboxGroup(labels=["Pin"],
+                                   active=[0] if self._prefs.get("panel", "gear_pin") else [],
                                    width=52, margin=(0, 6, 0, 0),
                                    stylesheets=[dark])
             self._panel_pin[slot.id] = pin_cb

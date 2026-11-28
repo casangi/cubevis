@@ -69,6 +69,9 @@ def run_one(entry: dict, tmp: str) -> tuple:
     env = dict(os.environ, **{k: str(v).format(tmp=tmp, python=sys.executable, root=ROOT)
                               for k, v in entry.get("env", {}).items()})
     env.setdefault("PYTHONPATH", ROOT)
+    # The developer's own visplot preferences (~/.config/cubevis/prefs.json)
+    # must not change what the tests see (prefs.py, issue 6).
+    env.setdefault("CUBEVIS_PREFS", "none")
     t0 = time.monotonic()
     try:
         r = subprocess.run(argv_of(entry, tmp), cwd=ROOT, env=env,

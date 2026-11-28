@@ -77,18 +77,18 @@ def _visplot_t(
         stat_chan_window = 'off',
         scatter_avg_time = 'off',
         scatter_avg_chan = 'off',
-        time_gaps: str = 'shown',
-        freq_gaps: str = 'shown',
-        layout: str = 'side',
+        time_gaps: Optional[str] = None,
+        freq_gaps: Optional[str] = None,
+        layout: Optional[str] = None,
         kind: Optional[str] = None,
         preset: Optional[str] = None,
-        pin_layout: bool = False,
+        pin_layout: Optional[bool] = None,
         iterate_by: str = 'baseline',
-        gridrows: int = 3,
-        gridcols: int = 3,
-        gridcolor: str = 'page',
+        gridrows: Optional[int] = None,
+        gridcols: Optional[int] = None,
+        gridcolor: Optional[str] = None,
         exprange: str = 'current',
-        time_labels: str = 'utc',
+        time_labels: Optional[str] = None,
         autocorr: str = 'exclude',
         panels: Optional[list] = None,
         grid_panel: Optional[dict] = None,
@@ -100,22 +100,23 @@ def _visplot_t(
         time_range: tuple[float, float] | list[float] | None = None,
         freq_range: tuple[float, float] | list[float] | None = None,
         uvdist_range: tuple[float, float] | list[float] | None = None,
-        compact_toolbar: bool = True,
+        compact_toolbar: Optional[bool] = None,
         row_height: int | float | str | list | None = None,
         column_width: int | float | str | list | None = None,
-        theme: str = 'dark',
+        theme: Optional[str] = None,
         raster_cmap: Optional[str] = None,
         scatter_cmap: Optional[str] = None,
         plotfile: Optional[str] = None,
         flag_filters: Optional[dict] = None,
         flag_preview: bool = False,
-        flag_display: str = 'hide',
-        flag_color: str = '#ff00ff',
-        flag_show_flagged: bool = False,
-        flag_flagged_color: str = '#7f849c',
+        flag_display: Optional[str] = None,
+        flag_color: Optional[str] = None,
+        flag_show_flagged: Optional[bool] = None,
+        flag_flagged_color: Optional[str] = None,
         flag_reach: str = '',
         flag_reason: str = '',
         frame_cache_mb: Optional[float] = None,
+        prefs: bool | str | dict | None = None,
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
@@ -180,6 +181,7 @@ def _visplot_t(
         flag_reach = flag_reach,
         flag_reason = flag_reason,
         frame_cache_mb = frame_cache_mb,
+        prefs = prefs,
         # layer-supplied arguments
         remote_endpoint = None,
         enable_flagging = True,
@@ -328,21 +330,23 @@ class _visplot:
         number of channels, or ``"all"`` (one point per spectral window).
         For a time series (with X Time).  Same rules as
         ``scatter_avg_time``.
-    time_gaps : str
+    time_gaps : str | None
         How a Time axis treats the gaps between scans and other breaks in
         the data: ``"shown"`` (default; time to scale) or ``"closed"``
         (the stretches of data side by side, every gap removed; the
         ticks still read the real times).  A raster's Time axis, or a
         scatter's with X Time.  Initial value for every panel; each
         panel's "Time gaps" control changes it afterwards.
-    freq_gaps : str
+        Preference (``None``, the default: see ``prefs``).
+    freq_gaps : str | None
         The same for a frequency axis and the gaps between spectral
         windows: ``"shown"`` (default) or ``"closed"``.  A raster's
         Channel axis when the selected windows differ (it is then drawn
         in frequency), or a scatter's with X Frequency.  Initial value
         for every panel; each panel's "Frequency gaps" control changes
         it afterwards.
-    layout : str
+        Preference (``None``, the default: see ``prefs``).
+    layout : str | None
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), ``"over"`` (both panels, one above
         the other), or ``"grid"`` (the first panel repeated once per
@@ -352,6 +356,7 @@ class _visplot:
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
         an explicit, conflicting ``kind=`` raises ``ValueError``.
+        Preference (``None``, the default: see ``prefs``).
     row_height : int, str or list
         Height of each row of plots, in pixels: the plot with its axes,
         not the readout and color bars below it.  ``None`` (default):
@@ -385,10 +390,11 @@ class _visplot:
         averaged) or Time (all channels averaged); they set ``layout``
         to ``"over"`` and supply ``scatter_avg_time`` /
         ``scatter_avg_chan`` where those are left at ``"off"``.
-    pin_layout : bool
+    pin_layout : bool | None
         Start with "Pin layout" ticked: presets (this ``preset`` and the
         toolbar buttons) keep the current layout -- ``layout`` -- instead
         of switching to their own.  Default ``False``.
+        Preference (``None``, the default: see ``prefs``).
     iterate_by : str
         What the Grid layout makes one plot of each: ``"baseline"``
         (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
@@ -397,17 +403,20 @@ class _visplot:
         make one plot of each pair: ``"antenna,spw"`` is each antenna's
         SPWs in turn (not both baseline and antenna).  Every plot is drawn
         as the grid's own panel is (``grid_panel``).
-    gridrows : int
+    gridrows : int | None
         Rows of plots on a page of the Grid layout (1-8, default 3).
-    gridcols : int
+        Preference (``None``, the default: see ``prefs``).
+    gridcols : int | None
         Columns of plots on a page of the Grid layout (1-8, default 3).
-    gridcolor : str
+        Preference (``None``, the default: see ``prefs``).
+    gridcolor : str | None
         The Grid layout's color range: ``"page"`` (default), one range
         for the plots on a page; ``"grid"``, one for every plot in the
         grid, so that pages compare (found cell by cell in the
         background; until then a page is colored by its own range);
         ``"cell"``, each plot its own.  With ``eq_hist`` the plots that
         share a range share its curve too.
+        Preference (``None``, the default: see ``prefs``).
     exprange : str
         Which pages of the Grid layout ``plotfile=`` writes: ``"current"``
         (default: the first page, as plotms), ``"all"``, or page numbers
@@ -458,12 +467,13 @@ class _visplot:
         flatten every plot of all baselines.  A baseline named in
         ``antenna`` (``"BR&BR"``) is plotted whatever this says.  Also the
         "Autocorrelations" switch in the Data section.
-    time_labels : str
+    time_labels : str | None
         How time axes and the cursor readout give time: ``"utc"``
         (default; time of day, the date in the axis label, AIPS-style
         ``d/hh:mm:ss`` when the data cross a UTC midnight) or
         ``"elapsed"`` (minutes and seconds from the first sample).
         Also the "Time labels" switch in the configuration panel.
+        Preference (``None``, the default: see ``prefs``).
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"ANTENNA1"`` / ``"ANTENNA2"`` (together). Takes precedence over
@@ -493,9 +503,21 @@ class _visplot:
         ``(min, max)`` UV distance in metres, the programmatic form of
         ``uvrange``; shown in the UV range box as text.  Give one or the
         other.
-    compact_toolbar : bool
+    compact_toolbar : bool | None
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
+        Preference (``None``, the default: see ``prefs``).
+    theme : str | None
+        ``"dark"`` (default) or ``"light"``: the chrome and the
+        palettes; also the Light/Dark switch.
+        Preference (``None``, the default: see ``prefs``).
+    raster_cmap : str | None
+        The raster colormap, by name.  Unset (in the preferences too), it
+        follows the theme; set, it stays as chosen when the theme changes.
+        Preference (``None``, the default: see ``prefs``).
+    scatter_cmap : str | None
+        The scatter palette, by name; as ``raster_cmap``.
+        Preference (``None``, the default: see ``prefs``).
     flag_filters : dict | None
         Extra flag filters, ``{name: callable | FlagFilter}``; each callable
         is ``func(ds, **params) -> bool mask`` (see ``flag_filters.py``).
@@ -504,11 +526,13 @@ class _visplot:
     flag_preview : bool
         Review each flag proposal (counts, breakdown, highlighted samples)
         before it is added to the pending flags.  Defaults to ``False``.
-    flag_display : str
+    flag_display : str | None
         How pending flags are shown: ``"hide"`` (flagged points disappear,
         the default) or ``"color"`` (drawn in ``flag_color``).
-    flag_color : str
+        Preference (``None``, the default: see ``prefs``).
+    flag_color : str | None
         Color for pending flags when ``flag_display="color"``.
+        Preference (``None``, the default: see ``prefs``).
     flag_reach : str
         How far a flag box reaches beyond what is drawn, as the "Flag
         reaches" controls start: a comma-separated list of
@@ -522,12 +546,14 @@ class _visplot:
         Text stored with each flag made from now on (why it was
         flagged); shown in the report, saved in the JSON, written as
         ``reason=`` in exported flagdata commands.
-    flag_show_flagged : bool
+    flag_show_flagged : bool | None
         Also draw data that are currently flagged (on disk or pending) in
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
         default; toggled in the Flagging controls.
-    flag_flagged_color : str
+        Preference (``None``, the default: see ``prefs``).
+    flag_flagged_color : str | None
         Color for flagged data when ``flag_show_flagged`` is on.
+        Preference (``None``, the default: see ``prefs``).
     frame_cache_mb : float | None
         Budget (MiB) of the cache of scatter frames -- the decoded samples a
         scatter panel draws, flags and probes.  When a selection's frames do
@@ -545,6 +571,30 @@ class _visplot:
         (2 x 31 M samples, ~1.5 GiB per frame) needs about 3-4 GiB; on a 24
         GB Mac the old 2.4 GiB default evicted frames and a flag box took
         3.6 s instead of 0.5 s.
+    prefs : str | dict | bool | None
+        Where the arguments marked "Preference" take their values when
+        left at ``None``.  Layers, lowest first: the built-in defaults
+        (given with each argument), the user file
+        ``~/.config/cubevis/prefs.json`` (``$XDG_CONFIG_HOME/cubevis``
+        if set), then ``prefs``: a path to a JSON file of the same form
+        that sets only some of them (``$CUBEVIS_PREFS`` when ``prefs`` is
+        not given), or a dict of that form.  ``False`` (or
+        ``CUBEVIS_PREFS=none``): built-in defaults only, for tests and
+        reproducible runs.  An argument given explicitly always wins.  A
+        value in a file that is not valid is logged and ignored.  The
+        file::
+
+            {"format": "cubevis.visplot.prefs", "schema": 1,
+             "app":   {"theme": "light", "layout": "over"},
+             "panel": {"time_labels": "elapsed"}}
+
+        ``app``: ``theme``, ``layout``, ``pin_layout``, ``gridrows``,
+        ``gridcols``, ``gridcolor``, ``compact_toolbar``,
+        ``sidebar_open``; ``panel`` (every panel's starting values):
+        ``time_labels``, ``time_gaps``, ``freq_gaps``, ``raster_cmap``,
+        ``scatter_cmap``, ``flag_display``, ``flag_color``,
+        ``flag_show_flagged``, ``flag_flagged_color``, ``gear_pin``.
+        See ``cubevis/toolbox/visplot/prefs.py``.
     plotfile : str | None
         Write a PNG of the plot to this path instead of opening the GUI
         (the ``visplot`` task then returns the path).  Implies
@@ -634,9 +684,9 @@ class _visplot:
         'compact_toolbar': "Whether each figure's toolbar auto-hides until the mouse is over that plot.",
         'row_height': 'Height of each row of plots, in pixels: the plot with its axes, not the readout and color bars below it.',
         'column_width': 'Width of each column of plots, in pixels.',
-        'theme': '',
-        'raster_cmap': '',
-        'scatter_cmap': '',
+        'theme': '``"dark"`` (default) or ``"light"``: the chrome and the palettes; also the Light/Dark switch.',
+        'raster_cmap': 'The raster colormap, by name.',
+        'scatter_cmap': 'The scatter palette, by name; as ``raster_cmap``.',
         'plotfile': 'Write a PNG of the plot to this path instead of opening the GUI (the ``visplot`` task then returns the path).',
         'flag_filters': 'Extra flag filters, ``{name: callable | FlagFilter}``; each callable is ``func(ds, **params) -> bool mask`` (see ``flag_filters.py``).',
         'flag_preview': 'Review each flag proposal (counts, breakdown, highlighted samples) before it is added to the pending flags.',
@@ -647,6 +697,7 @@ class _visplot:
         'flag_reach': 'How far a flag box reaches beyond what is drawn, as the "Flag reaches" controls start: a comma-separated list of ``shared-antenna`` (all baselines to the antenna the drawn baselines share), ``antennas`` (all baselines to every antenna of the drawn baselines), ``all-baselines``, ``channels``, ``spw`` (all selected spectral windows), ``scan`` (the whole scan), ``fields``, ``correlations``.',
         'flag_reason': 'Text stored with each flag made from now on (why it was flagged); shown in the report, saved in the JSON, written as ``reason=`` in exported flagdata commands.',
         'frame_cache_mb': 'Budget (MiB) of the cache of scatter frames -- the decoded samples a scatter panel draws, flags and probes.',
+        'prefs': 'Where the arguments marked "Preference" take their values when left at ``None``.',
     }
 
     # Default values, derived from the canonical interface signature.
@@ -673,18 +724,18 @@ class _visplot:
         'stat_chan_window': 'off',
         'scatter_avg_time': 'off',
         'scatter_avg_chan': 'off',
-        'time_gaps': 'shown',
-        'freq_gaps': 'shown',
-        'layout': 'side',
+        'time_gaps': None,
+        'freq_gaps': None,
+        'layout': None,
         'kind': None,
         'preset': None,
-        'pin_layout': False,
+        'pin_layout': None,
         'iterate_by': 'baseline',
-        'gridrows': 3,
-        'gridcols': 3,
-        'gridcolor': 'page',
+        'gridrows': None,
+        'gridcols': None,
+        'gridcolor': None,
         'exprange': 'current',
-        'time_labels': 'utc',
+        'time_labels': None,
         'autocorr': 'exclude',
         'panels': None,
         'grid_panel': None,
@@ -696,22 +747,23 @@ class _visplot:
         'time_range': None,
         'freq_range': None,
         'uvdist_range': None,
-        'compact_toolbar': True,
+        'compact_toolbar': None,
         'row_height': None,
         'column_width': None,
-        'theme': 'dark',
+        'theme': None,
         'raster_cmap': None,
         'scatter_cmap': None,
         'plotfile': None,
         'flag_filters': None,
         'flag_preview': False,
-        'flag_display': 'hide',
-        'flag_color': '#ff00ff',
-        'flag_show_flagged': False,
-        'flag_flagged_color': '#7f849c',
+        'flag_display': None,
+        'flag_color': None,
+        'flag_show_flagged': None,
+        'flag_flagged_color': None,
         'flag_reach': '',
         'flag_reason': '',
         'frame_cache_mb': None,
+        'prefs': None,
     }
 
     def __init__(self):
@@ -773,18 +825,18 @@ class _visplot:
             'stat_chan_window': '',
             'scatter_avg_time': '',
             'scatter_avg_chan': '',
-            'time_gaps': 'str',
-            'freq_gaps': 'str',
-            'layout': 'str',
+            'time_gaps': 'Optional[str]',
+            'freq_gaps': 'Optional[str]',
+            'layout': 'Optional[str]',
             'kind': 'Optional[str]',
             'preset': 'Optional[str]',
-            'pin_layout': 'bool',
+            'pin_layout': 'Optional[bool]',
             'iterate_by': 'str',
-            'gridrows': 'int',
-            'gridcols': 'int',
-            'gridcolor': 'str',
+            'gridrows': 'Optional[int]',
+            'gridcols': 'Optional[int]',
+            'gridcolor': 'Optional[str]',
             'exprange': 'str',
-            'time_labels': 'str',
+            'time_labels': 'Optional[str]',
             'autocorr': 'str',
             'panels': 'Optional[list]',
             'grid_panel': 'Optional[dict]',
@@ -796,22 +848,23 @@ class _visplot:
             'time_range': 'tuple[float, float] | list[float] | None',
             'freq_range': 'tuple[float, float] | list[float] | None',
             'uvdist_range': 'tuple[float, float] | list[float] | None',
-            'compact_toolbar': 'bool',
+            'compact_toolbar': 'Optional[bool]',
             'row_height': 'int | float | str | list | None',
             'column_width': 'int | float | str | list | None',
-            'theme': 'str',
+            'theme': 'Optional[str]',
             'raster_cmap': 'Optional[str]',
             'scatter_cmap': 'Optional[str]',
             'plotfile': 'Optional[str]',
             'flag_filters': 'Optional[dict]',
             'flag_preview': 'bool',
-            'flag_display': 'str',
-            'flag_color': 'str',
-            'flag_show_flagged': 'bool',
-            'flag_flagged_color': 'str',
+            'flag_display': 'Optional[str]',
+            'flag_color': 'Optional[str]',
+            'flag_show_flagged': 'Optional[bool]',
+            'flag_flagged_color': 'Optional[str]',
             'flag_reach': 'str',
             'flag_reason': 'str',
             'frame_cache_mb': 'Optional[float]',
+            'prefs': 'bool | str | dict | None',
         }
         ann = _type_map.get(name, '')
         if not ann:
@@ -913,8 +966,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('vis') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['vis'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('vis', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('vis', pre, shown, post),
             desc, fmt,
         )
 
@@ -928,8 +989,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('ms') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['ms'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('ms', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('ms', pre, shown, post),
             desc, fmt,
         )
 
@@ -943,8 +1012,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('ps') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['ps'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('ps', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('ps', pre, shown, post),
             desc, fmt,
         )
 
@@ -958,8 +1035,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('backend') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['backend'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('backend', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('backend', pre, shown, post),
             desc, fmt,
         )
 
@@ -973,8 +1058,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('kernel_name') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['kernel_name'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('kernel_name', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('kernel_name', pre, shown, post),
             desc, fmt,
         )
 
@@ -988,8 +1081,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('field') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['field'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('field', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('field', pre, shown, post),
             desc, fmt,
         )
 
@@ -1003,8 +1104,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('spw') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['spw'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('spw', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('spw', pre, shown, post),
             desc, fmt,
         )
 
@@ -1018,8 +1127,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('antenna') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['antenna'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('antenna', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('antenna', pre, shown, post),
             desc, fmt,
         )
 
@@ -1033,8 +1150,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('scan') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['scan'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('scan', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('scan', pre, shown, post),
             desc, fmt,
         )
 
@@ -1048,8 +1173,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('timerange') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['timerange'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('timerange', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('timerange', pre, shown, post),
             desc, fmt,
         )
 
@@ -1063,8 +1196,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('uvrange') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['uvrange'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('uvrange', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('uvrange', pre, shown, post),
             desc, fmt,
         )
 
@@ -1078,8 +1219,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('correlation') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['correlation'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('correlation', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('correlation', pre, shown, post),
             desc, fmt,
         )
 
@@ -1093,8 +1242,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('datacolumn') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['datacolumn'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('datacolumn', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('datacolumn', pre, shown, post),
             desc, fmt,
         )
 
@@ -1108,8 +1265,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('averaging') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['averaging'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('averaging', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('averaging', pre, shown, post),
             desc, fmt,
         )
 
@@ -1123,8 +1288,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('raster_corr') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['raster_corr'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('raster_corr', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('raster_corr', pre, shown, post),
             desc, fmt,
         )
 
@@ -1138,8 +1311,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('baseline_order') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['baseline_order'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('baseline_order', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('baseline_order', pre, shown, post),
             desc, fmt,
         )
 
@@ -1153,8 +1334,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('baseline_combine') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['baseline_combine'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('baseline_combine', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('baseline_combine', pre, shown, post),
             desc, fmt,
         )
 
@@ -1168,8 +1357,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('detrend') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['detrend'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('detrend', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('detrend', pre, shown, post),
             desc, fmt,
         )
 
@@ -1183,8 +1380,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('stat_time_window') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['stat_time_window'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('stat_time_window', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('stat_time_window', pre, shown, post),
             desc, fmt,
         )
 
@@ -1198,8 +1403,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('stat_chan_window') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['stat_chan_window'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('stat_chan_window', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('stat_chan_window', pre, shown, post),
             desc, fmt,
         )
 
@@ -1213,8 +1426,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('scatter_avg_time') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['scatter_avg_time'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('scatter_avg_time', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('scatter_avg_time', pre, shown, post),
             desc, fmt,
         )
 
@@ -1228,8 +1449,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('scatter_avg_chan') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['scatter_avg_chan'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('scatter_avg_chan', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('scatter_avg_chan', pre, shown, post),
             desc, fmt,
         )
 
@@ -1243,8 +1472,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('time_gaps') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['time_gaps'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('time_gaps', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('time_gaps', pre, shown, post),
             desc, fmt,
         )
 
@@ -1258,8 +1495,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('freq_gaps') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['freq_gaps'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('freq_gaps', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('freq_gaps', pre, shown, post),
             desc, fmt,
         )
 
@@ -1273,8 +1518,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('layout') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['layout'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('layout', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('layout', pre, shown, post),
             desc, fmt,
         )
 
@@ -1288,8 +1541,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('kind') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['kind'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('kind', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('kind', pre, shown, post),
             desc, fmt,
         )
 
@@ -1303,8 +1564,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('preset') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['preset'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('preset', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('preset', pre, shown, post),
             desc, fmt,
         )
 
@@ -1318,8 +1587,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('pin_layout') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['pin_layout'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('pin_layout', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('pin_layout', pre, shown, post),
             desc, fmt,
         )
 
@@ -1333,8 +1610,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('iterate_by') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['iterate_by'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('iterate_by', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('iterate_by', pre, shown, post),
             desc, fmt,
         )
 
@@ -1348,8 +1633,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('gridrows') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['gridrows'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('gridrows', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('gridrows', pre, shown, post),
             desc, fmt,
         )
 
@@ -1363,8 +1656,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('gridcols') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['gridcols'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('gridcols', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('gridcols', pre, shown, post),
             desc, fmt,
         )
 
@@ -1378,8 +1679,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('gridcolor') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['gridcolor'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('gridcolor', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('gridcolor', pre, shown, post),
             desc, fmt,
         )
 
@@ -1393,8 +1702,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('exprange') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['exprange'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('exprange', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('exprange', pre, shown, post),
             desc, fmt,
         )
 
@@ -1408,8 +1725,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('time_labels') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['time_labels'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('time_labels', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('time_labels', pre, shown, post),
             desc, fmt,
         )
 
@@ -1423,8 +1748,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('autocorr') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['autocorr'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('autocorr', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('autocorr', pre, shown, post),
             desc, fmt,
         )
 
@@ -1438,8 +1771,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('panels') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['panels'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('panels', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('panels', pre, shown, post),
             desc, fmt,
         )
 
@@ -1453,8 +1794,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('grid_panel') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['grid_panel'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('grid_panel', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('grid_panel', pre, shown, post),
             desc, fmt,
         )
 
@@ -1468,8 +1817,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('raster_y') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['raster_y'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('raster_y', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('raster_y', pre, shown, post),
             desc, fmt,
         )
 
@@ -1483,8 +1840,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('raster_x') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['raster_x'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('raster_x', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('raster_x', pre, shown, post),
             desc, fmt,
         )
 
@@ -1498,8 +1863,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('raster_qty') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['raster_qty'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('raster_qty', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('raster_qty', pre, shown, post),
             desc, fmt,
         )
 
@@ -1513,8 +1886,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('scatter_x') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['scatter_x'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('scatter_x', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('scatter_x', pre, shown, post),
             desc, fmt,
         )
 
@@ -1528,8 +1909,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('scatter_y') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['scatter_y'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('scatter_y', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('scatter_y', pre, shown, post),
             desc, fmt,
         )
 
@@ -1543,8 +1932,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('time_range') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['time_range'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('time_range', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('time_range', pre, shown, post),
             desc, fmt,
         )
 
@@ -1558,8 +1955,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('freq_range') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['freq_range'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('freq_range', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('freq_range', pre, shown, post),
             desc, fmt,
         )
 
@@ -1573,8 +1978,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('uvdist_range') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['uvdist_range'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('uvdist_range', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('uvdist_range', pre, shown, post),
             desc, fmt,
         )
 
@@ -1588,8 +2001,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('compact_toolbar') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['compact_toolbar'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('compact_toolbar', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('compact_toolbar', pre, shown, post),
             desc, fmt,
         )
 
@@ -1603,8 +2024,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('row_height') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['row_height'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('row_height', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('row_height', pre, shown, post),
             desc, fmt,
         )
 
@@ -1618,8 +2047,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('column_width') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['column_width'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('column_width', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('column_width', pre, shown, post),
             desc, fmt,
         )
 
@@ -1633,8 +2070,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('theme') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['theme'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('theme', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('theme', pre, shown, post),
             desc, fmt,
         )
 
@@ -1648,8 +2093,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('raster_cmap') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['raster_cmap'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('raster_cmap', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('raster_cmap', pre, shown, post),
             desc, fmt,
         )
 
@@ -1663,8 +2116,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('scatter_cmap') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['scatter_cmap'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('scatter_cmap', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('scatter_cmap', pre, shown, post),
             desc, fmt,
         )
 
@@ -1678,8 +2139,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('plotfile') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['plotfile'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('plotfile', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('plotfile', pre, shown, post),
             desc, fmt,
         )
 
@@ -1693,8 +2162,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('flag_filters') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['flag_filters'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('flag_filters', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('flag_filters', pre, shown, post),
             desc, fmt,
         )
 
@@ -1708,8 +2185,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('flag_preview') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['flag_preview'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('flag_preview', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('flag_preview', pre, shown, post),
             desc, fmt,
         )
 
@@ -1723,8 +2208,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('flag_display') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['flag_display'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('flag_display', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('flag_display', pre, shown, post),
             desc, fmt,
         )
 
@@ -1738,8 +2231,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('flag_color') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['flag_color'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('flag_color', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('flag_color', pre, shown, post),
             desc, fmt,
         )
 
@@ -1753,8 +2254,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('flag_show_flagged') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['flag_show_flagged'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('flag_show_flagged', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('flag_show_flagged', pre, shown, post),
             desc, fmt,
         )
 
@@ -1768,8 +2277,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('flag_flagged_color') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['flag_flagged_color'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('flag_flagged_color', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('flag_flagged_color', pre, shown, post),
             desc, fmt,
         )
 
@@ -1783,8 +2300,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('flag_reach') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['flag_reach'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('flag_reach', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('flag_reach', pre, shown, post),
             desc, fmt,
         )
 
@@ -1798,8 +2323,16 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('flag_reason') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['flag_reason'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('flag_reason', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('flag_reason', pre, shown, post),
             desc, fmt,
         )
 
@@ -1813,8 +2346,39 @@ class _visplot:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('frame_cache_mb') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['frame_cache_mb'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('frame_cache_mb', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('frame_cache_mb', pre, shown, post),
+            desc, fmt,
+        )
+
+    def __prefs_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('prefs', self._arg_default['prefs'])
+        default = self._arg_default['prefs']
+        desc    = self._arg_description.get('prefs', '')
+        if self.__validate_('prefs', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('prefs') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to visplot.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['prefs'])
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('prefs', pre, shown, post),
             desc, fmt,
         )
 
@@ -1884,10 +2448,19 @@ class _visplot:
         if 'flag_reach' in glb: del glb['flag_reach']
         if 'flag_reason' in glb: del glb['flag_reason']
         if 'frame_cache_mb' in glb: del glb['frame_cache_mb']
+        if 'prefs' in glb: del glb['prefs']
 
     #--------- inp function -------------------------------------------------------
     def inp(self):
         print("# visplot -- %s" % self._info_desc_)
+        # Arguments left at None take a preference (prefs_module): inp()
+        # shows the value they come to, with the preferences as they are
+        # now and the prefs= global if one is set.
+        try:
+            from cubevis.toolbox.visplot.prefs import layer_defaults as _layer_defaults
+            self._pref_defaults = _layer_defaults(self.__globals_().get('prefs'))
+        except Exception:
+            self._pref_defaults = {}
         self.term_width, self.term_height = shutil.get_terminal_size(fallback=(80, 24))
         self.__vis_inp()
         self.__ms_inp()
@@ -1948,6 +2521,7 @@ class _visplot:
         self.__flag_reach_inp()
         self.__flag_reason_inp()
         self.__frame_cache_mb_inp()
+        self.__prefs_inp()
 
     #--------- tget function ------------------------------------------------------
     @static_var('state', __sf__('casa_inp_go_state'))
@@ -2038,6 +2612,7 @@ class _visplot:
         _invocation_parameters['flag_reach'] = glb.get('flag_reach', self._arg_default['flag_reach'])
         _invocation_parameters['flag_reason'] = glb.get('flag_reason', self._arg_default['flag_reason'])
         _invocation_parameters['frame_cache_mb'] = glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
+        _invocation_parameters['prefs'] = glb.get('prefs', self._arg_default['prefs'])
 
         try:
             with open(_postfile, 'w') as _f:
@@ -2119,6 +2694,7 @@ class _visplot:
             flag_reach = _UNSET,
             flag_reason = _UNSET,
             frame_cache_mb = _UNSET,
+            prefs = _UNSET,
     ):
         def noobj(s):
             if s.startswith('<') and s.endswith('>'):
@@ -2193,6 +2769,7 @@ class _visplot:
             flag_reach,
             flag_reason,
             frame_cache_mb,
+            prefs,
         ]
 
         if any(x is not _UNSET for x in _arguments):
@@ -2382,6 +2959,9 @@ class _visplot:
             _invocation_parameters['frame_cache_mb'] = \
                 frame_cache_mb if frame_cache_mb is not _UNSET \
                 else glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
+            _invocation_parameters['prefs'] = \
+                prefs if prefs is not _UNSET \
+                else glb.get('prefs', self._arg_default['prefs'])
         else:
             # inp/go-style invocation: read everything from the global frame
             _invocation_parameters['vis'] = \
@@ -2506,6 +3086,8 @@ class _visplot:
                 glb.get('flag_reason', self._arg_default['flag_reason'])
             _invocation_parameters['frame_cache_mb'] = \
                 glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
+            _invocation_parameters['prefs'] = \
+                glb.get('prefs', self._arg_default['prefs'])
 
         try:
             with open(_prefile, 'w') as _f:
@@ -2587,6 +3169,7 @@ class _visplot:
                     'flag_reach=' + repr(_invocation_parameters['flag_reach']),
                     'flag_reason=' + repr(_invocation_parameters['flag_reason']),
                     'frame_cache_mb=' + repr(_invocation_parameters['frame_cache_mb']),
+                    'prefs=' + repr(_invocation_parameters['prefs']),
                 ],
             )
             task_result = _visplot_t(
@@ -2651,6 +3234,7 @@ class _visplot:
                 flag_reach = _invocation_parameters['flag_reach'],
                 flag_reason = _invocation_parameters['flag_reason'],
                 frame_cache_mb = _invocation_parameters['frame_cache_mb'],
+                prefs = _invocation_parameters['prefs'],
             )
         except Exception as exc:
             _except_log('visplot', exc)

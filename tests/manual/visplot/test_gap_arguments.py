@@ -191,8 +191,10 @@ class TestTaskLayers:
         path = os.path.join(os.path.dirname(cubevis.__file__), "private", layer, "visplot.py")
         with open(path) as fh:
             src = fh.read()
-        assert "time_gaps: str = 'shown'" in src
-        assert "freq_gaps: str = 'shown'" in src
+        # Preferences (issue 6, 2026-11-27): None takes the preference, else
+        # "shown" (test_prefs.py checks the resolution)
+        assert "time_gaps: Optional[str] = None" in src
+        assert "freq_gaps: Optional[str] = None" in src
 
     def test_layers_in_sync(self):
         root = os.path.dirname(os.path.dirname(os.path.dirname(

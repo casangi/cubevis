@@ -250,8 +250,16 @@ class _{{ task_name }}:
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        shown = self.__to_string_(value)
+        prefs   = getattr(self, '_pref_defaults', {})
+        if value is None and prefs.get('{{ arg.name }}') is not None:
+            # A preference-backed argument left at None: show what it comes
+            # to now, in the default colour.  Only the display: None is still
+            # what is passed and written to {{ task_name }}.last, so a later
+            # change to the preferences still applies after tget().
+            shown = self.__to_string_(prefs['{{ arg.name }}'])
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('{{ arg.name }}', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('{{ arg.name }}', pre, shown, post),
             desc, fmt,
         )
 {%- endfor %}
@@ -268,6 +276,18 @@ class _{{ task_name }}:
     #--------- inp function -------------------------------------------------------
     def inp(self):
         print("# {{ task_name }} -- %s" % self._info_desc_)
+{%- if prefs_module %}
+        # Arguments left at None take a preference (prefs_module): inp()
+        # shows the value they come to, with the preferences as they are
+        # now and the prefs= global if one is set.
+        try:
+            from {{ prefs_module }} import layer_defaults as _layer_defaults
+            self._pref_defaults = _layer_defaults(self.__globals_().get('prefs'))
+        except Exception:
+            self._pref_defaults = {}
+{%- else %}
+        self._pref_defaults = {}
+{%- endif %}
         self.term_width, self.term_height = shutil.get_terminal_size(fallback=(80, 24))
 {%- for arg in methods['__init__'].args if not arg.is_self and not arg.is_star and not arg.is_layer and not arg.is_hidden %}
         self.__{{ arg.name }}_inp()

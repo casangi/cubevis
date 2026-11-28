@@ -106,15 +106,46 @@ explicit arguments.
   which. The notebook companion records each output's settings as part of
   its state (that is not a save of defaults).
 * Which files were applied is logged / shown.
-* Candidates: gear tab shown / pinned (`gear_pin`), `pin_layout`, initial
-  `layout` / `preset`, sidebar collapsed, theme, `time_labels`, colormap
-  defaults.
+* **Not a `view_state.py` scope (revised 2026-11-27):** preferences are
+  applied before the GUI exists (they resolve constructor arguments ahead of
+  `_build_gui()`), and saving them reads the *browser* (a Pin click or a
+  colormap pick never reaches the kernel's models), so they are a module of
+  their own, `cubevis/toolbox/visplot/prefs.py`: the known keys (built-in
+  default, check, the argument each supplies), load / merge / save.
+* **Two groups (2026-11-27):** `app` -- `theme`, `layout`, `pin_layout`,
+  `gridrows`, `gridcols`, `gridcolor`, `compact_toolbar`, `sidebar_open`;
+  `panel`, the starting values of every panel (Panels A and B, and a panel
+  shown on its own once that exists) -- `time_labels`, `time_gaps`,
+  `freq_gaps`, `raster_cmap`, `scatter_cmap`, `flag_display`, `flag_color`,
+  `flag_show_flagged`, `flag_flagged_color`, `gear_pin`. Not split by raster
+  and scatter: a panel can switch kind, and most settings mean the same for
+  both; kind-specific settings are named by kind (`raster_cmap`). Not
+  preferences: what changes the data shown or how it is computed
+  (`averaging`, `datacolumn`, `detrend`, `autocorr`, `baseline_combine`, the
+  selection, the stats windows); for now also `baseline_order`, the panel
+  sizes. Gear Pin is one value for every panel (A pinned, B not, is a
+  session's choice).
+* **Saving (step 2, agreed 2026-11-27):** in app mode, a gear tab's "Save as
+  default" and an app-level one (in the sidebar) both write both groups; the
+  panel group comes from that gear tab's panel, or, for the app-level
+  button, the panel last plotted that is visible (a hidden panel never
+  supplies it). A panel shown on its own saves only the panel group. Saving
+  merges into the file (`save_prefs`), so the group not saved and the keys
+  not given stay as they were. A colormap is saved only if the user picked
+  one; otherwise it stays `null`, following the theme.
 * **Constructor defaults:** most preferences are defaults of existing
   `VisibilityPlotter` arguments. `sync_layers` copies defaults verbatim into
   the task layers, which then pass every argument explicitly, so `__init__`
   cannot tell an explicit value from a default. Preference-backed arguments
-  need a sentinel default (`None`) resolved through the layers, in
-  `VisibilityPlotter` and in the generated layers alike.
+  default to `None`, resolved through the layers, in `VisibilityPlotter`
+  and in the generated layers alike. The casashell `inp()` shows such an
+  argument as the value it comes to (`layout = 'over'`, default colour; the
+  template's `prefs_module`, with the `prefs` global if set); `None` stays
+  what is passed and written to `visplot.last`, so `tget()` does not pin
+  today's preference as a user-set value.
+* **Tests:** `CUBEVIS_PREFS=none` (built-in defaults only) is set by
+  `tests/manual/visplot/conftest.py` and `tests/ci/run.py`, so a
+  developer's own preference file does not change what tests see.
 * **Remote kernels:** one preference set, read where the GUI is built (the
   user's host). No kernel-specific preferences: per-project needs are covered
   by notebook companions and override files. (verify) that GUI-side
@@ -139,7 +170,8 @@ Output View sharing the comm, stray "Bokeh is not defined").
 ## Order
 
 1. iclean reattach: niter etc. on reconnect (case A, iclean). **Done 2026-11-25.**
-2. `prefs` scope and units, user file, override file, sentinel defaults.
+2. Preferences: loading (`prefs.py`, user file, override file, `None`
+   defaults, `inp()`) **done 2026-11-27**; saving (the buttons) next.
 3. Companion-output prototype in the headless harness (verify items).
 4. visplot reattach and checked restore (cases A and C); snapshot (case B).
 5. Remaining issue 2 items; single-panel entry point.
